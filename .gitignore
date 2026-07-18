@@ -1,1 +1,15 @@
 /Manifest*.toml
+/LocalPreferences.toml
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Julia build/test artifacts
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+/docs/build/
+
+# Generated example output
+/test/Figures/
