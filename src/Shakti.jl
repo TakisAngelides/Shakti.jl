@@ -12,7 +12,6 @@ using HDF5
 using JLD2
 using CSV
 using CairoMakie
-using GLMakie
 
 const backend = @load_preference("backend", "Threads")
 const floattype_str = @load_preference("floattype", "Float64")

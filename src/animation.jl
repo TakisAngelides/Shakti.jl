@@ -2,13 +2,15 @@
 # Animation
 # =============================================================================
 #
-# Turns a LiveObserver's in-RAM history into .mp4 animations (GLMakie,
-# record(...) below) or a static heatmap figure (CairoMakie, see
-# test/example.jl). LiveObserver.history[name] is a single preallocated array
-# of shape (field's own shape..., length(tracked_times)) -- time is the last
-# dimension -- unlike src_old's Observer.history[field], which was a
-# Vector{Array} (one array per saved frame). Frames are selected here with
-# selectdim(..., ndims(hist), idx) instead of the old Dict/Vector indexing.
+# Turns a LiveObserver's in-RAM history into .mp4 animations. Rendered with
+# CairoMakie (software/Cairo rasterizer, via record()'s backend-agnostic
+# colorbuffer()) rather than GLMakie -- no OpenGL/display needed, so this
+# works on headless HPC nodes as well as locally. LiveObserver.history[name]
+# is a single preallocated array of shape (field's own shape...,
+# length(tracked_times)) -- time is the last dimension -- unlike src_old's
+# Observer.history[field], which was a Vector{Array} (one array per saved
+# frame). Frames are selected here with selectdim(..., ndims(hist), idx)
+# instead of the old Dict/Vector indexing.
 #
 # tracked_times holds the actual simulation time-step index for each saved
 # frame, so titles below label frames by real time-step number rather than by
@@ -22,12 +24,12 @@ function make_mp4_mid(hist::AbstractArray, tracked_times, j, moulin_ij; filename
     data   = Observable(selectdim(hist, ndims(hist), 1)[:, j])
     fig    = Figure(size = (1000, 800))
     ax     = Axis(fig[1, 1]; xlabel = "i", ylabel = "Value", limits = (nothing, (ymin, ymax)))
-    GLMakie.lines!(ax, x, data)
+    lines!(ax, x, data)
 
     moulin_i = show_moulins ? [mi for (mi, mj) in moulin_ij if mj == j] : Int[]
     if !isempty(moulin_i)
         moulin_vals = Observable(selectdim(hist, ndims(hist), 1)[moulin_i, j])
-        GLMakie.scatter!(ax, moulin_i, moulin_vals; color = :red, markersize = 8)
+        scatter!(ax, moulin_i, moulin_vals; color = :red, markersize = 8)
         record(fig, filename, 1:ntimes; framerate = 20) do idx
             data[] = selectdim(hist, ndims(hist), idx)[:, j]
             moulin_vals[] = selectdim(hist, ndims(hist), idx)[moulin_i, j]
@@ -48,13 +50,13 @@ function make_mp4_2d(hist::AbstractArray, tracked_times, moulin_ij; filename, sh
     fig    = Figure(size = (1000, 800))
     ax     = Axis(fig[1, 1])
     data   = Observable(selectdim(hist, ndims(hist), 1))
-    hm     = GLMakie.heatmap!(ax, data; colorrange = (vmin, vmax))
+    hm     = heatmap!(ax, data; colorrange = (vmin, vmax))
     Colorbar(fig[1, 2], hm)
 
     if show_moulins
         mx = Float32[mi for (mi, mj) in moulin_ij]
         my = Float32[mj for (mi, mj) in moulin_ij]
-        GLMakie.scatter!(ax, mx, my; color = :red, markersize = 8)
+        scatter!(ax, mx, my; color = :red, markersize = 8)
     end
 
     record(fig, filename, 1:ntimes; framerate = 20) do idx
