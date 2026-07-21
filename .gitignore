@@ -1,5 +1,6 @@
 /Manifest*.toml
 /LocalPreferences.toml
+/test/options_explorer.jl
 
 # OS junk
 .DS_Store
