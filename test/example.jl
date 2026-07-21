@@ -12,8 +12,8 @@ using CairoMakie
 function main()
 
     # Simulation parameters
-    nx = 16
-    ny = 16
+    nx = 32
+    ny = 32
     lx = 1e3
     ly = 1e3
     tsteps = 24 * 24
@@ -26,7 +26,7 @@ function main()
     gap_scheme_choice = "explicit" # "explicit" or "implicit"
 
     # Face-averaging scheme for the hydraulic conductivity K in the elliptic solve
-    k_face_choice = "arithmetic" # "arithmetic" or "harmonic"
+    K_face_choice = "arithmetic" # "arithmetic" or "harmonic"
 
     # Grid and State setup
     grid = Grid(nx, ny, lx, ly)
@@ -37,31 +37,56 @@ function main()
 
     # =========================================================================
     # Initial conditions: sloped-slab synthetic glacier with one moulin at the
-    # domain center, draining to an ocean margin at x = lx. A semicircular
-    # "other basin" patch near x = 0 (rooted just outside the left boundary)
-    # separates the modelled catchment from ice upstream of the moulin, and
-    # the top/bottom domain edges are treated as inert side boundaries of that
-    # catchment. Same synthetic test case as src_old/main.jl.
+    # domain center, draining to an ocean margin at x = lx. Two choices  for the
+    # mask. "semi-circle": A semicircular "other basin" patch near x = 0 
+    # (rooted just outside the left boundary) separates the modelled catchment 
+    # from ice upstream of the moulin, and the top/bottom domain edges are treated 
+    # as inert side boundaries of that catchment. "barrier": OTHER_BASIN barrier 
+    # downstream of moulin so that flow flows around the barrier forming two channels.
     # =========================================================================
 
     moulin_ij = (ceil(Int, nx / 2), ceil(Int, ny / 2))
     im, jm = moulin_ij
     xm, ym = grid.x[im], grid.y[jm]
 
-    d  = 100.0   # leave 100 m of grounded ice upstream of the moulin
-    xc = -200.0  # circle center outside the left boundary
-    R  = xm - d - xc
-    yc = ym
+    mask_initial_condition_choice = "barrier" # "semi-circle", "barrier"
 
-    mask = fill(GROUNDED, nx, ny)
-    for j in 1:ny, i in 1:nx
-        if (grid.x[i] - xc)^2 + (grid.y[j] - yc)^2 <= R^2
-            mask[i, j] = OTHER_BASIN
+    if mask_initial_condition_choice == "semi-circle"
+
+        d  = 100.0   # leave 100 m of grounded ice upstream of the moulin
+        xc = -200.0  # circle center outside the left boundary
+        R  = xm - d - xc
+        yc = ym
+
+        mask = fill(GROUNDED, nx, ny)
+        for j in 1:ny, i in 1:nx
+            if (grid.x[i] - xc)^2 + (grid.y[j] - yc)^2 <= R^2
+                mask[i, j] = OTHER_BASIN
+            end
         end
+        
+        mask[end, :] .= OCEAN       # right edge: ocean margin, Dirichlet outlet
+        mask[:, 1]   .= OTHER_BASIN # bottom edge: inert catchment boundary
+        mask[:, end] .= OTHER_BASIN # top edge: inert catchment boundary
+
+    elseif mask_initial_condition_choice == "barrier"
+
+        mask = fill(GROUNDED, nx, ny)
+    
+        mask[20, 15] = OTHER_BASIN
+        mask[20, 16] = OTHER_BASIN
+        mask[20, 17] = OTHER_BASIN
+
+        mask[1, :] .= OTHER_BASIN   # left edge: inert catchment boundary
+        mask[end, :] .= OCEAN       # right edge: ocean margin, Dirichlet outlet
+        mask[:, 1]   .= OTHER_BASIN # bottom edge: inert catchment boundary
+        mask[:, end] .= OTHER_BASIN # top edge: inert catchment boundary
+
+    else
+
+        error("Choose the mask initial condition between the valid choices (\"semi-circle\" or \"barrier\").")
+
     end
-    mask[end, :] .= OCEAN       # right edge: ocean margin, Dirichlet outlet
-    mask[:, 1]   .= OTHER_BASIN # bottom edge: inert catchment boundary
-    mask[:, end] .= OTHER_BASIN # top edge: inert catchment boundary
 
     slope         = 0.02
     ice_thickness = 500.0
@@ -81,13 +106,13 @@ function main()
     set_initial_conditions!(state, grid, p, mi, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb)
 
     # Linear solver
-    ls = LUSolver(grid)
+    ls = LUDirectSolver(grid)
 
     # Picard solver
     iters = 100
     tol = 1e-6
     alpha = nothing # nothing -> no relaxation (NoHeadRelaxation); or a Float in (0,1) -> under-relaxation (UnderHeadRelaxation), damping h toward h_prev each Picard iteration
-    ps = PicardSolver(iters, tol, ls; alpha = alpha)
+    ps = PicardSolver(iters, tol, ls, grid; alpha = alpha)
 
     # Observer to track and plot state fields
     tracked_obs = ["h", "b"] # names of State fields to record; empty -> NoObserver
@@ -100,7 +125,7 @@ function main()
     verbose = true
 
     # Create the simulation
-    sim = Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs, mi; ps = ps, which_observer = which_observer, tracked_times = tracked_times, k_face_choice = k_face_choice, verbose = verbose)
+    sim = Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs, mi; ps = ps, which_observer = which_observer, tracked_times = tracked_times, K_face_choice = K_face_choice, verbose = verbose)
 
     # Run the simulation
     run!(sim)

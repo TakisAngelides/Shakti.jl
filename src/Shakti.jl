@@ -30,7 +30,7 @@ else
     error("Unknown backend preference: $backend (expected \"Threads\" or \"Metal\")")
 end
 
-export backend, floattype
+export backend, floattype # defined above, from the Preferences-backed backend/floattype constants
 
 include("model_parameters.jl")
 include("grid.jl")
@@ -52,51 +52,79 @@ include("initial_conditions.jl")
 include("run.jl")
 include("animation.jl")
 
-export Grid
+# model_parameters.jl
 export ModelParameters
 export pow, canonical_exponent
+
+# grid.jl
+export Grid
+
+# state.jl
 export State
 
+# mask.jl
 export GROUNDED, OCEAN, LAND, OTHER_BASIN
 export compute_face_masks!, apply_mask_to_sliding!
 
-export AbstractLinearSolver, AbstractDirectSolver, AbstractIterativeSolver
-export CholeskySolver, LUSolver, KrylovCGSolver, KrylovGMRESSolver
-export solve!, update!, solve_linear_system!
-
-export AbstractHeadRelaxation, NoHeadRelaxation, UnderHeadRelaxation
-export PicardSolver
-
+# melt_input.jl
 export AbstractMeltInput, ConstantMeltInput, initialize_ieb!, compute_ieb!
 
+# k_face_scheme.jl
 export AbstractKFaceScheme, Arithmetic, Harmonic, compute_K_face
 
+# linear_solver.jl
+# (update_SALS!/update_MFLS! are internal assembly plumbing, not part of the
+# public API; AbstractLinearSystem/SparseAssembledLinearSystem/MatrixFreeLinearSystem
+# ARE public -- they're passed as the representation-choosing argument to the
+# iterative solver constructors, e.g. GMRESIterativeSolver(g, MatrixFreeLinearSystem))
+export AbstractLinearSolver, AbstractDirectSolver, AbstractIterativeSolver
+export AbstractLinearSystem, SparseAssembledLinearSystem, MatrixFreeLinearSystem
+export LUDirectSolver, GMRESIterativeSolver, BiCGSTABIterativeSolver
+export solve_linear_system!
+
+# observer.jl
 export AbstractFileWriter, NetCDFFileWriter, HDF5FileWriter, JLD2FileWriter, CSVFileWriter
 export AbstractObserver, NoObserver, IOObserver, LiveObserver
 export get_observable
+export prepare!, observe!, openfile!, write2file!, finalize!
 
+# melt_rate.jl
 export AbstractSensibleHeatScheme, WithSensibleHeat, NoSensibleHeat
+export compute_taub_x!, compute_taub_y!, compute_shear!, compute_potential!, compute_sensible!, compute_mdot!
 
+# elliptic_solver.jl
+export AbstractHeadRelaxation, NoHeadRelaxation, UnderHeadRelaxation
+export relax_h!
+export PicardSolver
+export elliptic_solver!, Picard_loop!, Picard_iteration!
+
+# simulation.jl
 export AbstractHeadScheme, ParabolicHeadScheme, EllipticHeadScheme
 export AbstractGapScheme, ExplicitGapScheme, ImplicitGapScheme
 export Simulation
 
-export elliptic_solver!, Picard_loop!, Picard_iteration!, relax_h!
-export prepare!, observe!, openfile!, write2file!, finalize!
-
+# static_fields.jl
 export compute_H!, compute_po!, compute_h!, compute_abs_ub!
-export compute_dhdx!, compute_dhdy!, compute_dpwdx!, compute_dpwdy!
+
+# pressure.jl
 export compute_pw!, compute_N!
-export compute_q_x!, compute_q_y!
-export compute_Re_x!, compute_Re_y!, compute_Re!
-export compute_taub_x!, compute_taub_y!
-export compute_shear!, compute_potential!, compute_sensible!, compute_mdot!
-export compute_K!
+
+# field_gradients.jl
+export compute_dhdx!, compute_dhdy!, compute_dpwdx!, compute_dpwdy!
+
+# water_flux.jl
+export compute_q_x!, compute_q_y!, compute_Re_x!, compute_Re_y!, compute_Re!, compute_K!
+
+# gap_height.jl
 export compute_beta!, compute_b_x!, compute_b_y!, compute_b!
 
-export run!, step!, step_h!, step_b!
+# initial_conditions.jl
 export set_initial_conditions!
 
+# run.jl
+export run!, step!, step_h!, step_b!
+
+# animation.jl
 export make_mp4_mid, make_mp4_2d, get_moulin_ij
 
 end

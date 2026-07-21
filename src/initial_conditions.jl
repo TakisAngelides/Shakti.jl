@@ -9,21 +9,40 @@ function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, mi::Abst
     # elliptic_solver.jl's convergence check.
     F = eltype(s.h)
 
+    # Inputs arrive as plain, host-resident arrays (however the caller built
+    # them) regardless of backend. Under Metal, broadcasting a plain CPU
+    # array directly into a GPU-resident State field doesn't work at all --
+    # GPU broadcast fusion requires every operand to already live on the
+    # device. Data.Array (Threads -> Array, Metal -> MtlArray) does both the
+    # device placement and the eltype conversion in one step, matching s.h's
+    # own storage.
+    mask   = Data.Array(mask)
+    A_visc = Data.Array(A_visc)
+    zb     = Data.Array(zb)
+    zs     = Data.Array(zs)
+    b      = Data.Array(b)
+    G      = Data.Array(G)
+    ub_x   = Data.Array(ub_x)
+    ub_y   = Data.Array(ub_y)
+    ieb    = Data.Array(ieb)
+
     @. s.mask = mask
-    compute_face_masks!(s, g)
+    compute_face_masks!(s)
 
     @. s.A_visc = A_visc
-    @. s.lambda = F(1.5) * s.A_visc
+    lambda_coeff = F(1.5) # precomputed outside the broadcast: `@.` rewrites every call it sees, including F(1.5) itself, into F.(1.5) -- fusing a Float64-literal broadcast into the kernel and risking the same GPU compile failure this was meant to avoid
+    @. s.lambda = lambda_coeff * s.A_visc
 
     @. s.zb = zb
     @. s.zs = zs
 
     @. s.b = b
-    @inbounds for j in 1:g.ny, i in 1:g.nx
-        if s.mask[i, j] != GROUNDED
-            s.b[i, j] = F(0.0)
-        end
-    end
+    # Vectorized rather than a scalar for-loop: GPUArrays.jl disallows
+    # element-by-element getindex!/setindex! on GPU-resident arrays
+    # (Metal.MtlArray included) by default, so an @inbounds for/if pattern
+    # over s.mask/s.b never runs under the Metal backend.
+    zero_b = F(0.0)
+    @. s.b = ifelse(s.mask != GROUNDED, zero_b, s.b)
 
     compute_H!(s)
     compute_beta!(s, p)
@@ -32,7 +51,7 @@ function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, mi::Abst
 
     @. s.ub_x = ub_x
     @. s.ub_y = ub_y
-    apply_mask_to_sliding!(s, g)
+    apply_mask_to_sliding!(s)
     compute_abs_ub!(s)
 
     initialize_ieb!(mi, s, ieb)
@@ -43,14 +62,12 @@ function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, mi::Abst
     # for one, so the initial condition is consistent with the BC from t=0.
     # Harmless numerically (the Poisson solve overwrites h/pw on those rows
     # immediately) but keeps pw/N consistent from the start.
-    @inbounds for j in 1:g.ny, i in 1:g.nx
-        if s.mask[i, j] == OCEAN
-            # See linear_system.jl's OCEAN branch for the sign convention.
-            s.pw[i, j] = p.p_atm - p.rho_w * p.g * min(s.zb[i, j], zero(F))
-        elseif s.mask[i, j] == LAND || s.mask[i, j] == OTHER_BASIN
-            s.pw[i, j] = p.p_atm
-        end
-    end
+    # Vectorized rather than a scalar for-loop, same reason as s.b above.
+    zero_zb = zero(F)
+    @. s.pw = ifelse(s.mask == OCEAN,
+                      p.p_atm - p.rho_w * p.g * min(s.zb, zero_zb), # see linear_system.jl's OCEAN branch for the sign convention
+               ifelse((s.mask == LAND) | (s.mask == OTHER_BASIN),
+                      p.p_atm, s.pw))
     compute_dpwdx!(s, g) # feeds compute_sensible!'s sensible-heat term (via compute_mdot! below)
     compute_dpwdy!(s, g)
     compute_N!(s)
@@ -60,8 +77,9 @@ function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, mi::Abst
     compute_dhdx!(s, g)
     compute_dhdy!(s, g)
 
-    @. s.Re_x = F(1000.0)
-    @. s.Re_y = F(1000.0)
+    re_init = F(1000.0)
+    @. s.Re_x = re_init
+    @. s.Re_y = re_init
     compute_Re!(s)
 
     compute_b_x!(s)
@@ -78,6 +96,5 @@ function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, mi::Abst
     shs = (iszero(p.ct) || iszero(p.cw)) ? NoSensibleHeat() : WithSensibleHeat()
     compute_mdot!(s, p, shs)
     compute_K!(s, p)
-
 
 end

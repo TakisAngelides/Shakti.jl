@@ -64,12 +64,12 @@ end
 end
 
 """
-    compute_face_masks!(s, g)
+    compute_face_masks!(s)
 
 Recomputes `s.valid_x`/`s.valid_y` from `s.mask`. Must be called (directly, or
 via `set_initial_conditions!`) any time `s.mask` changes.
 """
-function compute_face_masks!(s::State, g::Grid)
+function compute_face_masks!(s::State)
     @parallel compute_valid_x_kernel!(s.valid_x, s.mask)
     @parallel compute_valid_y_kernel!(s.valid_y, s.mask)
     return s
@@ -90,9 +90,7 @@ end
     if ix <= size(ub_x, 1) && iy <= size(ub_x, 2)
         # x-faces: interior faces need both neighbours grounded; the two domain
         # boundary faces (ix=1, ix=nx+1) have only one neighbour, so always zeroed.
-        if ix == 1 || ix == size(ub_x, 1)
-            ub_x[ix, iy] = zero(eltype(ub_x))
-        elseif !(mask[ix-1, iy] == GROUNDED && mask[ix, iy] == GROUNDED)
+        if ix == 1 || ix == size(ub_x, 1) || !(mask[ix-1, iy] == GROUNDED && mask[ix, iy] == GROUNDED)
             ub_x[ix, iy] = zero(eltype(ub_x))
         end
     end
@@ -102,9 +100,7 @@ end
 @parallel_indices (ix, iy) function apply_mask_to_sliding_y_kernel!(ub_y, mask)
     if ix <= size(ub_y, 1) && iy <= size(ub_y, 2)
         # y-faces: same as above
-        if iy == 1 || iy == size(ub_y, 2)
-            ub_y[ix, iy] = zero(eltype(ub_y))
-        elseif !(mask[ix, iy-1] == GROUNDED && mask[ix, iy] == GROUNDED)
+        if iy == 1 || iy == size(ub_y, 2) || !(mask[ix, iy-1] == GROUNDED && mask[ix, iy] == GROUNDED)
             ub_y[ix, iy] = zero(eltype(ub_y))
         end
     end
@@ -112,9 +108,9 @@ end
 end
 
 """
-    apply_mask_to_sliding!(s, g)
+    apply_mask_to_sliding!(s)
 """
-function apply_mask_to_sliding!(s::State, g::Grid)
+function apply_mask_to_sliding!(s::State)
     @parallel apply_mask_to_sliding_x_kernel!(s.ub_x, s.mask)
     @parallel apply_mask_to_sliding_y_kernel!(s.ub_y, s.mask)
     return s

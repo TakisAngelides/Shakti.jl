@@ -13,9 +13,9 @@
 # compute_q_y! below; dpwdx/dpwdy feed the "sensible" heat term in
 # compute_mdot! further down.
 
-@parallel_indices (ix, iy) function compute_dhdx_kernel!(dhdx, h, valid_x, _dx)
+@parallel_indices (ix, iy) function compute_dhdx_kernel!(dhdx, h, valid_x, dx)
     if ix > 1 && ix < size(dhdx, 1) && iy <= size(dhdx, 2)
-        dhdx[ix, iy] = ((h[ix, iy] - h[ix-1, iy]) / _dx) * valid_x[ix, iy]
+        dhdx[ix, iy] = ((h[ix, iy] - h[ix-1, iy]) / dx) * valid_x[ix, iy]
     end
     return
 end
@@ -25,9 +25,9 @@ function compute_dhdx!(s::State, g::Grid)
     return s
 end
 
-@parallel_indices (ix, iy) function compute_dhdy_kernel!(dhdy, h, valid_y, _dy)
+@parallel_indices (ix, iy) function compute_dhdy_kernel!(dhdy, h, valid_y, dy)
     if iy > 1 && iy < size(dhdy, 2) && ix <= size(dhdy, 1)
-        dhdy[ix, iy] = ((h[ix, iy] - h[ix, iy-1]) / _dy) * valid_y[ix, iy]
+        dhdy[ix, iy] = ((h[ix, iy] - h[ix, iy-1]) / dy) * valid_y[ix, iy]
     end
     return
 end
@@ -37,9 +37,9 @@ function compute_dhdy!(s::State, g::Grid)
     return s
 end
 
-@parallel_indices (ix, iy) function compute_dpwdx_kernel!(dpwdx, pw, valid_x, _dx)
+@parallel_indices (ix, iy) function compute_dpwdx_kernel!(dpwdx, pw, valid_x, dx)
     if ix > 1 && ix < size(dpwdx, 1) && iy <= size(dpwdx, 2)
-        dpwdx[ix, iy] = ((pw[ix, iy] - pw[ix-1, iy]) / _dx) * valid_x[ix, iy]
+        dpwdx[ix, iy] = ((pw[ix, iy] - pw[ix-1, iy]) / dx) * valid_x[ix, iy]
     end
     return
 end
@@ -49,9 +49,9 @@ function compute_dpwdx!(s::State, g::Grid)
     return s
 end
 
-@parallel_indices (ix, iy) function compute_dpwdy_kernel!(dpwdy, pw, valid_y, _dy)
+@parallel_indices (ix, iy) function compute_dpwdy_kernel!(dpwdy, pw, valid_y, dy)
     if iy > 1 && iy < size(dpwdy, 2) && ix <= size(dpwdy, 1)
-        dpwdy[ix, iy] = ((pw[ix, iy] - pw[ix, iy-1]) / _dy) * valid_y[ix, iy]
+        dpwdy[ix, iy] = ((pw[ix, iy] - pw[ix, iy-1]) / dy) * valid_y[ix, iy]
     end
     return
 end

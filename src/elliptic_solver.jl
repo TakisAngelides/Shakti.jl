@@ -5,24 +5,26 @@ struct UnderHeadRelaxation{F <: AbstractFloat}  <: AbstractHeadRelaxation
     alpha::F
 end
 
-relax_h!(::NoHeadRelaxation, state::State) = state
+relax_h!(::NoHeadRelaxation, state::State, h_prev) = state
 
-function relax_h!(hr::UnderHeadRelaxation, state::State)
+function relax_h!(hr::UnderHeadRelaxation, state::State, h_prev)
     alpha = hr.alpha
-    @. state.h = alpha * state.h + (1 - alpha) * state.h_prev
+    @. state.h = alpha * state.h + (1 - alpha) * h_prev
     return state
 end
 
-mutable struct PicardSolver{F <: AbstractFloat, LS <: AbstractLinearSolver, HR <: AbstractHeadRelaxation}
+mutable struct PicardSolver{F <: AbstractFloat, LS <: AbstractLinearSolver, HR <: AbstractHeadRelaxation, A <: AbstractArray}
     iters::Int
     tol::F
     ls::LS
     converged::Bool
     last_iter::Int
     hr::HR
+    h_prev::A     # previous-iteration head, for the Picard convergence check and under-relaxation
+    delta_h::A    # change in head between iterations, for the Picard convergence check
 end
 
-function PicardSolver(iters, tol, ls::AbstractLinearSolver; alpha = nothing)
+function PicardSolver(iters, tol, ls::AbstractLinearSolver, g::Grid; alpha = nothing)
 
     if alpha === nothing
         hr = NoHeadRelaxation()
@@ -30,7 +32,10 @@ function PicardSolver(iters, tol, ls::AbstractLinearSolver; alpha = nothing)
         hr = UnderHeadRelaxation(floattype(alpha))
     end
 
-    return PicardSolver(iters, floattype(tol), ls, false, 0, hr)
+    h_prev  = initialize_center_field(g)
+    delta_h = initialize_center_field(g)
+
+    return PicardSolver(iters, floattype(tol), ls, false, 0, hr, h_prev, delta_h)
 end
 
 # state/grid/p/shs are taken as separate arguments (rather than a bundled
@@ -45,33 +50,36 @@ end
 function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, shs::AbstractSensibleHeatScheme, kfs::AbstractKFaceScheme, mi::AbstractMeltInput)
 
     s = state
+    
+    # Initialize PicardSolver state
+    ps.converged = false
+    ps.last_iter = 0
 
     @inbounds for iter in 1:ps.iters
 
-        # Initialize PicardSolver state
-        ps.converged = false
-        ps.last_iter = 0
-
         # Store previous head for convergence check
-        @. s.h_prev = s.h
+        @. ps.h_prev = s.h
 
-        Picard_iteration!(ps.ls, ps.hr, state, grid, p, shs, kfs, mi)
+        Picard_iteration!(ps.ls, ps.hr, state, grid, p, shs, kfs, mi, ps.h_prev)
 
-        @. s.delta_h = s.h - s.h_prev
-        if maximum(abs, s.delta_h) / (norm(s.h, Inf) + eps(eltype(s.h))) < ps.tol
+        @. ps.delta_h = s.h - ps.h_prev
+        if maximum(abs, ps.delta_h) / (norm(s.h, Inf) + eps(eltype(s.h))) < ps.tol
             ps.converged = true
             ps.last_iter = iter
-            break
+            return
         end
 
     end
 
+    ps.last_iter = ps.iters
+    return
+
 end
 
-function Picard_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation, s::State, g::Grid, p::ModelParameters, shs::AbstractSensibleHeatScheme, kfs::AbstractKFaceScheme, mi::AbstractMeltInput)
+function Picard_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation, s::State, g::Grid, p::ModelParameters, shs::AbstractSensibleHeatScheme, kfs::AbstractKFaceScheme, mi::AbstractMeltInput, h_prev)
 
     solve_linear_system!(ls, s, g, p, kfs, mi)
-    relax_h!(hr, s) # damp the raw Picard update before anything downstream of h is recomputed, so the next iteration's coefficients are consistent with the relaxed h
+    relax_h!(hr, s, h_prev) # damp the raw Picard update before anything downstream of h is recomputed, so the next iteration's coefficients are consistent with the relaxed h
 
     # Update state variables that depend on the new h
     compute_dhdx!(s, g)
