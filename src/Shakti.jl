@@ -23,10 +23,13 @@ const floattype = floattype_str == "Float64" ? Float64 :
 @static if backend == "Metal"
     using Metal
     @init_parallel_stencil(Metal, floattype, 2)
+elseif backend == "CUDA"
+    using CUDA
+    @init_parallel_stencil(CUDA, floattype, 2)
 elseif backend == "Threads"
     @init_parallel_stencil(Threads, floattype, 2)
 else
-    error("Unknown backend preference: $backend (expected \"Threads\" or \"Metal\")")
+    error("Unknown backend preference: $backend (expected \"Threads\", \"Metal\", or \"CUDA\")")
 end
 
 export backend, floattype # defined above, from the Preferences-backed backend/floattype constants
