@@ -112,7 +112,7 @@ function observe!(observer::LiveObserver, state::State, t, total_time)
     idx === nothing && return nothing
     for name in observer.tracked_obs
         hist = observer.history[name]
-        selectdim(hist, ndims(hist), idx) .= get_observable(state, name)
+        selectdim(hist, ndims(hist), idx) .= Array(get_observable(state, name))
     end
     return nothing
 end

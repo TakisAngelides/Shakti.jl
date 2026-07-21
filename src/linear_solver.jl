@@ -160,12 +160,13 @@ end
         else
             # m == GROUNDED: dynamic hydrology.
 
-            # A face contributes only if the neighbour exists AND is not OTHER_BASIN; both cases (no
-            # neighbour / unsolved basin) reduce to a natural zero-flux (Neumann) condition on that face.
-            aE = (ix < nx && mask[ix+1, iy] != OTHER_BASIN) ? compute_K_face(kfs, K, ix, iy, ix+1, iy) / dx2 : zero(dx2)
-            aW = (ix > 1  && mask[ix-1, iy] != OTHER_BASIN) ? compute_K_face(kfs, K, ix, iy, ix-1, iy) / dx2 : zero(dx2)
-            aN = (iy < ny && mask[ix, iy+1] != OTHER_BASIN) ? compute_K_face(kfs, K, ix, iy, ix, iy+1) / dy2 : zero(dy2)
-            aS = (iy > 1  && mask[ix, iy-1] != OTHER_BASIN) ? compute_K_face(kfs, K, ix, iy, ix, iy-1) / dy2 : zero(dy2)
+            # A face contributes only if the neighbour exists; no neighbour reduces to a natural
+            # zero-flux (Neumann) condition. boundary_K_face handles OTHER_BASIN/OCEAN/LAND neighbours
+            # (see k_face_scheme.jl).
+            aE = (ix < nx) ? boundary_K_face(kfs, K, mask, ix, iy, ix+1, iy) / dx2 : zero(dx2)
+            aW = (ix > 1)  ? boundary_K_face(kfs, K, mask, ix, iy, ix-1, iy) / dx2 : zero(dx2)
+            aN = (iy < ny) ? boundary_K_face(kfs, K, mask, ix, iy, ix, iy+1) / dy2 : zero(dy2)
+            aS = (iy > 1)  ? boundary_K_face(kfs, K, mask, ix, iy, ix, iy-1) / dy2 : zero(dy2)
 
             # Last aP term comes from Newton linearization of the creep closing term - appendix of doi: 10.1017/jog.2018.59.
             # pow(..., n_minus_1) (n_minus_1 = p.n_minus_1_exp, canonicalized once at
@@ -246,10 +247,10 @@ end
         else
             # m == GROUNDED: dynamic hydrology. Same face/aP logic as update_SALS_kernel!.
 
-            aE_ij = (ix < nx && mask[ix+1, iy] != OTHER_BASIN) ? compute_K_face(kfs, K, ix, iy, ix+1, iy) / dx2 : zero(dx2)
-            aW_ij = (ix > 1  && mask[ix-1, iy] != OTHER_BASIN) ? compute_K_face(kfs, K, ix, iy, ix-1, iy) / dx2 : zero(dx2)
-            aN_ij = (iy < ny && mask[ix, iy+1] != OTHER_BASIN) ? compute_K_face(kfs, K, ix, iy, ix, iy+1) / dy2 : zero(dy2)
-            aS_ij = (iy > 1  && mask[ix, iy-1] != OTHER_BASIN) ? compute_K_face(kfs, K, ix, iy, ix, iy-1) / dy2 : zero(dy2)
+            aE_ij = (ix < nx) ? boundary_K_face(kfs, K, mask, ix, iy, ix+1, iy) / dx2 : zero(dx2)
+            aW_ij = (ix > 1)  ? boundary_K_face(kfs, K, mask, ix, iy, ix-1, iy) / dx2 : zero(dx2)
+            aN_ij = (iy < ny) ? boundary_K_face(kfs, K, mask, ix, iy, ix, iy+1) / dy2 : zero(dy2)
+            aS_ij = (iy > 1)  ? boundary_K_face(kfs, K, mask, ix, iy, ix, iy-1) / dy2 : zero(dy2)
 
             aP[ix, iy] = (aE_ij + aW_ij + aN_ij + aS_ij) + n * rho_w * ggrav * A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * b[ix, iy]
             aE[ix, iy] = aE_ij
@@ -426,7 +427,12 @@ function solve_linear_system!(ls::GMRESIterativeSolver{<:SparseAssembledLinearSy
     update_SALS!(ls.lsy, s, g, p, kfs, mi) # prepare the new linear system sparse matrix M and rhs
     update_diag_precond!(ls.precond_diag, ls.lsy)
 
-    gmres!(ls.ws, ls.lsy.M, ls.lsy.rhs; M = Diagonal(ls.precond_diag), ldiv = true) # solves in place, storing the result in the preallocated workspace ls.ws
+    # vec(s.h) as x0 warm-starts from the previous head instead of 0: cheap (Krylov just
+    # copies it into its own Δx buffer) and correctness-neutral (Krylov converges to the
+    # same solution regardless of x0), but the residual it starts from is usually much
+    # smaller once h is already close to converged (late Picard iterations, or consecutive
+    # time steps), so it typically needs fewer Krylov iterations.
+    gmres!(ls.ws, ls.lsy.M, ls.lsy.rhs, vec(s.h); M = Diagonal(ls.precond_diag), ldiv = true) # solves in place, storing the result in the preallocated workspace ls.ws
 
     s.h .= reshape(ls.ws.x, g.nx, g.ny) # update h
 
@@ -437,7 +443,7 @@ function solve_linear_system!(ls::GMRESIterativeSolver{<:MatrixFreeLinearSystem}
     update_MFLS!(ls.lsy, s, g, p, kfs, mi)
     update_diag_precond!(ls.precond_diag, ls.lsy)
 
-    gmres!(ls.ws, StencilOperator(ls.lsy), ls.lsy.rhs; M = Diagonal(ls.precond_diag), ldiv = true)
+    gmres!(ls.ws, StencilOperator(ls.lsy), ls.lsy.rhs, vec(s.h); M = Diagonal(ls.precond_diag), ldiv = true)
 
     s.h .= reshape(ls.ws.x, g.nx, g.ny)
 
@@ -448,7 +454,7 @@ function solve_linear_system!(ls::BiCGSTABIterativeSolver{<:SparseAssembledLinea
     update_SALS!(ls.lsy, s, g, p, kfs, mi) # prepare the new linear system sparse matrix M and rhs
     update_diag_precond!(ls.precond_diag, ls.lsy)
 
-    bicgstab!(ls.ws, ls.lsy.M, ls.lsy.rhs; M = Diagonal(ls.precond_diag), ldiv = true) # solves in place, storing the result in the preallocated workspace ls.ws
+    bicgstab!(ls.ws, ls.lsy.M, ls.lsy.rhs, vec(s.h); M = Diagonal(ls.precond_diag), ldiv = true) # solves in place, storing the result in the preallocated workspace ls.ws
 
     s.h .= reshape(ls.ws.x, g.nx, g.ny) # update h
 
@@ -459,7 +465,7 @@ function solve_linear_system!(ls::BiCGSTABIterativeSolver{<:MatrixFreeLinearSyst
     update_MFLS!(ls.lsy, s, g, p, kfs, mi)
     update_diag_precond!(ls.precond_diag, ls.lsy)
 
-    bicgstab!(ls.ws, StencilOperator(ls.lsy), ls.lsy.rhs; M = Diagonal(ls.precond_diag), ldiv = true)
+    bicgstab!(ls.ws, StencilOperator(ls.lsy), ls.lsy.rhs, vec(s.h); M = Diagonal(ls.precond_diag), ldiv = true)
 
     s.h .= reshape(ls.ws.x, g.nx, g.ny)
 
