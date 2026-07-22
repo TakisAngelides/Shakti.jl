@@ -34,8 +34,8 @@ picard_status(hs::ParabolicHeadScheme) = (missing, missing)
 
 function step!(sim::Simulation)
 
-    @timeit PERF_TIMER "step_h!" step_h!(sim.hs, sim)
-    @timeit PERF_TIMER "step_b!" step_b!(sim)
+    step_h!(sim.hs, sim)
+    step_b!(sim)
 
 end
 
@@ -54,10 +54,10 @@ function step_b!(sim::Simulation)
 
     s, p = sim.state, sim.p
 
-    @timeit PERF_TIMER "compute_b!" compute_b!(sim)       # updates b based on the new state variables (GROUNDED cells only)
+    compute_b!(sim)       # updates b based on the new state variables (GROUNDED cells only)
 
-    @timeit PERF_TIMER "compute_beta!" compute_beta!(s, p)   # opening-by-sliding parameter depends on the new b
-    @timeit PERF_TIMER "compute_b_x!" compute_b_x!(s)       # water depth on x faces
-    @timeit PERF_TIMER "compute_b_y!" compute_b_y!(s)       # water depth on y faces
+    compute_beta!(s, p)   # opening-by-sliding parameter depends on the new b
+    compute_b_x!(s)       # water depth on x faces
+    compute_b_y!(s)       # water depth on y faces
 
 end

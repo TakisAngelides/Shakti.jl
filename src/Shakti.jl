@@ -12,14 +12,6 @@ using HDF5
 using JLD2
 using CSV
 using CairoMakie
-using TimerOutputs
-
-# Shared timer for perf instrumentation (see Picard_iteration!, compute_mdot!,
-# step!/step_b!): a single global TimerOutput rather than threading one
-# through every function signature. @timeit's overhead (~tens of ns) is
-# negligible next to the kernel launches it wraps, so this stays on rather
-# than being feature-flagged.
-const PERF_TIMER = TimerOutput()
 
 const backend = @load_preference("backend", "Threads")
 const floattype_str = @load_preference("floattype", "Float64")
@@ -41,7 +33,6 @@ else
 end
 
 export backend, floattype # defined above, from the Preferences-backed backend/floattype constants
-export PERF_TIMER # callers add `using TimerOutputs` themselves for reset_timer!/print_timer/@timeit
 
 include("model_parameters.jl")
 include("grid.jl")
