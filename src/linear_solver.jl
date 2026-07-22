@@ -1,3 +1,21 @@
+# Known hydraulic head at a Dirichlet (OCEAN/LAND) cell -- shared by that
+# cell's own row (h_j = g_j) and by any GROUNDED neighbour that needs to fold
+# g_j into its rhs instead of coupling to it in the matrix (see the symmetric
+# elimination comment in update_SALS_kernel!/update_MFLS_kernel!).
+@inline function dirichlet_head(m, zb_ij, p_atm, rho_w, ggrav)
+    if m == OCEAN
+        # Hydrostatic ocean pressure at the bed: zb is elevation relative to sea
+        # level (positive up), so a marine bed at zb < 0 sits at depth -zb below
+        # sea level. pw = p_atm + rho_w*g*(-zb) = p_atm - rho_w*g*zb.
+        # min(zb, 0) clamps to p_atm if this OCEAN-masked cell's bed happens to
+        # be above sea level, instead of producing a sub-atmospheric pressure.
+        pw_bc = p_atm - rho_w * ggrav * min(zb_ij, zero(zb_ij))
+        return pw_bc / (rho_w * ggrav) + zb_ij # from hydraulic head h = (pw / (rhow * g)) + zb
+    else # m == LAND: pw = p_atm -> h = p_atm/(rho_w*g) + zb
+        return p_atm / (rho_w * ggrav) + zb_ij
+    end
+end
+
 abstract type AbstractLinearSolver end
 abstract type AbstractDirectSolver <: AbstractLinearSolver end
 abstract type AbstractIterativeSolver <: AbstractLinearSolver end
@@ -39,7 +57,7 @@ function MatrixFreeLinearSystem(g::Grid{F}) where F
 
 end
 
-struct LUDirectSolver{FACT, SALS <: SparseAssembledLinearSystem, V <: AbstractVector} <: AbstractDirectSolver
+struct CholeskyDirectSolver{FACT, SALS <: SparseAssembledLinearSystem, V <: AbstractVector} <: AbstractDirectSolver
     sals::SALS
     fact::FACT
     h_vec::V # ldiv!'s preallocated output buffer (vectorized hydraulic head)
@@ -56,7 +74,7 @@ function SparseAssembledLinearSystem(g::Grid{F}) where F
 
             row = i + (j - 1) * g.nx
 
-            push!(I, row); push!(J, row); push!(V, one(F)) # diagonal - placeholder value 'one' to get nonsingular lu factorization
+            push!(I, row); push!(J, row); push!(V, one(F)) # diagonal - placeholder value 'one' to get a nonsingular factorization
             i > 1  && (push!(I, row); push!(J, row - 1);  push!(V, zero(F)))  # west
             i < g.nx && (push!(I, row); push!(J, row + 1);  push!(V, zero(F)))  # east
             j > 1  && (push!(I, row); push!(J, row - g.nx); push!(V, zero(F)))  # south
@@ -101,21 +119,25 @@ function SparseAssembledLinearSystem(g::Grid{F}) where F
 
 end
 
-function LUDirectSolver(g::Grid{F}) where F
+function CholeskyDirectSolver(g::Grid{F}) where F
 
-    # SparseArrays' sparse lu/UMFPACK has no GPU path at all, on any backend
-    # -- checking != "Threads" (rather than == "Metal") means this stays
-    # correct if a CUDA/AMDGPU backend is ever added, with nothing here to
-    # remember to update. Fail here, at construction time, rather than let a
-    # GPU-resident array reach it deeper in the solve (same "fail fast in the
-    # constructor" idiom as Simulation's FT/floattype mismatch check).
-    backend != "Threads" && error("LUDirectSolver is CPU-only (SparseArrays/UMFPACK has no GPU path); choose an iterative solver under the $backend backend.")
+    # SparseArrays' sparse Cholesky/CHOLMOD has no GPU path at all, on any
+    # backend -- checking != "Threads" (rather than == "Metal") means this
+    # stays correct if a CUDA/AMDGPU backend is ever added, with nothing here
+    # to remember to update. Fail here, at construction time, rather than let
+    # a GPU-resident array reach it deeper in the solve (same "fail fast in
+    # the constructor" idiom as Simulation's FT/floattype mismatch check).
+    backend != "Threads" && error("CholeskyDirectSolver is CPU-only (SparseArrays/CHOLMOD has no GPU path); choose an iterative solver under the $backend backend.")
 
     sals = SparseAssembledLinearSystem(g)
-    fact = lu(sals.M)
+    # Symmetric(...) tells CHOLMOD to read only one triangle -- valid now that
+    # sals.M is exactly symmetric (Dirichlet neighbours are eliminated
+    # symmetrically, see update_SALS_kernel!) and SPD (diffusion + strictly
+    # positive diagonal reaction term from the Newton-linearized creep closure).
+    fact = cholesky(Symmetric(sals.M))
     h_vec = zeros(F, g.nx * g.ny)
 
-    return LUDirectSolver(sals, fact, h_vec)
+    return CholeskyDirectSolver(sals, fact, h_vec)
 
 end
 
@@ -132,22 +154,10 @@ end
 
         m = mask[ix, iy] # mask specifies if a cell is grounded ice, land, ocean, or other basin
 
-        if m == OCEAN # Dirichlet BC
+        if m == OCEAN || m == LAND # Dirichlet BC
 
-            # Hydrostatic ocean pressure at the bed: zb is elevation relative to sea
-            # level (positive up), so a marine bed at zb < 0 sits at depth -zb below
-            # sea level. pw = p_atm + rho_w*g*(-zb) = p_atm - rho_w*g*zb.
-            # min(zb, 0) clamps to p_atm if this OCEAN-masked cell's bed happens to
-            # be above sea level, instead of producing a sub-atmospheric pressure.
             nzval[idxP[ix, iy]] = 1
-            pw_bc = p_atm - rho_w * ggrav * min(zb[ix, iy], zero(eltype(zb)))
-            rhs[row] = pw_bc / (rho_w * ggrav) + zb[ix, iy] # from hydraulic head h = (pw / (rhow * g)) + zb
-
-        elseif m == LAND # Dirichlet BC
-
-            # pw = p_atm -> h = p_atm/(rho_w*g) + zb
-            nzval[idxP[ix, iy]] = 1
-            rhs[row] = p_atm / (rho_w * ggrav) + zb[ix, iy]
+            rhs[row] = dirichlet_head(m, zb[ix, iy], p_atm, rho_w, ggrav)
 
         elseif m == OTHER_BASIN # Dirichlet BC
 
@@ -175,19 +185,41 @@ end
             # the standard Glen's-law n=3, hitting the fast power-by-squaring path.
             aP = (aE + aW + aN + aS) + n * rho_w * ggrav * A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * b[ix, iy]
 
-            # Update the non-zero values of the M sparse matrix
+            # Update the non-zero values of the M sparse matrix. A GROUNDED
+            # neighbour couples symmetrically (handled below in the else
+            # branch). An OCEAN/LAND neighbour's head is already known, so
+            # rather than coupling to it through a matrix entry that its own
+            # row (a bare identity row, see above) would never reciprocate --
+            # which is what breaks symmetry -- its contribution is folded
+            # straight into rhs instead, matching the symmetric elimination
+            # of Dirichlet dofs (fold known value into the coupled rows' rhs,
+            # zero both the row and the column for that dof).
             nzval[idxP[ix, iy]] += aP
-            ix < nx && (nzval[idxE[ix, iy]] -= aE)
-            ix > 1  && (nzval[idxW[ix, iy]] -= aW)
-            iy < ny && (nzval[idxN[ix, iy]] -= aN)
-            iy > 1  && (nzval[idxS[ix, iy]] -= aS)
+            dirichlet_rhs = zero(eltype(rhs))
+            if ix < nx
+                mE = mask[ix+1, iy]
+                (mE == OCEAN || mE == LAND) ? (dirichlet_rhs += aE * dirichlet_head(mE, zb[ix+1, iy], p_atm, rho_w, ggrav)) : (nzval[idxE[ix, iy]] -= aE)
+            end
+            if ix > 1
+                mW = mask[ix-1, iy]
+                (mW == OCEAN || mW == LAND) ? (dirichlet_rhs += aW * dirichlet_head(mW, zb[ix-1, iy], p_atm, rho_w, ggrav)) : (nzval[idxW[ix, iy]] -= aW)
+            end
+            if iy < ny
+                mN = mask[ix, iy+1]
+                (mN == OCEAN || mN == LAND) ? (dirichlet_rhs += aN * dirichlet_head(mN, zb[ix, iy+1], p_atm, rho_w, ggrav)) : (nzval[idxN[ix, iy]] -= aN)
+            end
+            if iy > 1
+                mS = mask[ix, iy-1]
+                (mS == OCEAN || mS == LAND) ? (dirichlet_rhs += aS * dirichlet_head(mS, zb[ix, iy-1], p_atm, rho_w, ggrav)) : (nzval[idxS[ix, iy]] -= aS)
+            end
 
             # Update the rhs vector
             rhs[row] = mdot[ix, iy] * (1 / rho_w - 1 / rho_i) -
                         beta[ix, iy] * abs_ub[ix, iy] +
                         A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy] * b[ix, iy] +
                         A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * (n * rho_w * ggrav * h[ix, iy]) * b[ix, iy] + # term from Newton linearization of the creep closing term
-                        compute_ieb!(mi, ieb, ix, iy)
+                        compute_ieb!(mi, ieb, ix, iy) +
+                        dirichlet_rhs
         end
 
     end
@@ -197,7 +229,7 @@ end
 
 function update_SALS!(sals::SparseAssembledLinearSystem, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, mi::AbstractMeltInput)
 
-    # Unpack the solver's preallocated matrix/rhs/index-map workspace (see LUDirectSolver's docstring)
+    # Unpack the solver's preallocated matrix/rhs/index-map workspace (see CholeskyDirectSolver's docstring)
     rhs = sals.rhs
     nzval = sals.M.nzval
     idxP, idxE, idxW, idxN, idxS = sals.idxP, sals.idxE, sals.idxW, sals.idxN, sals.idxS
@@ -228,16 +260,10 @@ end
 
         m = mask[ix, iy]
 
-        if m == OCEAN # Dirichlet BC
+        if m == OCEAN || m == LAND # Dirichlet BC
 
             aP[ix, iy] = 1
-            pw_bc = p_atm - rho_w * ggrav * min(zb[ix, iy], zero(eltype(zb)))
-            rhs[row] = pw_bc / (rho_w * ggrav) + zb[ix, iy]
-
-        elseif m == LAND # Dirichlet BC
-
-            aP[ix, iy] = 1
-            rhs[row] = p_atm / (rho_w * ggrav) + zb[ix, iy]
+            rhs[row] = dirichlet_head(m, zb[ix, iy], p_atm, rho_w, ggrav)
 
         elseif m == OTHER_BASIN # Dirichlet BC
 
@@ -253,16 +279,35 @@ end
             aS_ij = (iy > 1)  ? boundary_K_face(kfs, K, mask, ix, iy, ix, iy-1) / dy2 : zero(dy2)
 
             aP[ix, iy] = (aE_ij + aW_ij + aN_ij + aS_ij) + n * rho_w * ggrav * A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * b[ix, iy]
-            aE[ix, iy] = aE_ij
-            aW[ix, iy] = aW_ij
-            aN[ix, iy] = aN_ij
-            aS[ix, iy] = aS_ij
+
+            # As in update_SALS_kernel!: an OCEAN/LAND neighbour's known head
+            # is folded into rhs instead of being wired up as a matrix
+            # coupling (aE/aW/aN/aS stay at their fill!-ed 0 for that
+            # direction), so the operator stays symmetric.
+            dirichlet_rhs = zero(eltype(rhs))
+            if ix < nx
+                mE = mask[ix+1, iy]
+                (mE == OCEAN || mE == LAND) ? (dirichlet_rhs += aE_ij * dirichlet_head(mE, zb[ix+1, iy], p_atm, rho_w, ggrav)) : (aE[ix, iy] = aE_ij)
+            end
+            if ix > 1
+                mW = mask[ix-1, iy]
+                (mW == OCEAN || mW == LAND) ? (dirichlet_rhs += aW_ij * dirichlet_head(mW, zb[ix-1, iy], p_atm, rho_w, ggrav)) : (aW[ix, iy] = aW_ij)
+            end
+            if iy < ny
+                mN = mask[ix, iy+1]
+                (mN == OCEAN || mN == LAND) ? (dirichlet_rhs += aN_ij * dirichlet_head(mN, zb[ix, iy+1], p_atm, rho_w, ggrav)) : (aN[ix, iy] = aN_ij)
+            end
+            if iy > 1
+                mS = mask[ix, iy-1]
+                (mS == OCEAN || mS == LAND) ? (dirichlet_rhs += aS_ij * dirichlet_head(mS, zb[ix, iy-1], p_atm, rho_w, ggrav)) : (aS[ix, iy] = aS_ij)
+            end
 
             rhs[row] = mdot[ix, iy] * (1 / rho_w - 1 / rho_i) -
                         beta[ix, iy] * abs_ub[ix, iy] +
                         A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy] * b[ix, iy] +
                         A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * (n * rho_w * ggrav * h[ix, iy]) * b[ix, iy] +
-                        compute_ieb!(mi, ieb, ix, iy)
+                        compute_ieb!(mi, ieb, ix, iy) +
+                        dirichlet_rhs
         end
 
     end
@@ -349,80 +394,59 @@ function update_diag_precond!(d::AbstractVector, mfls::MatrixFreeLinearSystem)
     return d
 end
 
-function solve_linear_system!(ls::LUDirectSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, mi::AbstractMeltInput)
+function solve_linear_system!(ls::CholeskyDirectSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, mi::AbstractMeltInput)
 
     update_SALS!(ls.sals, s, g, p, kfs, mi) # prepare the new linear system sparse matrix M and rhs
 
-    lu!(ls.fact, ls.sals.M) # computes the LU factorization of the matrix ls.M in-place, storing the result in the preallocated factorization object ls.fact
+    cholesky!(ls.fact, Symmetric(ls.sals.M)) # refactorizes in-place, reusing ls.fact's symbolic factorization since the sparsity pattern never changes across Picard iterations/timesteps
 
-    ldiv!(ls.h_vec, ls.fact, ls.sals.rhs) # solve for the new h based on the new LU decomposition of the sparse M matrix we have computed above
+    ldiv!(ls.h_vec, ls.fact, ls.sals.rhs) # solve for the new h based on the new Cholesky factorization of the sparse M matrix we have computed above
 
     s.h .= reshape(ls.h_vec, g.nx, g.ny) # update h
 
 end
 
-struct GMRESIterativeSolver{LSy <: AbstractLinearSystem, WS, V <: AbstractVector} <: AbstractIterativeSolver
+struct CGIterativeSolver{LSy <: AbstractLinearSystem, WS, V <: AbstractVector} <: AbstractIterativeSolver
     lsy::LSy
     ws::WS # workspace
     precond_diag::V # Jacobi (diagonal) preconditioner, refreshed every solve -- same array type as lsy's rhs (Vector for SALS, backend-native for MatrixFreeLinearSystem)
 end
 
-struct BiCGSTABIterativeSolver{LSy <: AbstractLinearSystem, WS, V <: AbstractVector} <: AbstractIterativeSolver
-    lsy::LSy
-    ws::WS # workspace
-    precond_diag::V
-end
-
 # Representation is chosen at construction time by passing the AbstractLinearSystem
-# subtype itself, e.g. GMRESIterativeSolver(g, SparseAssembledLinearSystem) or
-# GMRESIterativeSolver(g, MatrixFreeLinearSystem) -- same struct either way,
+# subtype itself, e.g. CGIterativeSolver(g, SparseAssembledLinearSystem) or
+# CGIterativeSolver(g, MatrixFreeLinearSystem) -- same struct either way,
 # dispatch on LSy in solve_linear_system! picks the right solve path.
-function GMRESIterativeSolver(g::Grid{F}, ::Type{SparseAssembledLinearSystem}) where F
+#
+# CG (rather than GMRES/BiCGSTAB) is valid here because the assembled operator
+# is symmetric positive definite: diffusion with reciprocal face fluxes (see
+# compute_K_face) plus a strictly positive diagonal reaction term from the
+# Newton-linearized creep closure, and Dirichlet (OCEAN/LAND) neighbours are
+# eliminated symmetrically (folded into rhs, see update_SALS_kernel!/
+# update_MFLS_kernel!) rather than left as a one-sided matrix coupling.
+function CGIterativeSolver(g::Grid{F}, ::Type{SparseAssembledLinearSystem}) where F
 
-    # Krylov.jl's sparse matvec (SparseArrays.mul!) is CPU-only, same reasoning as LUDirectSolver.
-    backend != "Threads" && error("GMRESIterativeSolver(g, SparseAssembledLinearSystem) is CPU-only; use GMRESIterativeSolver(g, MatrixFreeLinearSystem) under the $backend backend.")
-
-    sals = SparseAssembledLinearSystem(g)
-    ws = GmresWorkspace(sals.M, sals.rhs)
-    precond_diag = zeros(F, g.nx * g.ny)
-
-    return GMRESIterativeSolver(sals, ws, precond_diag)
-
-end
-
-function GMRESIterativeSolver(g::Grid{F}, ::Type{MatrixFreeLinearSystem}) where F
-
-    mfls = MatrixFreeLinearSystem(g)
-    ws = GmresWorkspace(g.nx * g.ny, g.nx * g.ny, typeof(mfls.rhs)) # storage type matches mfls.rhs, so it lands on the active backend (Array under Threads, MtlArray under Metal)
-    precond_diag = @zeros(g.nx * g.ny)
-
-    return GMRESIterativeSolver(mfls, ws, precond_diag)
-
-end
-
-function BiCGSTABIterativeSolver(g::Grid{F}, ::Type{SparseAssembledLinearSystem}) where F
-
-    backend != "Threads" && error("BiCGSTABIterativeSolver(g, SparseAssembledLinearSystem) is CPU-only; use BiCGSTABIterativeSolver(g, MatrixFreeLinearSystem) under the $backend backend.")
+    # Krylov.jl's sparse matvec (SparseArrays.mul!) is CPU-only, same reasoning as CholeskyDirectSolver.
+    backend != "Threads" && error("CGIterativeSolver(g, SparseAssembledLinearSystem) is CPU-only; use CGIterativeSolver(g, MatrixFreeLinearSystem) under the $backend backend.")
 
     sals = SparseAssembledLinearSystem(g)
-    ws = BicgstabWorkspace(sals.M, sals.rhs)
+    ws = CgWorkspace(sals.M, sals.rhs)
     precond_diag = zeros(F, g.nx * g.ny)
 
-    return BiCGSTABIterativeSolver(sals, ws, precond_diag)
+    return CGIterativeSolver(sals, ws, precond_diag)
 
 end
 
-function BiCGSTABIterativeSolver(g::Grid{F}, ::Type{MatrixFreeLinearSystem}) where F
+function CGIterativeSolver(g::Grid{F}, ::Type{MatrixFreeLinearSystem}) where F
 
     mfls = MatrixFreeLinearSystem(g)
-    ws = BicgstabWorkspace(g.nx * g.ny, g.nx * g.ny, typeof(mfls.rhs))
+    ws = CgWorkspace(g.nx * g.ny, g.nx * g.ny, typeof(mfls.rhs)) # storage type matches mfls.rhs, so it lands on the active backend (Array under Threads, MtlArray under Metal)
     precond_diag = @zeros(g.nx * g.ny)
 
-    return BiCGSTABIterativeSolver(mfls, ws, precond_diag)
+    return CGIterativeSolver(mfls, ws, precond_diag)
 
 end
 
-function solve_linear_system!(ls::GMRESIterativeSolver{<:SparseAssembledLinearSystem}, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, mi::AbstractMeltInput)
+function solve_linear_system!(ls::CGIterativeSolver{<:SparseAssembledLinearSystem}, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, mi::AbstractMeltInput)
 
     update_SALS!(ls.lsy, s, g, p, kfs, mi) # prepare the new linear system sparse matrix M and rhs
     update_diag_precond!(ls.precond_diag, ls.lsy)
@@ -432,41 +456,19 @@ function solve_linear_system!(ls::GMRESIterativeSolver{<:SparseAssembledLinearSy
     # same solution regardless of x0), but the residual it starts from is usually much
     # smaller once h is already close to converged (late Picard iterations, or consecutive
     # time steps), so it typically needs fewer Krylov iterations.
-    gmres!(ls.ws, ls.lsy.M, ls.lsy.rhs, vec(s.h); M = Diagonal(ls.precond_diag), ldiv = true) # solves in place, storing the result in the preallocated workspace ls.ws
+    cg!(ls.ws, ls.lsy.M, ls.lsy.rhs, vec(s.h); M = Diagonal(ls.precond_diag), ldiv = true) # solves in place, storing the result in the preallocated workspace ls.ws
 
     s.h .= reshape(ls.ws.x, g.nx, g.ny) # update h
 
 end
 
-function solve_linear_system!(ls::GMRESIterativeSolver{<:MatrixFreeLinearSystem}, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, mi::AbstractMeltInput)
+function solve_linear_system!(ls::CGIterativeSolver{<:MatrixFreeLinearSystem}, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, mi::AbstractMeltInput)
 
     update_MFLS!(ls.lsy, s, g, p, kfs, mi)
     update_diag_precond!(ls.precond_diag, ls.lsy)
 
-    gmres!(ls.ws, StencilOperator(ls.lsy), ls.lsy.rhs, vec(s.h); M = Diagonal(ls.precond_diag), ldiv = true)
-
-    s.h .= reshape(ls.ws.x, g.nx, g.ny)
-
-end
-
-function solve_linear_system!(ls::BiCGSTABIterativeSolver{<:SparseAssembledLinearSystem}, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, mi::AbstractMeltInput)
-
-    update_SALS!(ls.lsy, s, g, p, kfs, mi) # prepare the new linear system sparse matrix M and rhs
-    update_diag_precond!(ls.precond_diag, ls.lsy)
-
-    bicgstab!(ls.ws, ls.lsy.M, ls.lsy.rhs, vec(s.h); M = Diagonal(ls.precond_diag), ldiv = true) # solves in place, storing the result in the preallocated workspace ls.ws
+    cg!(ls.ws, StencilOperator(ls.lsy), ls.lsy.rhs, vec(s.h); M = Diagonal(ls.precond_diag), ldiv = true)
 
     s.h .= reshape(ls.ws.x, g.nx, g.ny) # update h
-
-end
-
-function solve_linear_system!(ls::BiCGSTABIterativeSolver{<:MatrixFreeLinearSystem}, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, mi::AbstractMeltInput)
-
-    update_MFLS!(ls.lsy, s, g, p, kfs, mi)
-    update_diag_precond!(ls.precond_diag, ls.lsy)
-
-    bicgstab!(ls.ws, StencilOperator(ls.lsy), ls.lsy.rhs, vec(s.h); M = Diagonal(ls.precond_diag), ldiv = true)
-
-    s.h .= reshape(ls.ws.x, g.nx, g.ny)
 
 end

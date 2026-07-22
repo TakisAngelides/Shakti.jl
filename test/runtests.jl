@@ -3,6 +3,7 @@ set_preferences!("Shakti", "backend" => "Threads", "floattype" => "Float64"; for
 
 using Shakti
 using Test
+using LinearAlgebra
 
 @testset "Shakti.jl" begin
 
@@ -67,6 +68,12 @@ using Test
 
         @test sals.rhs ≈ mfls.rhs
 
+        # Dirichlet BCs (OCEAN/LAND) are eliminated symmetrically -- a
+        # GROUNDED cell's coupling to a Dirichlet neighbour is folded into
+        # rhs rather than left as a one-sided matrix entry -- so the
+        # assembled operator should be exactly symmetric.
+        @test issymmetric(sals.M)
+
         # SALS bakes the minus sign for off-diagonal (neighbor) entries
         # directly into nzval; MFLS stores the raw positive face conductance
         # and the minus sign is applied later, in the matvec -- so the
@@ -79,6 +86,73 @@ using Test
             j < ny && @test sals.M.nzval[sals.idxN[i, j]] ≈ -mfls.aN[i, j]
             j > 1  && @test sals.M.nzval[sals.idxS[i, j]] ≈ -mfls.aS[i, j]
         end
+
+    end
+
+    @testset "CGIterativeSolver matches CholeskyDirectSolver" begin
+
+        # Same nontrivial mask/state as above, but this time actually solving
+        # (not just comparing assembly) -- CG and Cholesky are only valid
+        # because the assembled operator is SPD (see the symmetry test
+        # above), so this confirms the swap from GMRES/BiCGSTAB/LU to
+        # CG/Cholesky still converges to/produces the same head field.
+        nx, ny = 6, 6
+        grid = Grid(nx, ny, 1e3, 1e3)
+        p = ModelParameters(e_v = 0.0)
+        mi = ConstantMeltInput()
+        kfs = Arithmetic()
+
+        mask = fill(GROUNDED, nx, ny)
+        mask[end, :] .= OCEAN
+        mask[1, :]   .= LAND
+        mask[:, 1]   .= OTHER_BASIN
+
+        A_visc = fill(5e-25, nx, ny)
+        zb     = repeat(reshape(-0.02 .* grid.x, nx, 1), 1, ny)
+        zs     = zb .+ 500.0
+        b      = fill(0.01, nx, ny)
+        G      = fill(0.06, nx, ny)
+        ub_x   = fill(1e-6, nx + 1, ny)
+        ub_y   = zeros(nx, ny + 1)
+        ieb    = zeros(nx, ny)
+        ieb[3, 3] = 3 / (grid.dx * grid.dy)
+
+        function fresh_state()
+            state = State(grid)
+            set_initial_conditions!(state, grid, p, mi, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb)
+            state.h .+= 0.01 .* reshape(1:(nx * ny), nx, ny)
+            compute_dhdx!(state, grid)
+            compute_dhdy!(state, grid)
+            compute_pw!(state, p)
+            compute_dpwdx!(state, grid)
+            compute_dpwdy!(state, grid)
+            compute_N!(state)
+            compute_q_x!(state, p)
+            compute_q_y!(state, p)
+            compute_Re_x!(state, p)
+            compute_Re_y!(state, p)
+            compute_Re!(state)
+            compute_taub_x!(state, p)
+            compute_taub_y!(state, p)
+            shs = (iszero(p.ct) || iszero(p.cw)) ? NoSensibleHeat() : WithSensibleHeat()
+            compute_mdot!(state, p, shs)
+            compute_K!(state, p)
+            return state
+        end
+
+        state_lu = fresh_state()
+        ls_lu = CholeskyDirectSolver(grid)
+        Shakti.solve_linear_system!(ls_lu, state_lu, grid, p, kfs, mi)
+
+        state_cg = fresh_state()
+        ls_cg = CGIterativeSolver(grid, SparseAssembledLinearSystem)
+        Shakti.solve_linear_system!(ls_cg, state_cg, grid, p, kfs, mi)
+        @test state_cg.h ≈ state_lu.h atol=1e-5
+
+        state_cg_mf = fresh_state()
+        ls_cg_mf = CGIterativeSolver(grid, MatrixFreeLinearSystem)
+        Shakti.solve_linear_system!(ls_cg_mf, state_cg_mf, grid, p, kfs, mi)
+        @test state_cg_mf.h ≈ state_lu.h atol=1e-5
 
     end
 

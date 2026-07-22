@@ -87,10 +87,10 @@ export AbstractKFaceScheme, Arithmetic, Harmonic, compute_K_face
 # (update_SALS!/update_MFLS! are internal assembly plumbing, not part of the
 # public API; AbstractLinearSystem/SparseAssembledLinearSystem/MatrixFreeLinearSystem
 # ARE public -- they're passed as the representation-choosing argument to the
-# iterative solver constructors, e.g. GMRESIterativeSolver(g, MatrixFreeLinearSystem))
+# iterative solver constructors, e.g. CGIterativeSolver(g, MatrixFreeLinearSystem))
 export AbstractLinearSolver, AbstractDirectSolver, AbstractIterativeSolver
 export AbstractLinearSystem, SparseAssembledLinearSystem, MatrixFreeLinearSystem
-export LUDirectSolver, GMRESIterativeSolver, BiCGSTABIterativeSolver
+export CholeskyDirectSolver, CGIterativeSolver
 export solve_linear_system!
 
 # observer.jl
