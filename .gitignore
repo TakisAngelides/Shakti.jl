@@ -2,6 +2,15 @@
 /LocalPreferences.toml
 /test/options_explorer.jl
 
+# Cluster-only benchmark tooling for the solver x thread-count sweep (task 4):
+# expensive to run, only ever meant to execute on albedo0 via sbatch -- kept
+# off every machine that isn't the cluster rather than tracked in git.
+/test/benchmark_solver.jl
+/test/benchmark_array.sh
+/test/plot_benchmark.jl
+/test/benchmark_results/
+/test/benchmark_logs/
+
 # OS junk
 .DS_Store
 Thumbs.db
