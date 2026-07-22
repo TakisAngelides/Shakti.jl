@@ -57,6 +57,42 @@ compute_taub_x!(s::State, p::ModelParameters) = (@parallel compute_taub_x_kernel
 end
 compute_taub_y!(s::State, p::ModelParameters) = (@parallel compute_taub_y_kernel!(s.taub_y, s.N, s.ub_y, s.lambda, p.C, p.n_exp, p.inv_n_exp); s)
 
+# Fused hot-path version: one launch instead of two (see field_gradients.jl's
+# compute_dhdxy! for why passing both differently-shaped face arrays as
+# arguments makes ParallelStencil infer the right union launch range).
+@parallel_indices (ix, iy) function compute_taub_xy_kernel!(taub_x, taub_y, N, ub_x, ub_y, lambda, C, n, inv_n)
+    nx1 = size(taub_x, 1) # nx + 1
+    if ix <= nx1 && iy <= size(taub_x, 2)
+        if ix == 1
+            Nf = N[1, iy]
+            taub_x[ix, iy] = Nf * C * pow(ub_x[1, iy] / (ub_x[1, iy] + pow(abs(Nf), n) * lambda[1, iy]), inv_n)
+        elseif ix == nx1
+            Nf = N[nx1-1, iy]
+            taub_x[ix, iy] = Nf * C * pow(ub_x[nx1, iy] / (ub_x[nx1, iy] + pow(abs(Nf), n) * lambda[nx1-1, iy]), inv_n)
+        else
+            Nf = (N[ix, iy] + N[ix-1, iy]) / 2
+            lf = (lambda[ix, iy] + lambda[ix-1, iy]) / 2
+            taub_x[ix, iy] = Nf * C * pow(ub_x[ix, iy] / (ub_x[ix, iy] + pow(abs(Nf), n) * lf), inv_n)
+        end
+    end
+    ny1 = size(taub_y, 2) # ny + 1
+    if ix <= size(taub_y, 1) && iy <= ny1
+        if iy == 1
+            Nf = N[ix, 1]
+            taub_y[ix, iy] = Nf * C * pow(ub_y[ix, 1] / (ub_y[ix, 1] + pow(abs(Nf), n) * lambda[ix, 1]), inv_n)
+        elseif iy == ny1
+            Nf = N[ix, ny1-1]
+            taub_y[ix, iy] = Nf * C * pow(ub_y[ix, ny1] / (ub_y[ix, ny1] + pow(abs(Nf), n) * lambda[ix, ny1-1]), inv_n)
+        else
+            Nf = (N[ix, iy] + N[ix, iy-1]) / 2
+            lf = (lambda[ix, iy] + lambda[ix, iy-1]) / 2
+            taub_y[ix, iy] = Nf * C * pow(ub_y[ix, iy] / (ub_y[ix, iy] + pow(abs(Nf), n) * lf), inv_n)
+        end
+    end
+    return
+end
+compute_taub_xy!(s::State, p::ModelParameters) = (@parallel compute_taub_xy_kernel!(s.taub_x, s.taub_y, s.N, s.ub_x, s.ub_y, s.lambda, p.C, p.n_exp, p.inv_n_exp); s)
+
 # Melt rate = geothermal flux + frictional (sliding) heating + potential
 # energy released by water flowing downgradient + sensible heat exchanged as
 # water moves to regions of different pressure melting point, all divided by

@@ -110,23 +110,18 @@ function Picard_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation,
     @timeit PERF_TIMER "relax_h" relax_h!(hr, s, h_prev) # damp the raw Picard update before anything downstream of h is recomputed, so the next iteration's coefficients are consistent with the relaxed h
 
     # Update state variables that depend on the new h
-    @timeit PERF_TIMER "dhdx" compute_dhdx!(s, g)
-    @timeit PERF_TIMER "dhdy" compute_dhdy!(s, g)
+    @timeit PERF_TIMER "dhdxy" compute_dhdxy!(s, g)
 
     @timeit PERF_TIMER "pw" compute_pw!(s, p)
-    @timeit PERF_TIMER "dpwdx" compute_dpwdx!(s, g) # feeds compute_sensible!'s sensible-heat term (via compute_mdot! below)
-    @timeit PERF_TIMER "dpwdy" compute_dpwdy!(s, g)
+    @timeit PERF_TIMER "dpwdxy" compute_dpwdxy!(s, g) # feeds compute_sensible!'s sensible-heat term (via compute_mdot! below)
     @timeit PERF_TIMER "N" compute_N!(s)
 
-    @timeit PERF_TIMER "q_x" compute_q_x!(s, p)
-    @timeit PERF_TIMER "q_y" compute_q_y!(s, p)
+    @timeit PERF_TIMER "q_xy" compute_q_xy!(s, p)
 
-    @timeit PERF_TIMER "Re_x" compute_Re_x!(s, p)
-    @timeit PERF_TIMER "Re_y" compute_Re_y!(s, p)
+    @timeit PERF_TIMER "Re_xy" compute_Re_xy!(s, p)
     @timeit PERF_TIMER "Re" compute_Re!(s)
 
-    @timeit PERF_TIMER "taub_x" compute_taub_x!(s, p)
-    @timeit PERF_TIMER "taub_y" compute_taub_y!(s, p)
+    @timeit PERF_TIMER "taub_xy" compute_taub_xy!(s, p)
 
     @timeit PERF_TIMER "mdot" compute_mdot!(s, p, shs)
 

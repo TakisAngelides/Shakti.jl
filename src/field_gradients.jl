@@ -60,3 +60,31 @@ function compute_dpwdy!(s::State, g::Grid)
     @parallel compute_dpwdy_kernel!(s.dpwdy, s.pw, s.valid_y, g.dy)
     return s
 end
+
+# Fused hot-path versions: one @parallel launch instead of two. ParallelStencil
+# infers the launch range from the elementwise max of every array argument's
+# size (see ParallelKernel.maxsize), so passing both the (nx+1,ny) x-face and
+# (nx,ny+1) y-face arrays as arguments launches over their union bounding box
+# (1:nx+1, 1:ny+1) automatically -- each `if` below still only writes within
+# its own field's bounds, exactly as the unfused kernels above already did.
+@parallel_indices (ix, iy) function compute_dhdxy_kernel!(dhdx, dhdy, h, valid_x, valid_y, dx, dy)
+    if ix > 1 && ix < size(dhdx, 1) && iy <= size(dhdx, 2)
+        dhdx[ix, iy] = ((h[ix, iy] - h[ix-1, iy]) / dx) * valid_x[ix, iy]
+    end
+    if iy > 1 && iy < size(dhdy, 2) && ix <= size(dhdy, 1)
+        dhdy[ix, iy] = ((h[ix, iy] - h[ix, iy-1]) / dy) * valid_y[ix, iy]
+    end
+    return
+end
+compute_dhdxy!(s::State, g::Grid) = (@parallel compute_dhdxy_kernel!(s.dhdx, s.dhdy, s.h, s.valid_x, s.valid_y, g.dx, g.dy); s)
+
+@parallel_indices (ix, iy) function compute_dpwdxy_kernel!(dpwdx, dpwdy, pw, valid_x, valid_y, dx, dy)
+    if ix > 1 && ix < size(dpwdx, 1) && iy <= size(dpwdx, 2)
+        dpwdx[ix, iy] = ((pw[ix, iy] - pw[ix-1, iy]) / dx) * valid_x[ix, iy]
+    end
+    if iy > 1 && iy < size(dpwdy, 2) && ix <= size(dpwdy, 1)
+        dpwdy[ix, iy] = ((pw[ix, iy] - pw[ix, iy-1]) / dy) * valid_y[ix, iy]
+    end
+    return
+end
+compute_dpwdxy!(s::State, g::Grid) = (@parallel compute_dpwdxy_kernel!(s.dpwdx, s.dpwdy, s.pw, s.valid_x, s.valid_y, g.dx, g.dy); s)
