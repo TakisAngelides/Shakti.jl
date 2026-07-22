@@ -41,6 +41,7 @@ include("mask.jl")
 include("melt_input.jl")
 include("k_face_scheme.jl")
 include("linear_solver.jl")
+include("preconditioner.jl")
 include("observer.jl")
 include("melt_rate.jl")
 include("elliptic_solver.jl")
@@ -83,6 +84,10 @@ export AbstractLinearSolver, AbstractDirectSolver, AbstractIterativeSolver
 export AbstractLinearSystem, SparseAssembledLinearSystem, MatrixFreeLinearSystem
 export CholeskyDirectSolver, CGIterativeSolver
 export solve_linear_system!
+
+# preconditioner.jl
+export ChebyshevPreconditioner
+export update_chebyshev_bounds!, estimate_eigenvalue_bounds
 
 # observer.jl
 export AbstractFileWriter, NetCDFFileWriter, HDF5FileWriter, JLD2FileWriter, CSVFileWriter

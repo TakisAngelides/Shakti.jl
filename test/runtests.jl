@@ -154,6 +154,23 @@ using LinearAlgebra
         Shakti.solve_linear_system!(ls_cg_mf, state_cg_mf, grid, p, kfs, mi)
         @test state_cg_mf.h ≈ state_lu.h atol=1e-5
 
+        # ChebyshevPreconditioner (see preconditioner.jl): should converge to
+        # the same head field as plain Jacobi/Cholesky regardless of degree
+        # (it's still an exact solve to CG's tolerance, just via a different
+        # preconditioner), and should need fewer outer CG iterations than
+        # Jacobi once the degree is large enough to approximate A^-1 well.
+        state_cg_cheb = fresh_state()
+        ls_cg_cheb = CGIterativeSolver(grid, SparseAssembledLinearSystem; chebyshev_degree = 4)
+        Shakti.solve_linear_system!(ls_cg_cheb, state_cg_cheb, grid, p, kfs, mi)
+        @test state_cg_cheb.h ≈ state_lu.h atol=1e-5
+        @test ls_cg_cheb.ws.stats.niter <= ls_cg.ws.stats.niter
+
+        state_cg_mf_cheb = fresh_state()
+        ls_cg_mf_cheb = CGIterativeSolver(grid, MatrixFreeLinearSystem; chebyshev_degree = 4)
+        Shakti.solve_linear_system!(ls_cg_mf_cheb, state_cg_mf_cheb, grid, p, kfs, mi)
+        @test state_cg_mf_cheb.h ≈ state_lu.h atol=1e-5
+        @test ls_cg_mf_cheb.ws.stats.niter <= ls_cg_mf.ws.stats.niter
+
     end
 
 end

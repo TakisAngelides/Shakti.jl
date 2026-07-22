@@ -406,10 +406,11 @@ function solve_linear_system!(ls::CholeskyDirectSolver, s::State, g::Grid, p::Mo
 
 end
 
-struct CGIterativeSolver{LSy <: AbstractLinearSystem, WS, V <: AbstractVector} <: AbstractIterativeSolver
+struct CGIterativeSolver{LSy <: AbstractLinearSystem, WS, V <: AbstractVector, P} <: AbstractIterativeSolver
     lsy::LSy
     ws::WS # workspace
     precond_diag::V # Jacobi (diagonal) preconditioner, refreshed every solve -- same array type as lsy's rhs (Vector for SALS, backend-native for MatrixFreeLinearSystem)
+    precond::P # `nothing` -> plain Jacobi (Diagonal(precond_diag)); ChebyshevPreconditioner -> see preconditioner.jl
 end
 
 # Representation is chosen at construction time by passing the AbstractLinearSystem
@@ -423,7 +424,12 @@ end
 # Newton-linearized creep closure, and Dirichlet (OCEAN/LAND) neighbours are
 # eliminated symmetrically (folded into rhs, see update_SALS_kernel!/
 # update_MFLS_kernel!) rather than left as a one-sided matrix coupling.
-function CGIterativeSolver(g::Grid{F}, ::Type{SparseAssembledLinearSystem}) where F
+#
+# chebyshev_degree = nothing (default) keeps plain Jacobi preconditioning.
+# Passing an Int opts into ChebyshevPreconditioner instead -- see
+# preconditioner.jl for why (GPU host-sync overhead) and how (Saad's
+# Chebyshev semi-iteration, layered on top of the same Jacobi scaling).
+function CGIterativeSolver(g::Grid{F}, ::Type{SparseAssembledLinearSystem}; chebyshev_degree::Union{Nothing, Int} = nothing, chebyshev_nsteps_estimate::Int = 15) where F
 
     # Krylov.jl's sparse matvec (SparseArrays.mul!) is CPU-only, same reasoning as CholeskyDirectSolver.
     backend != "Threads" && error("CGIterativeSolver(g, SparseAssembledLinearSystem) is CPU-only; use CGIterativeSolver(g, MatrixFreeLinearSystem) under the $backend backend.")
@@ -431,32 +437,48 @@ function CGIterativeSolver(g::Grid{F}, ::Type{SparseAssembledLinearSystem}) wher
     sals = SparseAssembledLinearSystem(g)
     ws = CgWorkspace(sals.M, sals.rhs)
     precond_diag = zeros(F, g.nx * g.ny)
+    precond = chebyshev_degree === nothing ? nothing : ChebyshevPreconditioner(sals.M, precond_diag, chebyshev_degree; nsteps_estimate = chebyshev_nsteps_estimate)
 
-    return CGIterativeSolver(sals, ws, precond_diag)
+    return CGIterativeSolver(sals, ws, precond_diag, precond)
 
 end
 
-function CGIterativeSolver(g::Grid{F}, ::Type{MatrixFreeLinearSystem}) where F
+function CGIterativeSolver(g::Grid{F}, ::Type{MatrixFreeLinearSystem}; chebyshev_degree::Union{Nothing, Int} = nothing, chebyshev_nsteps_estimate::Int = 15) where F
 
     mfls = MatrixFreeLinearSystem(g)
     ws = CgWorkspace(g.nx * g.ny, g.nx * g.ny, typeof(mfls.rhs)) # storage type matches mfls.rhs, so it lands on the active backend (Array under Threads, MtlArray under Metal)
     precond_diag = @zeros(g.nx * g.ny)
+    precond = chebyshev_degree === nothing ? nothing : ChebyshevPreconditioner(StencilOperator(mfls), precond_diag, chebyshev_degree; nsteps_estimate = chebyshev_nsteps_estimate)
 
-    return CGIterativeSolver(mfls, ws, precond_diag)
+    return CGIterativeSolver(mfls, ws, precond_diag, precond)
 
+end
+
+# Both dispatch to the same `either-Jacobi-or-Chebyshev` choice, made once at
+# construction time (ls.precond's type), not re-decided per solve. The
+# `where` clause has to restate CGIterativeSolver's own parameter bounds
+# (LSy <: AbstractLinearSystem, V <: AbstractVector) -- omitting them (or
+# using bare `<:Any`) makes this method ambiguous with the generic fallback
+# below instead of strictly more specific, and Julia silently picks the
+# fallback rather than erroring.
+_cg_precond!(ls::CGIterativeSolver{LSy, WS, V, Nothing}) where {LSy <: AbstractLinearSystem, WS, V <: AbstractVector} = Diagonal(ls.precond_diag)
+function _cg_precond!(ls::CGIterativeSolver)
+    update_chebyshev_bounds!(ls.precond, ls.lsy.rhs) # cheap (nsteps_estimate matvecs), but real -- see preconditioner.jl for why this can't just be done once at construction
+    return ls.precond
 end
 
 function solve_linear_system!(ls::CGIterativeSolver{<:SparseAssembledLinearSystem}, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, mi::AbstractMeltInput)
 
     update_SALS!(ls.lsy, s, g, p, kfs, mi) # prepare the new linear system sparse matrix M and rhs
     update_diag_precond!(ls.precond_diag, ls.lsy)
+    M = _cg_precond!(ls)
 
     # vec(s.h) as x0 warm-starts from the previous head instead of 0: cheap (Krylov just
     # copies it into its own Δx buffer) and correctness-neutral (Krylov converges to the
     # same solution regardless of x0), but the residual it starts from is usually much
     # smaller once h is already close to converged (late Picard iterations, or consecutive
     # time steps), so it typically needs fewer Krylov iterations.
-    cg!(ls.ws, ls.lsy.M, ls.lsy.rhs, vec(s.h); M = Diagonal(ls.precond_diag), ldiv = true) # solves in place, storing the result in the preallocated workspace ls.ws
+    cg!(ls.ws, ls.lsy.M, ls.lsy.rhs, vec(s.h); M = M, ldiv = true) # solves in place, storing the result in the preallocated workspace ls.ws
 
     s.h .= reshape(ls.ws.x, g.nx, g.ny) # update h
 
@@ -466,8 +488,9 @@ function solve_linear_system!(ls::CGIterativeSolver{<:MatrixFreeLinearSystem}, s
 
     update_MFLS!(ls.lsy, s, g, p, kfs, mi)
     update_diag_precond!(ls.precond_diag, ls.lsy)
+    M = _cg_precond!(ls)
 
-    cg!(ls.ws, StencilOperator(ls.lsy), ls.lsy.rhs, vec(s.h); M = Diagonal(ls.precond_diag), ldiv = true)
+    cg!(ls.ws, StencilOperator(ls.lsy), ls.lsy.rhs, vec(s.h); M = M, ldiv = true)
 
     s.h .= reshape(ls.ws.x, g.nx, g.ny) # update h
 
