@@ -8,6 +8,8 @@
 /test/benchmark_solver.jl
 /test/benchmark_array.sh
 /test/plot_benchmark.jl
+/test/plot_cpu_vs_gpu.jl
+/test/gpu_diagnostic.jl
 /test/benchmark_results/
 /test/benchmark_logs/
 
