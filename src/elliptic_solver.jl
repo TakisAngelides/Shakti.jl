@@ -22,9 +22,13 @@ mutable struct PicardSolver{F <: AbstractFloat, LS <: AbstractLinearSolver, HR <
     hr::HR
     h_prev::A     # previous-iteration head, for the Picard convergence check and under-relaxation
     delta_h::A    # change in head between iterations, for the Picard convergence check
+    check_every::Int # convergence check forces a GPU->CPU sync (the reduction result
+                      # has to reach the host for the `if`); only check every this many
+                      # iterations rather than every one, trading a few possible extra
+                      # (cheap, async) Picard iterations for fewer syncs
 end
 
-function PicardSolver(iters, tol, ls::AbstractLinearSolver, g::Grid; alpha = nothing)
+function PicardSolver(iters, tol, ls::AbstractLinearSolver, g::Grid; alpha = nothing, check_every::Int = 3)
 
     if alpha === nothing
         hr = NoHeadRelaxation()
@@ -35,7 +39,7 @@ function PicardSolver(iters, tol, ls::AbstractLinearSolver, g::Grid; alpha = not
     h_prev  = initialize_center_field(g)
     delta_h = initialize_center_field(g)
 
-    return PicardSolver(iters, floattype(tol), ls, false, 0, hr, h_prev, delta_h)
+    return PicardSolver(iters, floattype(tol), ls, false, 0, hr, h_prev, delta_h, check_every)
 end
 
 # state/grid/p/shs are taken as separate arguments (rather than a bundled
@@ -63,10 +67,22 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
         Picard_iteration!(ps.ls, ps.hr, state, grid, p, shs, kfs, mi, ps.h_prev)
 
         @. ps.delta_h = s.h - ps.h_prev
-        if maximum(abs, ps.delta_h) / (norm(s.h, Inf) + eps(eltype(s.h))) < ps.tol
-            ps.converged = true
-            ps.last_iter = iter
-            return
+
+        if iter % ps.check_every == 0 || iter == ps.iters
+            # Both maximum(abs, delta_h) and norm(h, Inf) (== maximum(abs, h)) computed
+            # in one fused reduction pass instead of two separate ones -- halves the
+            # GPU->CPU syncs per check (see check_every above for why syncs matter).
+            delta_h_max, h_max = mapreduce(
+                (dh, hh) -> (abs(dh), abs(hh)),
+                (a, b) -> (max(a[1], b[1]), max(a[2], b[2])),
+                ps.delta_h, s.h;
+                init = (zero(eltype(s.h)), zero(eltype(s.h)))
+            )
+            if delta_h_max / (h_max + eps(eltype(s.h))) < ps.tol
+                ps.converged = true
+                ps.last_iter = iter
+                return
+            end
         end
 
     end
