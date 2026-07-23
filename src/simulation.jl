@@ -10,7 +10,7 @@ abstract type AbstractGapScheme end
 struct ExplicitGapScheme <: AbstractGapScheme end
 struct ImplicitGapScheme <: AbstractGapScheme end
 
-struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHeadScheme, GS <: AbstractGapScheme, SHS <: AbstractSensibleHeatScheme, O <: AbstractObserver, G <: Grid, S <: State, MI <: AbstractMeltInput, KFS <: AbstractKFaceScheme}
+struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHeadScheme, GS <: AbstractGapScheme, SHS <: AbstractSensibleHeatScheme, O <: AbstractObserver, G <: Grid, S <: State, MI <: AbstractMeltInput, KFS <: AbstractKFaceScheme, SL <: AbstractSlidingLaw}
     tsteps::Int
     dt::F
     p::P
@@ -22,10 +22,12 @@ struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHea
     state::S
     mi::MI
     kfs::KFS
+    sl::SL
     verbose::Bool
+    total_time::Base.RefValue{F} # elapsed simulation time in seconds; a Ref so run!/step_h! can update it in place despite Simulation itself being immutable (same reason PicardSolver -- nested under hs -- is a mutable struct)
 end
 
-function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::Vector{String}, mi::AbstractMeltInput; ps = nothing, which_observer = nothing, which_file_writer = nothing, tracked_times = nothing, path = nothing, k_face_choice = "arithmetic", verbose = false)
+function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::Vector{String}, mi::AbstractMeltInput, sl::AbstractSlidingLaw; ps = nothing, which_observer = nothing, which_file_writer = nothing, tracked_times = nothing, path = nothing, k_face_choice = "arithmetic", verbose = false)
 
     # Check that all tracked observables are valid State fields
     for name in tracked_obs
@@ -97,6 +99,6 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
         error("Unknown which_observer: \"$which_observer\" (expected \"IO\" or \"Live\")")
     end
 
-    return Simulation(tsteps, dt, p, hs, gs, shs, observer, grid, state, mi, kfs, verbose)
+    return Simulation(tsteps, dt, p, hs, gs, shs, observer, grid, state, mi, kfs, sl, verbose, Ref(zero(dt)))
 
 end

@@ -1,4 +1,4 @@
-function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, mi::AbstractMeltInput, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb)
+function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, mi::AbstractMeltInput, sl::AbstractSlidingLaw, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
 
     # State's fields all share one array/element type, so any field's eltype
     # gives the right F -- used below wherever a bare numeric literal would
@@ -25,6 +25,8 @@ function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, mi::Abst
     ub_x   = Data.Array(ub_x)
     ub_y   = Data.Array(ub_y)
     ieb    = Data.Array(ieb)
+    taub_x = Data.Array(taub_x)
+    taub_y = Data.Array(taub_y)
 
     @. s.mask = mask
     compute_face_masks!(s)
@@ -55,6 +57,7 @@ function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, mi::Abst
     compute_abs_ub!(s)
 
     initialize_ieb!(mi, s, ieb)
+    initialize_taub!(sl, s, taub_x, taub_y)
 
     compute_po!(s, p)
     @. s.pw = s.po / 2
@@ -88,8 +91,8 @@ function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, mi::Abst
     compute_q_x!(s, p)
     compute_q_y!(s, p)
 
-    compute_taub_x!(s, p)
-    compute_taub_y!(s, p)
+    compute_taub_x!(s, p, sl)
+    compute_taub_y!(s, p, sl)
 
     # Sensible-heat scheme setup: same "off automatically if either factor in
     # its ct*cw prefactor is zero" rule as Simulation's own constructor.

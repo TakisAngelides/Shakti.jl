@@ -19,6 +19,7 @@ using LinearAlgebra
         state = State(grid)
         p = ModelParameters(e_v = 0.0)
         mi = ConstantMeltInput()
+        sl = RegularizedCoulombSlidingLaw(0.25)
         kfs = Arithmetic()
 
         mask = fill(GROUNDED, nx, ny)
@@ -35,8 +36,10 @@ using LinearAlgebra
         ub_y   = zeros(nx, ny + 1)
         ieb    = zeros(nx, ny)
         ieb[3, 3] = 3 / (grid.dx * grid.dy)
+        taub_x = zeros(nx + 1, ny) # unused by RegularizedCoulombSlidingLaw (recomputed from N/ub each Picard iteration)
+        taub_y = zeros(nx, ny + 1)
 
-        set_initial_conditions!(state, grid, p, mi, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb)
+        set_initial_conditions!(state, grid, p, mi, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
 
         # Perturb h and recompute everything it feeds, the same sequence
         # Picard_iteration! runs (minus the linear solve itself) -- so the
@@ -54,8 +57,8 @@ using LinearAlgebra
         compute_Re_x!(state, p)
         compute_Re_y!(state, p)
         compute_Re!(state)
-        compute_taub_x!(state, p)
-        compute_taub_y!(state, p)
+        compute_taub_x!(state, p, sl)
+        compute_taub_y!(state, p, sl)
         shs = (iszero(p.ct) || iszero(p.cw)) ? NoSensibleHeat() : WithSensibleHeat()
         compute_mdot!(state, p, shs)
         compute_K!(state, p)
@@ -100,6 +103,7 @@ using LinearAlgebra
         grid = Grid(nx, ny, 1e3, 1e3)
         p = ModelParameters(e_v = 0.0)
         mi = ConstantMeltInput()
+        sl = RegularizedCoulombSlidingLaw(0.25)
         kfs = Arithmetic()
 
         mask = fill(GROUNDED, nx, ny)
@@ -116,10 +120,12 @@ using LinearAlgebra
         ub_y   = zeros(nx, ny + 1)
         ieb    = zeros(nx, ny)
         ieb[3, 3] = 3 / (grid.dx * grid.dy)
+        taub_x = zeros(nx + 1, ny) # unused by RegularizedCoulombSlidingLaw (recomputed from N/ub each Picard iteration)
+        taub_y = zeros(nx, ny + 1)
 
         function fresh_state()
             state = State(grid)
-            set_initial_conditions!(state, grid, p, mi, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb)
+            set_initial_conditions!(state, grid, p, mi, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
             state.h .+= 0.01 .* reshape(1:(nx * ny), nx, ny)
             compute_dhdx!(state, grid)
             compute_dhdy!(state, grid)
@@ -132,8 +138,8 @@ using LinearAlgebra
             compute_Re_x!(state, p)
             compute_Re_y!(state, p)
             compute_Re!(state)
-            compute_taub_x!(state, p)
-            compute_taub_y!(state, p)
+            compute_taub_x!(state, p, sl)
+            compute_taub_y!(state, p, sl)
             shs = (iszero(p.ct) || iszero(p.cw)) ? NoSensibleHeat() : WithSensibleHeat()
             compute_mdot!(state, p, shs)
             compute_K!(state, p)

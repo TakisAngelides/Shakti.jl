@@ -14,11 +14,46 @@ abstract type AbstractSensibleHeatScheme end
 struct WithSensibleHeat <: AbstractSensibleHeatScheme end
 struct NoSensibleHeat   <: AbstractSensibleHeatScheme end
 
+# How taub (basal shear stress, feeding compute_mdot!'s frictional-heating
+# term below) is obtained. The original SHAKTI paper (Sommers et al. 2018)
+# never actually specifies this -- taub is listed in its Table 1 as a state
+# variable with no formula, since it normally comes from a coupled ice-
+# dynamics solve; Table 2's constants have no friction coefficient at all.
+# So this is a real modeling choice, not just an internal solver detail --
+# multiple dispatch on sl::AbstractSlidingLaw, decided once per Simulation
+# (same idiom as AbstractSensibleHeatScheme above), keeps that choice
+# explicit and swappable instead of silently baking in one assumption.
+abstract type AbstractSlidingLaw end
+
 # Regularized-Coulomb sliding law: taub -> C*N as ub/N^n*lambda -> infinity
 # (hard Coulomb limit), but stays finite (unlike a bare Coulomb law) as
-# ub -> 0. n/inv_n read from p.n_exp/p.inv_n_exp, canonicalized once at
+# ub -> 0. Recomputed from N/ub every Picard iteration (see compute_taub_x!
+# etc. below). n/inv_n read from p.n_exp/p.inv_n_exp, canonicalized once at
 # ModelParameters construction (see model_parameters.jl's pow/
 # canonical_exponent note), not per call or per grid cell.
+struct RegularizedCoulombSlidingLaw{F <: AbstractFloat} <: AbstractSlidingLaw
+    C::F # Coulomb friction coefficient
+end
+
+# taub_x/taub_y prescribed once (initialize_taub!, from whatever formula or
+# data the caller supplies -- e.g. a driving-stress balance
+# taub = rho_i*g*H*(surface slope), the standard parameter-free choice for
+# synthetic slab/margin setups) and left unchanged thereafter: compute_taub_x!
+# etc. below are no-ops for this law.
+struct PrescribedSlidingLaw <: AbstractSlidingLaw end
+
+initialize_taub!(::RegularizedCoulombSlidingLaw, state::State, taub_x::AbstractArray, taub_y::AbstractArray) = state
+
+function initialize_taub!(::PrescribedSlidingLaw, state::State, taub_x::AbstractArray, taub_y::AbstractArray)
+    state.taub_x .= taub_x
+    state.taub_y .= taub_y
+    return state
+end
+
+compute_taub_x!(s::State, p::ModelParameters, ::PrescribedSlidingLaw) = s
+compute_taub_y!(s::State, p::ModelParameters, ::PrescribedSlidingLaw) = s
+compute_taub_xy!(s::State, p::ModelParameters, ::PrescribedSlidingLaw) = s
+
 @parallel_indices (ix, iy) function compute_taub_x_kernel!(taub_x, N, ub_x, lambda, C, n, inv_n)
     nx1 = size(taub_x, 1) # nx + 1
     if ix <= nx1 && iy <= size(taub_x, 2)
@@ -36,7 +71,7 @@ struct NoSensibleHeat   <: AbstractSensibleHeatScheme end
     end
     return
 end
-compute_taub_x!(s::State, p::ModelParameters) = (@parallel compute_taub_x_kernel!(s.taub_x, s.N, s.ub_x, s.lambda, p.C, p.n_exp, p.inv_n_exp); s)
+compute_taub_x!(s::State, p::ModelParameters, sl::RegularizedCoulombSlidingLaw) = (@parallel compute_taub_x_kernel!(s.taub_x, s.N, s.ub_x, s.lambda, sl.C, p.n_exp, p.inv_n_exp); s)
 
 @parallel_indices (ix, iy) function compute_taub_y_kernel!(taub_y, N, ub_y, lambda, C, n, inv_n)
     ny1 = size(taub_y, 2) # ny + 1
@@ -55,7 +90,7 @@ compute_taub_x!(s::State, p::ModelParameters) = (@parallel compute_taub_x_kernel
     end
     return
 end
-compute_taub_y!(s::State, p::ModelParameters) = (@parallel compute_taub_y_kernel!(s.taub_y, s.N, s.ub_y, s.lambda, p.C, p.n_exp, p.inv_n_exp); s)
+compute_taub_y!(s::State, p::ModelParameters, sl::RegularizedCoulombSlidingLaw) = (@parallel compute_taub_y_kernel!(s.taub_y, s.N, s.ub_y, s.lambda, sl.C, p.n_exp, p.inv_n_exp); s)
 
 # Fused hot-path version: one launch instead of two (see field_gradients.jl's
 # compute_dhdxy! for why passing both differently-shaped face arrays as
@@ -91,7 +126,7 @@ compute_taub_y!(s::State, p::ModelParameters) = (@parallel compute_taub_y_kernel
     end
     return
 end
-compute_taub_xy!(s::State, p::ModelParameters) = (@parallel compute_taub_xy_kernel!(s.taub_x, s.taub_y, s.N, s.ub_x, s.ub_y, s.lambda, p.C, p.n_exp, p.inv_n_exp); s)
+compute_taub_xy!(s::State, p::ModelParameters, sl::RegularizedCoulombSlidingLaw) = (@parallel compute_taub_xy_kernel!(s.taub_x, s.taub_y, s.N, s.ub_x, s.ub_y, s.lambda, sl.C, p.n_exp, p.inv_n_exp); s)
 
 # Melt rate = geothermal flux + frictional (sliding) heating + potential
 # energy released by water flowing downgradient + sensible heat exchanged as

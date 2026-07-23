@@ -8,7 +8,6 @@ struct ModelParameters{F <: AbstractFloat, NE1, NE2, NE3}
     L::F       # latent heat of fusion
     br::F      # bedrock bump height
     lr::F      # bedrock bump spacing
-    C::F       # Coulomb friction coefficient
     ct::F      # change of pressure melting point with temperature
     cw::F      # heat capacity of water
     p_atm::F   # atmospheric pressure, used as the Dirichlet reference for LAND/OCEAN BCs
@@ -30,7 +29,6 @@ function ModelParameters(;
     L = 334e3,
     br = 0.05,
     lr = 2.0,
-    C = 0.25,
     ct = 7.5e-8,
     cw = 4.22e3,
     p_atm = 0.0,
@@ -43,7 +41,7 @@ function ModelParameters(;
     inv_n_exp = canonical_exponent(1 / n_F)
 
     return ModelParameters(
-        F(rho_w), F(rho_i), F(g), F(nu), n_F, F(omega), F(L), F(br), F(lr), F(C), F(ct), F(cw), F(p_atm), F(b_min), F(e_v),
+        F(rho_w), F(rho_i), F(g), F(nu), n_F, F(omega), F(L), F(br), F(lr), F(ct), F(cw), F(p_atm), F(b_min), F(e_v),
         n_exp, n_minus_1_exp, inv_n_exp
     )
 

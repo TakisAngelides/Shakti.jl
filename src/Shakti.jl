@@ -70,7 +70,7 @@ export GROUNDED, OCEAN, LAND, OTHER_BASIN
 export compute_face_masks!, apply_mask_to_sliding!
 
 # melt_input.jl
-export AbstractMeltInput, ConstantMeltInput, initialize_ieb!, compute_ieb!
+export AbstractMeltInput, ConstantMeltInput, SeasonalMeltInput, initialize_ieb!, compute_ieb!, update_ieb!
 
 # k_face_scheme.jl
 export AbstractKFaceScheme, Arithmetic, Harmonic, compute_K_face
@@ -97,6 +97,7 @@ export prepare!, observe!, openfile!, write2file!, finalize!
 
 # melt_rate.jl
 export AbstractSensibleHeatScheme, WithSensibleHeat, NoSensibleHeat
+export AbstractSlidingLaw, RegularizedCoulombSlidingLaw, PrescribedSlidingLaw, initialize_taub!
 export compute_taub_x!, compute_taub_y!, compute_taub_xy!, compute_shear!, compute_potential!, compute_sensible!, compute_mdot!
 
 # elliptic_solver.jl
@@ -121,6 +122,7 @@ export compute_dhdx!, compute_dhdy!, compute_dhdxy!, compute_dpwdx!, compute_dpw
 
 # water_flux.jl
 export compute_q_x!, compute_q_y!, compute_q_xy!, compute_Re_x!, compute_Re_y!, compute_Re_xy!, compute_Re!, compute_K!
+export compute_q_and_Re_x!, compute_q_and_Re_y!, compute_q_and_Re_xy!
 
 # gap_height.jl
 export compute_beta!, compute_b_x!, compute_b_y!, compute_b!

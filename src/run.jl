@@ -1,22 +1,25 @@
 function run!(sim::Simulation)
 
-    F = typeof(sim.dt)
-    total_time = F(0.0)
+    sim.total_time[] = zero(sim.dt) # reset so the same Simulation can be run! more than once, e.g. chained runs sharing one state
 
     prepare!(sim.observer, sim.state)
-    observe!(sim.observer, sim.state, 0, total_time)
+    observe!(sim.observer, sim.state, 0, sim.total_time[])
 
     for t in 1:sim.tsteps
 
         step_time = @elapsed step!(sim)
 
-        total_time += sim.dt
+        sim.total_time[] += sim.dt
 
-        observe!(sim.observer, sim.state, t, total_time)
+        observe!(sim.observer, sim.state, t, sim.total_time[])
 
         if sim.verbose
             converged, last_iter = picard_status(sim.hs)
             println("$t / $(sim.tsteps) completed in $(round(step_time; digits = 4))s. Picard converged: $converged in $last_iter iterations")
+            if converged === false
+                s = sim.state
+                println("  diagnostics: N=$(extrema(Array(s.N))) Re=$(extrema(Array(s.Re))) b=$(extrema(Array(s.b))) h=$(extrema(Array(s.h)))")
+            end
         end
 
     end
@@ -40,7 +43,8 @@ function step!(sim::Simulation)
 end
 
 function step_h!(hs::EllipticHeadScheme, sim::Simulation)
-    elliptic_solver!(hs.ps, sim.state, sim.grid, sim.p, sim.shs, sim.kfs, sim.mi)
+    update_ieb!(sim.mi, sim.state, sim.total_time[]) # no-op for ConstantMeltInput; rescales state.ieb for e.g. SeasonalMeltInput
+    elliptic_solver!(hs.ps, sim.state, sim.grid, sim.p, sim.shs, sim.kfs, sim.mi, sim.sl)
 end
 
 function step_h!(hs::ParabolicHeadScheme, sim::Simulation)

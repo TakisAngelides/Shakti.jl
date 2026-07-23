@@ -59,14 +59,14 @@ end
 # defined -- it can be included, and PicardSolver's struct fully written,
 # before simulation.jl, letting EllipticHeadScheme{PS} (simulation.jl) use a
 # proper PS <: PicardSolver bound instead of leaving PS unbounded.
-function elliptic_solver!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, shs::AbstractSensibleHeatScheme, kfs::AbstractKFaceScheme, mi::AbstractMeltInput)
-    Picard_loop!(ps, state, grid, p, shs, kfs, mi)
+function elliptic_solver!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, shs::AbstractSensibleHeatScheme, kfs::AbstractKFaceScheme, mi::AbstractMeltInput, sl::AbstractSlidingLaw)
+    Picard_loop!(ps, state, grid, p, shs, kfs, mi, sl)
 end
 
-function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, shs::AbstractSensibleHeatScheme, kfs::AbstractKFaceScheme, mi::AbstractMeltInput)
+function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, shs::AbstractSensibleHeatScheme, kfs::AbstractKFaceScheme, mi::AbstractMeltInput, sl::AbstractSlidingLaw)
 
     s = state
-    
+
     # Initialize PicardSolver state
     ps.converged = false
     ps.last_iter = 0
@@ -76,7 +76,7 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
         # Store previous head for convergence check
         @. ps.h_prev = s.h
 
-        Picard_iteration!(ps.ls, ps.hr, state, grid, p, shs, kfs, mi, ps.h_prev)
+        Picard_iteration!(ps.ls, ps.hr, state, grid, p, shs, kfs, mi, sl, ps.h_prev)
 
         @. ps.delta_h = s.h - ps.h_prev
 
@@ -104,7 +104,7 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
 
 end
 
-function Picard_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation, s::State, g::Grid, p::ModelParameters, shs::AbstractSensibleHeatScheme, kfs::AbstractKFaceScheme, mi::AbstractMeltInput, h_prev)
+function Picard_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation, s::State, g::Grid, p::ModelParameters, shs::AbstractSensibleHeatScheme, kfs::AbstractKFaceScheme, mi::AbstractMeltInput, sl::AbstractSlidingLaw, h_prev)
 
     solve_linear_system!(ls, s, g, p, kfs, mi)
     relax_h!(hr, s, h_prev) # damp the raw Picard update before anything downstream of h is recomputed, so the next iteration's coefficients are consistent with the relaxed h
@@ -116,12 +116,10 @@ function Picard_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation,
     compute_dpwdxy!(s, g) # feeds compute_sensible!'s sensible-heat term (via compute_mdot! below)
     compute_N!(s)
 
-    compute_q_xy!(s, p)
-
-    compute_Re_xy!(s, p)
+    compute_q_and_Re_xy!(s, p) # exact, lag-free q/Re solve -- see water_flux.jl's note
     compute_Re!(s)
 
-    compute_taub_xy!(s, p)
+    compute_taub_xy!(s, p, sl)
 
     compute_mdot!(s, p, shs)
 
