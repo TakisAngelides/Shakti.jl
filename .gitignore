@@ -2,6 +2,13 @@
 /LocalPreferences.toml
 /test/options_explorer.jl
 
+# Section 3.3 seasonal-cycle reproduction (365-day, hourly-dt run): cheap
+# enough per step, but the full annual cycle plus mp4 rendering is more than
+# worth doing on the cluster instead of the laptop -- kept off every machine
+# that isn't the cluster rather than tracked in git, same as the benchmark
+# tooling below.
+/test/reproduce_section_3_3.jl
+
 # Cluster-only benchmark tooling for the solver x thread-count sweep (task 4):
 # expensive to run, only ever meant to execute on albedo0 via sbatch -- kept
 # off every machine that isn't the cluster rather than tracked in git.
