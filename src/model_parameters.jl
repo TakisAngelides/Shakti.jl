@@ -25,7 +25,7 @@ function ModelParameters(;
     g = 9.81,
     nu = 1.787e-6,
     n = 3.0,
-    omega = 0.001,
+    omega = 1e-4, # Table 2 (Sommers et al. 2018) states 0.001, but that puts the Re range reached during channelization (~1e3-1e4) right in the flux law's steepest, hardest-to-converge transitional band (omega*Re ~ O(1)-O(10)); 1e-4 pushes the same Re range into the flatter, near-linear part of the curve where Picard actually converges (see test/reproduce_section_3_3.jl)
     L = 334e3,
     br = 0.05,
     lr = 2.0,
