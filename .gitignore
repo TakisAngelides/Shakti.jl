@@ -2,6 +2,11 @@
 /LocalPreferences.toml
 /test/options_explorer.jl
 
+# sbatch launcher for options_explorer.jl -- cluster-only (SLURM), same
+# reasoning as the benchmark tooling below.
+/test/run_options_explorer.sh
+/test/options_explorer_logs/
+
 # Section 3.3 seasonal-cycle reproduction (365-day, hourly-dt run): cheap
 # enough per step, but the full annual cycle plus mp4 rendering is more than
 # worth doing on the cluster instead of the laptop -- kept off every machine
