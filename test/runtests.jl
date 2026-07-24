@@ -156,13 +156,25 @@ using CSV
         ls_lu = CholeskyDirectSolver(grid)
         Shakti.solve_linear_system!(ls_lu, state_lu, grid, p, kfs, mi)
 
-        state_cg = fresh_state()
-        ls_cg = CGIterativeSolver(grid, SparseAssembledLinearSystem)
-        Shakti.solve_linear_system!(ls_cg, state_cg, grid, p, kfs, mi)
-        @test state_cg.h ≈ state_lu.h atol=1e-5
+        # amg = true is CGIterativeSolver(g, SparseAssembledLinearSystem)'s
+        # default (see linear_solver.jl) -- locking that in here so a future
+        # default change doesn't silently drift unnoticed.
+        state_cg_default = fresh_state()
+        ls_cg_default = CGIterativeSolver(grid, SparseAssembledLinearSystem)
+        @test ls_cg_default.precond isa AMGPreconditioner
+        Shakti.solve_linear_system!(ls_cg_default, state_cg_default, grid, p, kfs, mi)
+        @test state_cg_default.h ≈ state_lu.h atol=1e-5
+
+        # Plain Jacobi (amg = false, chebyshev_degree = nothing): the baseline
+        # every accelerated preconditioner below should beat-or-match on CG
+        # iteration count.
+        state_cg_jacobi = fresh_state()
+        ls_cg_jacobi = CGIterativeSolver(grid, SparseAssembledLinearSystem; amg = false)
+        Shakti.solve_linear_system!(ls_cg_jacobi, state_cg_jacobi, grid, p, kfs, mi)
+        @test state_cg_jacobi.h ≈ state_lu.h atol=1e-5
 
         state_cg_mf = fresh_state()
-        ls_cg_mf = CGIterativeSolver(grid, MatrixFreeLinearSystem)
+        ls_cg_mf = CGIterativeSolver(grid, MatrixFreeLinearSystem) # MFLS has no amg option (see linear_solver.jl); this is plain Jacobi
         Shakti.solve_linear_system!(ls_cg_mf, state_cg_mf, grid, p, kfs, mi)
         @test state_cg_mf.h ≈ state_lu.h atol=1e-5
 
@@ -172,10 +184,10 @@ using CSV
         # preconditioner), and should need fewer outer CG iterations than
         # Jacobi once the degree is large enough to approximate A^-1 well.
         state_cg_cheb = fresh_state()
-        ls_cg_cheb = CGIterativeSolver(grid, SparseAssembledLinearSystem; chebyshev_degree = 4)
+        ls_cg_cheb = CGIterativeSolver(grid, SparseAssembledLinearSystem; chebyshev_degree = 4, amg = false)
         Shakti.solve_linear_system!(ls_cg_cheb, state_cg_cheb, grid, p, kfs, mi)
         @test state_cg_cheb.h ≈ state_lu.h atol=1e-5
-        @test ls_cg_cheb.ws.stats.niter <= ls_cg.ws.stats.niter
+        @test ls_cg_cheb.ws.stats.niter <= ls_cg_jacobi.ws.stats.niter
 
         state_cg_mf_cheb = fresh_state()
         ls_cg_mf_cheb = CGIterativeSolver(grid, MatrixFreeLinearSystem; chebyshev_degree = 4)
@@ -184,12 +196,14 @@ using CSV
         @test ls_cg_mf_cheb.ws.stats.niter <= ls_cg_mf.ws.stats.niter
 
         # AMGPreconditioner (see preconditioner.jl): SALS-only (no GPU array
-        # support in AlgebraicMultigrid.jl), should converge to the same head
-        # field as everything else above regardless of preconditioner choice.
+        # support in AlgebraicMultigrid.jl). Measured (test/amg_rerun.jl,
+        # test/precond_vs_channelization.jl) to consistently beat plain
+        # Jacobi's CG iteration count by a wide margin, hence the default.
         state_cg_amg = fresh_state()
         ls_cg_amg = CGIterativeSolver(grid, SparseAssembledLinearSystem; amg = true)
         Shakti.solve_linear_system!(ls_cg_amg, state_cg_amg, grid, p, kfs, mi)
         @test state_cg_amg.h ≈ state_lu.h atol=1e-5
+        @test ls_cg_amg.ws.stats.niter <= ls_cg_jacobi.ws.stats.niter
 
         # amg and chebyshev_degree are mutually exclusive preconditioner
         # choices, and amg isn't offered on MatrixFreeLinearSystem at all.

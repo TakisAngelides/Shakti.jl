@@ -425,17 +425,22 @@ end
 # eliminated symmetrically (folded into rhs, see update_SALS_kernel!/
 # update_MFLS_kernel!) rather than left as a one-sided matrix coupling.
 #
-# chebyshev_degree = nothing and amg = false (defaults) keep plain Jacobi
-# preconditioning. Passing chebyshev_degree an Int opts into
-# ChebyshevPreconditioner instead -- see preconditioner.jl for why (GPU
-# host-sync overhead) and how (Saad's Chebyshev semi-iteration, layered on
-# top of the same Jacobi scaling). amg = true opts into AMGPreconditioner
-# instead -- near mesh-independent CG iteration counts, at the cost of a
-# hierarchy-rebuild every solve; see preconditioner.jl. The two are mutually
-# exclusive (both are full replacements for Jacobi, not composable with each
-# other), and amg is SALS-only (AlgebraicMultigrid.jl has no GPU array
-# support), hence not offered on the MatrixFreeLinearSystem constructor below.
-function CGIterativeSolver(g::Grid{F}, ::Type{SparseAssembledLinearSystem}; chebyshev_degree::Union{Nothing, Int} = nothing, chebyshev_nsteps_estimate::Int = 15, amg::Bool = false) where F
+# amg = true (default) opts into AMGPreconditioner -- near mesh-independent
+# CG iteration counts, at the cost of a hierarchy-rebuild every solve; see
+# preconditioner.jl. Measured (test/amg_rerun.jl, test/precond_vs_channelization.jl)
+# to consistently beat both plain Jacobi and ChebyshevPreconditioner, from a
+# near-initial-condition state (5-7 CG iterations vs Jacobi's 192-745) all
+# the way through peak seasonal channelization (24 iterations vs Jacobi's
+# 199 and Chebyshev's 71, at K max/min ratio ~14000) -- hence the default.
+# Passing chebyshev_degree an Int opts into ChebyshevPreconditioner instead
+# -- see preconditioner.jl for why (GPU host-sync overhead) and how (Saad's
+# Chebyshev semi-iteration, layered on top of the same Jacobi scaling); amg
+# and chebyshev_degree are mutually exclusive (both are full replacements
+# for Jacobi, not composable with each other). amg = false and
+# chebyshev_degree = nothing together give plain Jacobi. amg is SALS-only
+# (AlgebraicMultigrid.jl has no GPU array support), hence defaulting to
+# false and not offered at all on the MatrixFreeLinearSystem constructor below.
+function CGIterativeSolver(g::Grid{F}, ::Type{SparseAssembledLinearSystem}; chebyshev_degree::Union{Nothing, Int} = nothing, chebyshev_nsteps_estimate::Int = 15, amg::Bool = true) where F
 
     # Krylov.jl's sparse matvec (SparseArrays.mul!) is CPU-only, same reasoning as CholeskyDirectSolver.
     backend != "Threads" && error("CGIterativeSolver(g, SparseAssembledLinearSystem) is CPU-only; use CGIterativeSolver(g, MatrixFreeLinearSystem) under the $backend backend.")
