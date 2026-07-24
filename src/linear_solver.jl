@@ -410,7 +410,7 @@ struct CGIterativeSolver{LSy <: AbstractLinearSystem, WS, V <: AbstractVector, P
     lsy::LSy
     ws::WS # workspace
     precond_diag::V # Jacobi (diagonal) preconditioner, refreshed every solve -- same array type as lsy's rhs (Vector for SALS, backend-native for MatrixFreeLinearSystem)
-    precond::P # `nothing` -> plain Jacobi (Diagonal(precond_diag)); ChebyshevPreconditioner -> see preconditioner.jl
+    precond::P # `nothing` -> plain Jacobi (Diagonal(precond_diag)); ChebyshevPreconditioner/AMGPreconditioner -> see preconditioner.jl
 end
 
 # Representation is chosen at construction time by passing the AbstractLinearSystem
@@ -425,25 +425,41 @@ end
 # eliminated symmetrically (folded into rhs, see update_SALS_kernel!/
 # update_MFLS_kernel!) rather than left as a one-sided matrix coupling.
 #
-# chebyshev_degree = nothing (default) keeps plain Jacobi preconditioning.
-# Passing an Int opts into ChebyshevPreconditioner instead -- see
-# preconditioner.jl for why (GPU host-sync overhead) and how (Saad's
-# Chebyshev semi-iteration, layered on top of the same Jacobi scaling).
-function CGIterativeSolver(g::Grid{F}, ::Type{SparseAssembledLinearSystem}; chebyshev_degree::Union{Nothing, Int} = nothing, chebyshev_nsteps_estimate::Int = 15) where F
+# chebyshev_degree = nothing and amg = false (defaults) keep plain Jacobi
+# preconditioning. Passing chebyshev_degree an Int opts into
+# ChebyshevPreconditioner instead -- see preconditioner.jl for why (GPU
+# host-sync overhead) and how (Saad's Chebyshev semi-iteration, layered on
+# top of the same Jacobi scaling). amg = true opts into AMGPreconditioner
+# instead -- near mesh-independent CG iteration counts, at the cost of a
+# hierarchy-rebuild every solve; see preconditioner.jl. The two are mutually
+# exclusive (both are full replacements for Jacobi, not composable with each
+# other), and amg is SALS-only (AlgebraicMultigrid.jl has no GPU array
+# support), hence not offered on the MatrixFreeLinearSystem constructor below.
+function CGIterativeSolver(g::Grid{F}, ::Type{SparseAssembledLinearSystem}; chebyshev_degree::Union{Nothing, Int} = nothing, chebyshev_nsteps_estimate::Int = 15, amg::Bool = false) where F
 
     # Krylov.jl's sparse matvec (SparseArrays.mul!) is CPU-only, same reasoning as CholeskyDirectSolver.
     backend != "Threads" && error("CGIterativeSolver(g, SparseAssembledLinearSystem) is CPU-only; use CGIterativeSolver(g, MatrixFreeLinearSystem) under the $backend backend.")
 
+    (chebyshev_degree !== nothing && amg) && error("chebyshev_degree and amg are mutually exclusive preconditioner choices for CGIterativeSolver; pick one.")
+
     sals = SparseAssembledLinearSystem(g)
     ws = CgWorkspace(sals.M, sals.rhs)
     precond_diag = zeros(F, g.nx * g.ny)
-    precond = chebyshev_degree === nothing ? nothing : ChebyshevPreconditioner(sals.M, precond_diag, chebyshev_degree; nsteps_estimate = chebyshev_nsteps_estimate)
+    precond = if amg
+        AMGPreconditioner(sals.M)
+    elseif chebyshev_degree !== nothing
+        ChebyshevPreconditioner(sals.M, precond_diag, chebyshev_degree; nsteps_estimate = chebyshev_nsteps_estimate)
+    else
+        nothing
+    end
 
     return CGIterativeSolver(sals, ws, precond_diag, precond)
 
 end
 
-function CGIterativeSolver(g::Grid{F}, ::Type{MatrixFreeLinearSystem}; chebyshev_degree::Union{Nothing, Int} = nothing, chebyshev_nsteps_estimate::Int = 15) where F
+function CGIterativeSolver(g::Grid{F}, ::Type{MatrixFreeLinearSystem}; chebyshev_degree::Union{Nothing, Int} = nothing, chebyshev_nsteps_estimate::Int = 15, amg::Bool = false) where F
+
+    amg && error("AMGPreconditioner is CPU/SparseMatrixCSC-only (AlgebraicMultigrid.jl has no GPU array support); use CGIterativeSolver(g, SparseAssembledLinearSystem; amg = true) instead, or chebyshev_degree here for a GPU-capable accelerated preconditioner.")
 
     mfls = MatrixFreeLinearSystem(g)
     ws = CgWorkspace(g.nx * g.ny, g.nx * g.ny, typeof(mfls.rhs)) # storage type matches mfls.rhs, so it lands on the active backend (Array under Threads, MtlArray under Metal)
@@ -454,16 +470,21 @@ function CGIterativeSolver(g::Grid{F}, ::Type{MatrixFreeLinearSystem}; chebyshev
 
 end
 
-# Both dispatch to the same `either-Jacobi-or-Chebyshev` choice, made once at
-# construction time (ls.precond's type), not re-decided per solve. The
-# `where` clause has to restate CGIterativeSolver's own parameter bounds
-# (LSy <: AbstractLinearSystem, V <: AbstractVector) -- omitting them (or
-# using bare `<:Any`) makes this method ambiguous with the generic fallback
-# below instead of strictly more specific, and Julia silently picks the
-# fallback rather than erroring.
+# One method per precond choice, made once at construction time (ls.precond's
+# type), not re-decided per solve. Each `where` clause has to restate
+# CGIterativeSolver's own parameter bounds (LSy <: AbstractLinearSystem,
+# V <: AbstractVector) -- omitting them (or using bare `<:Any`) makes these
+# ambiguous with each other instead of each strictly most-specific for its
+# own P, and Julia silently picks the wrong one rather than erroring.
 _cg_precond!(ls::CGIterativeSolver{LSy, WS, V, Nothing}) where {LSy <: AbstractLinearSystem, WS, V <: AbstractVector} = Diagonal(ls.precond_diag)
-function _cg_precond!(ls::CGIterativeSolver)
+
+function _cg_precond!(ls::CGIterativeSolver{LSy, WS, V, <:ChebyshevPreconditioner}) where {LSy <: AbstractLinearSystem, WS, V <: AbstractVector}
     update_chebyshev_bounds!(ls.precond, ls.lsy.rhs) # cheap (nsteps_estimate matvecs), but real -- see preconditioner.jl for why this can't just be done once at construction
+    return ls.precond
+end
+
+function _cg_precond!(ls::CGIterativeSolver{<:SparseAssembledLinearSystem, WS, V, <:AMGPreconditioner}) where {WS, V <: AbstractVector}
+    update_amg!(ls.precond, ls.lsy.M) # hierarchy rebuild, not free -- see preconditioner.jl for why this can't just be done once at construction
     return ls.precond
 end
 

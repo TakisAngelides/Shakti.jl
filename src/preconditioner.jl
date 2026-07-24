@@ -115,7 +115,40 @@ function ChebyshevPreconditioner(A, d::V, degree::Int; nsteps_estimate::Int = 15
 end
 
 function update_chebyshev_bounds!(P::ChebyshevPreconditioner, rhs::AbstractVector)
-    P.lambda_min, P.lambda_max = estimate_eigenvalue_bounds(P.op, rhs, P.nsteps_estimate)
+
+    # The short, unreorthogonalized Lanczos recurrence in estimate_eigenvalue_bounds
+    # is only exact in infinite precision -- on more ill-conditioned problems
+    # (empirically, larger grids: fine at 64x64/256x256, but nonsensical/even
+    # negative bounds at 512x512, non-monotonically in nsteps_estimate too,
+    # the signature of numerical breakdown rather than "just needs more
+    # steps" -- see test/cheb_512_diag.jl) it can lose numerical stability
+    # badly enough to fail two different ways: either hand back a bogus but
+    # finite interval, or -- degenerate enough input, e.g. an all-zero rhs --
+    # have the tridiagonal eigensolve itself throw a LAPACKException. Either
+    # way, letting that reach the Chebyshev recurrence below doesn't fail
+    # loudly where the problem is -- the finite-garbage case surfaces many
+    # steps downstream as Krylov.jl's cryptic "operator or preconditioner is
+    # not SPD" error, and the LAPACKException case would just crash the run.
+    # Falling back to the last known-valid bounds instead is always safe: on
+    # the very first solve (no prior valid bounds yet) P.lambda_min/lambda_max
+    # are still their construction-time placeholder (1, 1), which makes
+    # ldiv!'s c_rad exactly 0 and the whole Chebyshev recurrence degenerate to
+    # plain Jacobi -- a correct, if unaccelerated, fallback. On a later solve,
+    # reusing the previous (valid) solve's bounds is a good approximation
+    # since consecutive Picard iterations' matrices are close to each other.
+    lambda_min, lambda_max = try
+        estimate_eigenvalue_bounds(P.op, rhs, P.nsteps_estimate)
+    catch e
+        e isa LinearAlgebra.LAPACKException || rethrow()
+        (NaN, NaN) # sentinel: fails the isfinite check below, taking the same fallback path as a bogus-but-finite estimate
+    end
+
+    if isfinite(lambda_min) && isfinite(lambda_max) && lambda_min > 0 && lambda_max > lambda_min
+        P.lambda_min, P.lambda_max = lambda_min, lambda_max
+    else
+        @warn "ChebyshevPreconditioner: eigenvalue bound estimate was invalid (lambda_min=$lambda_min, lambda_max=$lambda_max); reusing previous bounds for this solve" maxlog = 10
+    end
+
     return P
 end
 
@@ -152,3 +185,39 @@ function LinearAlgebra.ldiv!(y::AbstractVector, P::ChebyshevPreconditioner, x::A
 
     return y
 end
+
+# =============================================================================
+# Algebraic multigrid (Ruge-Stuben, AlgebraicMultigrid.jl) preconditioning for
+# CGIterativeSolver{<:SparseAssembledLinearSystem}
+# =============================================================================
+#
+# Unlike Jacobi/Chebyshev, whose CG iteration counts grow with grid size
+# (Jacobi ~O(sqrt(N)), Chebyshev slower-growing but still not flat), AMG
+# gives near mesh-independent convergence -- measured (test/amg_rerun.jl) at
+# 5 CG iterations at 64x64 and 6 at 256x256, essentially flat despite 16x
+# more unknowns, vs Jacobi's 192->745 and Chebyshev's 58->350 over the same
+# grids. That makes AMG substantially faster in wall time once the grid is
+# large enough for its (nontrivial, paid every solve -- see below) hierarchy
+# setup cost to be worth it: ~4x faster than Jacobi and ~7.7x faster than
+# Chebyshev at 256x256 in that same measurement.
+#
+# CPU/SparseMatrixCSC-only (AlgebraicMultigrid.jl has no GPU array support),
+# so -- like CholeskyDirectSolver -- this is only offered for
+# CGIterativeSolver{<:SparseAssembledLinearSystem}, not MatrixFreeLinearSystem.
+
+mutable struct AMGPreconditioner{P}
+    precond::P # AlgebraicMultigrid.jl's aspreconditioner(::MultiLevel) wrapper; already implements LinearAlgebra.ldiv!, so ldiv! below just delegates
+end
+
+# M's sparsity pattern is fixed, but its VALUES change every Picard
+# iteration -- like ChebyshevPreconditioner's bounds, the AMG hierarchy
+# (strength-of-connection, aggregation, interpolation) is built from those
+# values, so it has to be rebuilt every solve, not just once at construction.
+AMGPreconditioner(M::SparseMatrixCSC) = AMGPreconditioner(aspreconditioner(ruge_stuben(M)))
+
+function update_amg!(P::AMGPreconditioner, M::SparseMatrixCSC)
+    P.precond = aspreconditioner(ruge_stuben(M))
+    return P
+end
+
+LinearAlgebra.ldiv!(y::AbstractVector, P::AMGPreconditioner, x::AbstractVector) = ldiv!(y, P.precond, x)

@@ -4,6 +4,7 @@ set_preferences!("Shakti", "backend" => "Threads", "floattype" => "Float64"; for
 using Shakti
 using Test
 using LinearAlgebra
+using SparseArrays
 using Statistics
 using NetCDF
 using HDF5
@@ -181,6 +182,45 @@ using CSV
         Shakti.solve_linear_system!(ls_cg_mf_cheb, state_cg_mf_cheb, grid, p, kfs, mi)
         @test state_cg_mf_cheb.h ≈ state_lu.h atol=1e-5
         @test ls_cg_mf_cheb.ws.stats.niter <= ls_cg_mf.ws.stats.niter
+
+        # AMGPreconditioner (see preconditioner.jl): SALS-only (no GPU array
+        # support in AlgebraicMultigrid.jl), should converge to the same head
+        # field as everything else above regardless of preconditioner choice.
+        state_cg_amg = fresh_state()
+        ls_cg_amg = CGIterativeSolver(grid, SparseAssembledLinearSystem; amg = true)
+        Shakti.solve_linear_system!(ls_cg_amg, state_cg_amg, grid, p, kfs, mi)
+        @test state_cg_amg.h ≈ state_lu.h atol=1e-5
+
+        # amg and chebyshev_degree are mutually exclusive preconditioner
+        # choices, and amg isn't offered on MatrixFreeLinearSystem at all.
+        @test_throws ErrorException CGIterativeSolver(grid, SparseAssembledLinearSystem; amg = true, chebyshev_degree = 4)
+        @test_throws ErrorException CGIterativeSolver(grid, MatrixFreeLinearSystem; amg = true)
+
+    end
+
+    @testset "ChebyshevPreconditioner degrades gracefully on invalid eigenvalue estimate" begin
+
+        # The Lanczos-via-CG-recurrence eigenvalue estimator (estimate_eigenvalue_bounds)
+        # is only exact in infinite precision; on ill-conditioned problems it
+        # can hand back a nonsensical (even negative) bounds interval instead
+        # of erroring (see test/cheb_512_diag.jl, which found exactly this at
+        # 512x512 -- too large a grid for a fast unit test, but an all-zero
+        # rhs reproduces the same NaN/Inf cascade cheaply and deterministically:
+        # gamma = dot(r,r) = 0 makes the very first alphas[1] = gamma/pAp = 0/0).
+        # update_chebyshev_bounds! should catch this and keep the previous
+        # (here, still-placeholder) bounds rather than propagating NaN/Inf
+        # into P.lambda_min/lambda_max, which downstream would either silently
+        # corrupt the preconditioner or surface as Krylov.jl's much more
+        # cryptic "operator or preconditioner is not SPD" error.
+        n = 36
+        M = spdiagm(0 => fill(4.0, n), 1 => fill(-1.0, n - 1), -1 => fill(-1.0, n - 1))
+        d = fill(4.0, n)
+        cheb = ChebyshevPreconditioner(M, d, 4)
+        @test cheb.lambda_min == 1.0 && cheb.lambda_max == 1.0 # construction-time placeholder
+
+        bad_rhs = zeros(n)
+        @test_logs (:warn,) match_mode = :any update_chebyshev_bounds!(cheb, bad_rhs)
+        @test cheb.lambda_min == 1.0 && cheb.lambda_max == 1.0 # unchanged, not NaN/Inf
 
     end
 

@@ -5,6 +5,7 @@ using ParallelStencil
 using SparseArrays
 using LinearAlgebra
 using Krylov
+using AlgebraicMultigrid
 using Base.Threads
 using Statistics
 using NetCDF
@@ -40,8 +41,8 @@ include("state.jl")
 include("mask.jl")
 include("melt_input.jl")
 include("k_face_scheme.jl")
-include("linear_solver.jl")
 include("preconditioner.jl")
+include("linear_solver.jl")
 include("observer.jl")
 include("melt_rate.jl")
 include("elliptic_solver.jl")
@@ -89,6 +90,8 @@ export solve_linear_system!
 # preconditioner.jl
 export ChebyshevPreconditioner
 export update_chebyshev_bounds!, estimate_eigenvalue_bounds
+export AMGPreconditioner
+export update_amg!
 
 # observer.jl
 export AbstractFileWriter, NetCDFFileWriter, HDF5FileWriter, JLD2FileWriter, CSVFileWriter
