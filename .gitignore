@@ -51,3 +51,5 @@ Thumbs.db
 /test/amg_integrated_check.jl
 /test/precond_vs_channelization.jl
 /test/restart_cuda_check.jl
+/test/gpu_perf_check.jl
+/test/gpu_breakdown.jl

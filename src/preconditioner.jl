@@ -6,18 +6,70 @@
 # like O(sqrt(N)) for this 2D elliptic problem, and every CG iteration needs
 # 2-3 dot products whose scalar result has to reach the host before Krylov.jl
 # can decide whether to keep iterating -- on GPU that's a real GPU->CPU sync
-# per iteration (see the CUDA.@profile findings that drove this file: at
-# 64x64, device-side GPU compute was only ~9% of wall time, the rest was
-# host-side overhead from exactly these per-iteration syncs).
+# per iteration.
 #
-# Chebyshev semi-iteration sidesteps this: it approximates A^-1 by a
-# low-degree polynomial in the (Jacobi-scaled) operator, applied via a fixed
-# three-term recurrence (Saad, "Iterative Methods for Sparse Linear Systems",
-# 2nd ed., Algorithm 12.1) that uses ONLY matvecs and axpy-style updates --
-# no dot products, no host syncs, at all. It needs the operator's extreme
-# eigenvalues to build that polynomial, which is the one place this still
-# needs reductions -- but that only has to happen once per solve (see
+# Chebyshev semi-iteration's OWN internal recurrence avoids this: it
+# approximates A^-1 by a low-degree polynomial in the (Jacobi-scaled)
+# operator, applied via a fixed three-term recurrence (Saad, "Iterative
+# Methods for Sparse Linear Systems", 2nd ed., Algorithm 12.1) that uses ONLY
+# matvecs and axpy-style updates -- no dot products, no host syncs, at all,
+# within that one preconditioner-application step. It needs the operator's
+# extreme eigenvalues to build that polynomial, which is the one place this
+# still needs reductions -- but that only has to happen once per solve (see
 # update_chebyshev_bounds!), not once per CG iteration.
+#
+# CAVEAT, confirmed 2026-07-24 on real A100 hardware (test/gpu_perf_check.jl,
+# test/gpu_breakdown.jl -- gitignored, kept on the cluster only, see
+# .gitignore): using Chebyshev as CG's *preconditioner* does NOT eliminate
+# CG's own per-iteration host syncs. Standard preconditioned CG still
+# computes its own alpha/beta from dot products every outer iteration
+# regardless of which preconditioner solves z = M^-1 r -- that's inherent to
+# CG's algorithm, not something the preconditioner choice touches. The
+# "no dot products" property described above is only about Chebyshev's own
+# internal ldiv! recurrence in isolation, not the overall CG+Chebyshev
+# iteration. Measured result: on MatrixFreeLinearSystem (the only
+# GPU-capable solver) at 64x64/128x128 on an A100, plain Jacobi beat
+# Chebyshev(degree=4) in wall time at BOTH sizes (12%/29% faster
+# respectively) -- Chebyshev pays the same per-iteration sync cost as Jacobi
+# (from CG's own dot products) plus extra matvec work for the degree-4
+# polynomial application, without cutting the number of syncs enough to
+# compensate. Genuine sync-avoidance on GPU would need replacing CG itself
+# with a dot-product-free outer solver (true Chebyshev semi-iteration AS the
+# solver, not just the preconditioner) -- a much bigger change, not
+# currently justified since Jacobi already wins. Per-CG-iteration cost was
+# also found to be roughly flat with grid size (~229us at 64x64, ~191us at
+# 128x128), consistent with fixed per-iteration overhead (kernel launch +
+# host sync) dominating over device compute at these sizes on this hardware
+# -- but this could NOT be confirmed via a proper device-vs-host profile:
+# CUDA.@profile produces no report at all on this cluster (verified even for
+# a trivial matrix multiply), most likely a driver-level GPU
+# performance-counter access restriction HPC clusters commonly lock down for
+# shared/multi-tenant security -- not fixable from the Julia/user side.
+#
+# Net effect: for CGIterativeSolver{<:SparseAssembledLinearSystem} (CPU-only),
+# AMGPreconditioner (below) is the better choice and is the default there
+# (test/amg_rerun.jl, test/precond_vs_channelization.jl). For
+# MatrixFreeLinearSystem (the GPU-capable path, where AMGPreconditioner isn't
+# available -- AlgebraicMultigrid.jl has no GPU array support), plain Jacobi
+# (chebyshev_degree = nothing, the default there) should be preferred over
+# Chebyshev per the above, at least at the grid sizes tested.
+#
+# Checked against Krylov.jl's own GPU/performance docs (jso.dev/Krylov.jl):
+# array types already match its recommendation (ParallelStencil's
+# backend-native arrays -- CuArray under CUDA, MtlArray under Metal); its
+# sparse-GPU guidance (CuSparseMatrixCSR + KrylovOperator, GPU-accelerated
+# ILU via CUSPARSE) doesn't apply here since MatrixFreeLinearSystem
+# deliberately avoids ever materializing a sparse matrix on GPU, which is
+# also why Jacobi/Chebyshev (matvec-based, not factorization-based) are the
+# only preconditioners that fit this representation at all. One real,
+# currently unexploited tip from Krylov.jl's docs: Julia's plain
+# SparseArrays sparse matvec (used by SparseAssembledLinearSystem on CPU,
+# including inside AMG's own CG iterations) is single-threaded --
+# MKLSparse.jl or ThreadedSparseCSR.jl could parallelize it. Not applied
+# here: AMG already cuts CG iteration counts to single digits/low tens (see
+# above), so the payoff is smaller than it would've been pre-AMG, and it's a
+# new dependency decision worth its own evaluation rather than adding
+# unilaterally -- flagged here for whoever picks this up next.
 
 # Applies the diagonal-Jacobi-scaled operator D^-1*A. The same wrapper works
 # for both SparseAssembledLinearSystem's SparseMatrixCSC and
