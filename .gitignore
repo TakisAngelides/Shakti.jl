@@ -37,3 +37,17 @@ Thumbs.db
 
 # Generated example output
 /test/Figures/
+
+# One-off diagnostic/profiling scripts from the profiling branch's malloc and
+# preconditioner investigation: exploratory, not maintained as part of the
+# test suite (that's runtests.jl's job) -- kept off every machine that isn't
+# the cluster rather than tracked in git, same as the benchmark tooling above.
+/test/malloc_profile.jl
+/test/gc_impact.jl
+/test/cholesky_breakdown.jl
+/test/mfls_and_amg.jl
+/test/amg_rerun.jl
+/test/cheb_512_diag.jl
+/test/amg_integrated_check.jl
+/test/precond_vs_channelization.jl
+/test/restart_cuda_check.jl
