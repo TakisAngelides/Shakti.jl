@@ -34,7 +34,14 @@ function load_checkpoint!(sim::Simulation, path::String)
     state = sim.state
     t, total_time = JLD2.jldopen(path, "r") do file
         for name in fieldnames(typeof(state))
-            getfield(state, name) .= file[String(name)]
+            # copyto! (not .=): JLD2 always hands back a plain CPU Array, and
+            # broadcasting that into a GPU-resident field (CuArray/MtlArray)
+            # tries to compile a GPU kernel with the CPU Array as an argument,
+            # which fails (a Matrix isn't a bitstype). copyto! is CUDA.jl/
+            # Metal.jl's actual supported host->device transfer instead of a
+            # kernel launch, and is exactly equivalent to `.=` for same-backend
+            # (Threads/Array) fields.
+            copyto!(getfield(state, name), file[String(name)])
         end
         return file["t"], file["total_time"]
     end
