@@ -102,6 +102,47 @@ function openfile!(fr::CSVFileWriter, observer::IOObserver, state::State)
 end
 
 # =============================================================================
+# Resume setup, called instead of prepare! when restarting from a checkpoint
+# (see checkpoint.jl/run.jl): reopens an IOObserver's existing output file
+# for further writes instead of truncating it via openfile!, so the resumed
+# run continues writing into the same file. NoObserver has nothing to resume;
+# LiveObserver's history lived only in the crashed process's RAM and can't be
+# recovered, so it just starts a fresh (gap-containing) buffer via prepare!.
+# =============================================================================
+
+resume!(observer::NoObserver, state::State, resume_t::Int) = nothing
+resume!(observer::LiveObserver, state::State, resume_t::Int) = prepare!(observer, state)
+
+function resume!(observer::IOObserver, state::State, resume_t::Int)
+    observer.handle[] = reopenfile!(observer.fr, observer, state, resume_t)
+    return nothing
+end
+
+# NetCDF/HDF5 datasets are preallocated to their full (fields..., ntimes)
+# shape up front, so reopening for write and overwriting a given time index
+# is always well-defined -- no special handling needed for a tstep the
+# crashed run already wrote.
+reopenfile!(fr::NetCDFFileWriter, observer::IOObserver, state::State, resume_t::Int) = NetCDF.open(observer.path; mode = NetCDF.NC_WRITE)
+reopenfile!(fr::HDF5FileWriter, observer::IOObserver, state::State, resume_t::Int) = HDF5.h5open(observer.path, "r+")
+
+# JLD2 has no preallocated shape (see write2file! above); reopening for write
+# is enough since write2file! itself is overwrite-safe.
+reopenfile!(fr::JLD2FileWriter, observer::IOObserver, state::State, resume_t::Int) = JLD2.jldopen(observer.path, "r+")
+
+# CSV has no persistent handle or indexed slots -- each write2file! call
+# appends a new row. A row for some t in (resume_t, crash_t] may already be
+# in the file from the crashed run (it wrote up through crash_t, but the
+# checkpoint being resumed from is only current up to resume_t <= crash_t);
+# replaying tsteps resume_t+1:crash_t would otherwise duplicate those rows,
+# so trim them here before resuming appends.
+function reopenfile!(fr::CSVFileWriter, observer::IOObserver, state::State, resume_t::Int)
+    rows = CSV.File(observer.path)
+    keep = filter(row -> row.t <= resume_t, rows)
+    CSV.write(observer.path, keep)
+    return observer.path
+end
+
+# =============================================================================
 # Per-time-step observation
 # =============================================================================
 
@@ -145,10 +186,20 @@ end
 
 function write2file!(fr::JLD2FileWriter, observer::IOObserver, state::State, idx::Int, total_time::AbstractFloat)
     file = observer.handle[]
-    file["total_time/$idx"] = total_time
+    jld2_set!(file, "total_time/$idx", total_time)
     for name in observer.tracked_obs
-        file["$name/$idx"] = Array(get_observable(state, name))
+        jld2_set!(file, "$name/$idx", Array(get_observable(state, name)))
     end
+    return nothing
+end
+
+# JLD2 errors on reassigning an existing key, unlike NetCDF/HDF5's indexed
+# writes which just overwrite in place -- this makes JLD2 writes overwrite-safe
+# too, so a resumed run redoing a tstep whose output the crashed run already
+# wrote (see resume!/reopenfile! below) doesn't error.
+function jld2_set!(file, key::String, value)
+    haskey(file, key) && delete!(file, key)
+    file[key] = value
     return nothing
 end
 

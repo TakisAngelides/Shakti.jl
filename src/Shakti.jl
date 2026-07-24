@@ -52,6 +52,7 @@ include("field_gradients.jl")
 include("water_flux.jl")
 include("gap_height.jl")
 include("initial_conditions.jl")
+include("checkpoint.jl")
 include("run.jl")
 include("animation.jl")
 
@@ -93,7 +94,7 @@ export update_chebyshev_bounds!, estimate_eigenvalue_bounds
 export AbstractFileWriter, NetCDFFileWriter, HDF5FileWriter, JLD2FileWriter, CSVFileWriter
 export AbstractObserver, NoObserver, IOObserver, LiveObserver
 export get_observable
-export prepare!, observe!, openfile!, write2file!, finalize!
+export prepare!, observe!, openfile!, write2file!, finalize!, resume!, reopenfile!
 
 # melt_rate.jl
 export AbstractSensibleHeatScheme, WithSensibleHeat, NoSensibleHeat
@@ -129,6 +130,9 @@ export compute_beta!, compute_b_x!, compute_b_y!, compute_b!
 
 # initial_conditions.jl
 export set_initial_conditions!
+
+# checkpoint.jl
+export save_checkpoint, load_checkpoint!
 
 # run.jl
 export run!, step!, step_h!, step_b!

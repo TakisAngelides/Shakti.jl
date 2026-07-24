@@ -4,6 +4,11 @@ set_preferences!("Shakti", "backend" => "Threads", "floattype" => "Float64"; for
 using Shakti
 using Test
 using LinearAlgebra
+using Statistics
+using NetCDF
+using HDF5
+using JLD2
+using CSV
 
 @testset "Shakti.jl" begin
 
@@ -176,6 +181,299 @@ using LinearAlgebra
         Shakti.solve_linear_system!(ls_cg_mf_cheb, state_cg_mf_cheb, grid, p, kfs, mi)
         @test state_cg_mf_cheb.h ≈ state_lu.h atol=1e-5
         @test ls_cg_mf_cheb.ws.stats.niter <= ls_cg_mf.ws.stats.niter
+
+    end
+
+    @testset "Observer / IO" begin
+
+        nx, ny = 3, 4
+        grid = Grid(nx, ny, 1e3, 1e3)
+        state = State(grid)
+
+        tracked_obs = ["h", "mdot"]
+        tracked_times = [0, 2, 5]
+
+        # h/mdot get a value that depends on t, so each tracked snapshot is
+        # distinguishable -- this checks write2file!/observe! land the right
+        # slice at the right index, not just any slice.
+        fill_state!(state, t) = begin
+            state.h    .= t .+ reshape(1:(nx * ny), nx, ny) ./ 10
+            state.mdot .= t .- reshape(1:(nx * ny), nx, ny) ./ 10
+        end
+
+        mktempdir() do dir
+
+            @testset "NetCDF" begin
+                path = joinpath(dir, "out.nc")
+                observer = IOObserver(tracked_obs, tracked_times, NetCDFFileWriter(), path)
+                prepare!(observer, state)
+                for t in 0:5
+                    fill_state!(state, t)
+                    observe!(observer, state, t, Float64(t))
+                end
+                finalize!(observer, state)
+
+                h_nc    = NetCDF.ncread(path, "h")
+                mdot_nc = NetCDF.ncread(path, "mdot")
+                time_nc = NetCDF.ncread(path, "time")
+                for (idx, t) in enumerate(tracked_times)
+                    fill_state!(state, t)
+                    @test h_nc[:, :, idx] ≈ Array(state.h)
+                    @test mdot_nc[:, :, idx] ≈ Array(state.mdot)
+                    @test time_nc[idx] ≈ Float64(t)
+                end
+            end
+
+            @testset "HDF5" begin
+                path = joinpath(dir, "out.h5")
+                observer = IOObserver(tracked_obs, tracked_times, HDF5FileWriter(), path)
+                prepare!(observer, state)
+                for t in 0:5
+                    fill_state!(state, t)
+                    observe!(observer, state, t, Float64(t))
+                end
+                finalize!(observer, state)
+
+                HDF5.h5open(path, "r") do file
+                    for (idx, t) in enumerate(tracked_times)
+                        fill_state!(state, t)
+                        @test file["h"][:, :, idx] ≈ Array(state.h)
+                        @test file["mdot"][:, :, idx] ≈ Array(state.mdot)
+                        @test file["time"][idx] ≈ Float64(t)
+                    end
+                end
+            end
+
+            @testset "JLD2" begin
+                path = joinpath(dir, "out.jld2")
+                observer = IOObserver(tracked_obs, tracked_times, JLD2FileWriter(), path)
+                prepare!(observer, state)
+                for t in 0:5
+                    fill_state!(state, t)
+                    observe!(observer, state, t, Float64(t))
+                end
+                finalize!(observer, state)
+
+                JLD2.jldopen(path, "r") do file
+                    @test file["tracked_obs"] == tracked_obs
+                    @test file["tracked_times"] == tracked_times
+                    for (idx, t) in enumerate(tracked_times)
+                        fill_state!(state, t)
+                        @test file["h/$idx"] ≈ Array(state.h)
+                        @test file["mdot/$idx"] ≈ Array(state.mdot)
+                        @test file["total_time/$idx"] ≈ Float64(t)
+                    end
+                end
+            end
+
+            @testset "CSV" begin
+                path = joinpath(dir, "out.csv")
+                observer = IOObserver(tracked_obs, tracked_times, CSVFileWriter(), path)
+                prepare!(observer, state)
+                for t in 0:5
+                    fill_state!(state, t)
+                    observe!(observer, state, t, Float64(t))
+                end
+                finalize!(observer, state)
+
+                rows = CSV.File(path)
+                @test length(rows) == length(tracked_times)
+                for (idx, t) in enumerate(tracked_times)
+                    fill_state!(state, t)
+                    row = rows[idx]
+                    @test row.t == t
+                    @test row.total_time ≈ Float64(t)
+                    @test row.h_min ≈ minimum(state.h)
+                    @test row.h_max ≈ maximum(state.h)
+                    @test row.h_mean ≈ mean(Array(state.h))
+                    @test row.mdot_min ≈ minimum(state.mdot)
+                    @test row.mdot_max ≈ maximum(state.mdot)
+                    @test row.mdot_mean ≈ mean(Array(state.mdot))
+                end
+            end
+
+        end
+
+        @testset "LiveObserver" begin
+            observer = LiveObserver(tracked_obs, tracked_times)
+            prepare!(observer, state)
+            for t in 0:5
+                fill_state!(state, t)
+                observe!(observer, state, t, Float64(t))
+            end
+            for (idx, t) in enumerate(tracked_times)
+                fill_state!(state, t)
+                @test observer.history["h"][:, :, idx] ≈ Array(state.h)
+                @test observer.history["mdot"][:, :, idx] ≈ Array(state.mdot)
+            end
+        end
+
+        @testset "NoObserver" begin
+            observer = NoObserver()
+            @test prepare!(observer, state) === nothing
+            @test observe!(observer, state, 0, 0.0) === nothing
+            @test finalize!(observer, state) === nothing
+        end
+
+    end
+
+    @testset "Checkpoint / Restart" begin
+
+        # Same nontrivial mask/state as the solver testsets above, run through
+        # a real elliptic-head-scheme Simulation (not just isolated solver
+        # calls) since checkpoint/restart is a run!-level concern.
+        nx, ny = 6, 6
+        grid = Grid(nx, ny, 1e3, 1e3)
+        p = ModelParameters(e_v = 0.0)
+        mi = ConstantMeltInput()
+        sl = RegularizedCoulombSlidingLaw(0.25)
+
+        mask = fill(GROUNDED, nx, ny)
+        mask[end, :] .= OCEAN
+        mask[1, :]   .= LAND
+        mask[:, 1]   .= OTHER_BASIN
+
+        A_visc = fill(5e-25, nx, ny)
+        zb     = repeat(reshape(-0.02 .* grid.x, nx, 1), 1, ny)
+        zs     = zb .+ 500.0
+        b      = fill(0.01, nx, ny)
+        G      = fill(0.06, nx, ny)
+        ub_x   = fill(1e-6, nx + 1, ny)
+        ub_y   = zeros(nx, ny + 1)
+        ieb    = zeros(nx, ny)
+        ieb[3, 3] = 3 / (grid.dx * grid.dy)
+        taub_x = zeros(nx + 1, ny)
+        taub_y = zeros(nx, ny + 1)
+
+        dt = 3600.0 # 1h, same scale as test/reproduce_section_3_3.jl
+        tsteps = 8
+        tracked_obs = ["h", "b"]
+        tracked_times = 0:tsteps
+
+        function make_sim(sim_tsteps, which_file_writer, path)
+            state = State(grid)
+            set_initial_conditions!(state, grid, p, mi, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
+            ls = CholeskyDirectSolver(grid)
+            ps = PicardSolver(500, 1e-6, ls, grid)
+            return Simulation(grid, state, sim_tsteps, floattype(dt), p, "implicit", tracked_obs, mi, sl;
+                               ps = ps, which_observer = "IO", which_file_writer = which_file_writer,
+                               tracked_times = tracked_times, path = path)
+        end
+
+        mktempdir() do dir
+
+            @testset "NetCDF" begin
+                full_path = joinpath(dir, "full.nc")
+                sim_full = make_sim(tsteps, "NetCDF", full_path)
+                run!(sim_full)
+
+                # "Crashed" run: only gets to t=5 (as if killed there), but
+                # checkpoints every 3 steps -- so its last checkpoint is at
+                # t=3, while the observer already durably wrote t=4 and t=5
+                # to crash_path before the "crash".
+                crash_path = joinpath(dir, "crash.nc")
+                checkpoint_path = joinpath(dir, "ckpt.jld2")
+                sim_crash = make_sim(5, "NetCDF", crash_path)
+                run!(sim_crash; checkpoint_every = 3, checkpoint_path = checkpoint_path)
+
+                # Resume into a brand-new Simulation/State (nothing shared in
+                # memory with sim_crash -- the checkpoint file is the only
+                # link), back to the original tsteps=8. This replays t=4,5
+                # (already in crash_path) before reaching new ground at 6,7,8.
+                sim_resumed = make_sim(tsteps, "NetCDF", crash_path)
+                run!(sim_resumed; restart_path = checkpoint_path)
+
+                @test Array(sim_resumed.state.h) ≈ Array(sim_full.state.h)
+                @test Array(sim_resumed.state.b) ≈ Array(sim_full.state.b)
+                @test sim_resumed.total_time[] ≈ sim_full.total_time[]
+
+                h_full    = NetCDF.ncread(full_path, "h")
+                h_resumed = NetCDF.ncread(crash_path, "h")
+                @test size(h_resumed) == size(h_full) # catches any duplicated/dropped time slice
+                @test h_resumed ≈ h_full
+            end
+
+            @testset "HDF5" begin
+                full_path = joinpath(dir, "full.h5")
+                sim_full = make_sim(tsteps, "HDF5", full_path)
+                run!(sim_full)
+
+                crash_path = joinpath(dir, "crash.h5")
+                checkpoint_path = joinpath(dir, "ckpt2.jld2")
+                sim_crash = make_sim(5, "HDF5", crash_path)
+                run!(sim_crash; checkpoint_every = 3, checkpoint_path = checkpoint_path)
+
+                sim_resumed = make_sim(tsteps, "HDF5", crash_path)
+                run!(sim_resumed; restart_path = checkpoint_path)
+
+                @test Array(sim_resumed.state.h) ≈ Array(sim_full.state.h)
+                @test Array(sim_resumed.state.b) ≈ Array(sim_full.state.b)
+                @test sim_resumed.total_time[] ≈ sim_full.total_time[]
+
+                HDF5.h5open(full_path, "r") do ffull
+                    HDF5.h5open(crash_path, "r") do fresumed
+                        @test size(fresumed["h"]) == size(ffull["h"])
+                        @test read(fresumed["h"]) ≈ read(ffull["h"])
+                    end
+                end
+            end
+
+            @testset "JLD2" begin
+                full_path = joinpath(dir, "full.jld2")
+                sim_full = make_sim(tsteps, "JLD2", full_path)
+                run!(sim_full)
+
+                crash_path = joinpath(dir, "crash.jld2")
+                checkpoint_path = joinpath(dir, "ckpt3.jld2")
+                sim_crash = make_sim(5, "JLD2", crash_path)
+                run!(sim_crash; checkpoint_every = 3, checkpoint_path = checkpoint_path)
+
+                sim_resumed = make_sim(tsteps, "JLD2", crash_path)
+                run!(sim_resumed; restart_path = checkpoint_path)
+
+                @test Array(sim_resumed.state.h) ≈ Array(sim_full.state.h)
+                @test Array(sim_resumed.state.b) ≈ Array(sim_full.state.b)
+                @test sim_resumed.total_time[] ≈ sim_full.total_time[]
+
+                JLD2.jldopen(full_path, "r") do ffull
+                    JLD2.jldopen(crash_path, "r") do fresumed
+                        for (idx, t) in enumerate(tracked_times)
+                            @test fresumed["h/$idx"] ≈ ffull["h/$idx"]
+                            @test fresumed["b/$idx"] ≈ ffull["b/$idx"]
+                        end
+                    end
+                end
+            end
+
+            @testset "CSV" begin
+                full_path = joinpath(dir, "full.csv")
+                sim_full = make_sim(tsteps, "CSV", full_path)
+                run!(sim_full)
+
+                crash_path = joinpath(dir, "crash.csv")
+                checkpoint_path = joinpath(dir, "ckpt4.jld2")
+                sim_crash = make_sim(5, "CSV", crash_path)
+                run!(sim_crash; checkpoint_every = 3, checkpoint_path = checkpoint_path)
+
+                sim_resumed = make_sim(tsteps, "CSV", crash_path)
+                run!(sim_resumed; restart_path = checkpoint_path)
+
+                @test Array(sim_resumed.state.h) ≈ Array(sim_full.state.h)
+                @test Array(sim_resumed.state.b) ≈ Array(sim_full.state.b)
+                @test sim_resumed.total_time[] ≈ sim_full.total_time[]
+
+                rows_full    = collect(CSV.File(full_path))
+                rows_resumed = collect(CSV.File(crash_path))
+                @test length(rows_resumed) == length(tracked_times) # catches duplicated rows from replaying t=4,5
+                @test length(rows_resumed) == length(rows_full)
+                for (row_full, row_resumed) in zip(rows_full, rows_resumed)
+                    @test row_resumed.t == row_full.t
+                    @test row_resumed.h_mean ≈ row_full.h_mean
+                    @test row_resumed.b_mean ≈ row_full.b_mean
+                end
+            end
+
+        end
 
     end
 
