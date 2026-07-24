@@ -61,15 +61,29 @@
 # ILU via CUSPARSE) doesn't apply here since MatrixFreeLinearSystem
 # deliberately avoids ever materializing a sparse matrix on GPU, which is
 # also why Jacobi/Chebyshev (matvec-based, not factorization-based) are the
-# only preconditioners that fit this representation at all. One real,
-# currently unexploited tip from Krylov.jl's docs: Julia's plain
-# SparseArrays sparse matvec (used by SparseAssembledLinearSystem on CPU,
-# including inside AMG's own CG iterations) is single-threaded --
-# MKLSparse.jl or ThreadedSparseCSR.jl could parallelize it. Not applied
-# here: AMG already cuts CG iteration counts to single digits/low tens (see
-# above), so the payoff is smaller than it would've been pre-AMG, and it's a
-# new dependency decision worth its own evaluation rather than adding
-# unilaterally -- flagged here for whoever picks this up next.
+# only preconditioners that fit this representation at all.
+#
+# Julia's plain SparseArrays sparse matvec (used by SparseAssembledLinearSystem
+# on CPU, including inside AMG's own CG iterations) is single-threaded, and
+# Krylov.jl's tips docs suggest MKLSparse.jl or ThreadedSparseCSR.jl to
+# parallelize it. Investigated 2026-07-24 (test/mklsparse_check.jl,
+# gitignored) and NOT adopted:
+# - MKLSparse.jl works (auto-overloads mul! for SparseMatrixCSC, zero code
+#   changes needed) but only gave a modest win on this cluster's smp nodes
+#   (AMD EPYC 7702): 27% faster matvec at 128x128, dropping to just 4% at
+#   512x512 -- consistent with Intel MKL's well-known CPU-vendor-detection
+#   penalty on non-Intel hardware (it can silently pick a less-optimized
+#   code path when it detects a non-Intel CPU). Combined with AMG already
+#   cutting CG iteration counts to single digits/low tens (see above), the
+#   real-world payoff is small, and smallest exactly at the larger grids
+#   that matter most for production runs.
+# - ThreadedSparseCSR.jl doesn't even load on Julia 1.12 (this project's
+#   version): it pulls in an old ArrayInterface.jl via Polyester.jl that's
+#   incompatible ("too many parameters for type AbstractTriangular"),
+#   unrelated to this cluster's hardware.
+# Worth revisiting if either the cluster's CPU hardware changes (Intel nodes
+# would make MKLSparse's case much stronger) or ThreadedSparseCSR.jl gets a
+# compatibility fix upstream.
 
 # Applies the diagonal-Jacobi-scaled operator D^-1*A. The same wrapper works
 # for both SparseAssembledLinearSystem's SparseMatrixCSC and

@@ -53,3 +53,4 @@ Thumbs.db
 /test/restart_cuda_check.jl
 /test/gpu_perf_check.jl
 /test/gpu_breakdown.jl
+/test/mklsparse_check.jl
