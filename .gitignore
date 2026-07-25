@@ -55,3 +55,4 @@ Thumbs.db
 /test/gpu_perf_check.jl
 /test/gpu_breakdown.jl
 /test/mklsparse_check.jl
+/test/blas_threads_check.jl
