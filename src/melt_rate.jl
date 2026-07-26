@@ -54,79 +54,113 @@ compute_taub_x!(s::State, p::ModelParameters, ::PrescribedSlidingLaw) = s
 compute_taub_y!(s::State, p::ModelParameters, ::PrescribedSlidingLaw) = s
 compute_taub_xy!(s::State, p::ModelParameters, ::PrescribedSlidingLaw) = s
 
-@parallel_indices (ix, iy) function compute_taub_x_kernel!(taub_x, N, ub_x, lambda, C, n, inv_n)
+# taub_x/taub_y regularize on the *joint* sliding speed abs_ub = ‖v_b‖ (not
+# the signed component ub_x/ub_y), then restore direction by projecting onto
+# ub_x/abs_v (ub_y/abs_v) -- see Kazmierczak et al. 2024 Eq. 1 (Joughin et
+# al. 2019's regularized Coulomb law) for the same vectorization, though this
+# keeps Shakti's own N^n*lambda velocity scale rather than their constant v0.
+# Using the signed component directly (the old code) broke the instant a
+# real (not purely +x) velocity field was used: the power-law ratio can go
+# negative, and Julia's `^` throws a DomainError for a negative real base
+# with the fractional exponent inv_n. ‖v_b‖ >= 0 always, so this can't happen
+# here; the abs_v > 0 guard below only covers the genuine 0/0 case (both
+# components vanish at a face).
+#
+# abs_ub is reused rather than re-derived locally from ub_x/ub_y: it's
+# already the correct cell-centered ‖v_b‖ (compute_abs_ub_kernel!), and valid
+# by construction here since it's computed right before these calls (see
+# initial_conditions.jl and elliptic_solver.jl). This currently holds for an
+# entire run because ub_x/ub_y are set once in set_initial_conditions! and
+# never reassigned afterward -- NOTE: once ice-velocity coupling starts
+# updating ub_x/ub_y mid-run (every timestep, or every few timesteps under a
+# frozen-ice-velocity assumption), compute_abs_ub! must be re-invoked
+# whenever ub_x/ub_y change, before the next compute_taub_x!/_y!/_xy! call,
+# or abs_ub (and therefore taub) will silently go stale.
+@parallel_indices (ix, iy) function compute_taub_x_kernel!(taub_x, N, ub_x, abs_ub, lambda, C, n, inv_n)
     nx1 = size(taub_x, 1) # nx + 1
     if ix <= nx1 && iy <= size(taub_x, 2)
         if ix == 1
             Nf = N[1, iy]
-            taub_x[ix, iy] = Nf * C * pow(ub_x[1, iy] / (ub_x[1, iy] + pow(abs(Nf), n) * lambda[1, iy]), inv_n)
+            abs_v = abs_ub[1, iy]
+            taub_x[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[1, iy]), inv_n) * (ub_x[1, iy] / abs_v) : zero(Nf)
         elseif ix == nx1
             Nf = N[nx1-1, iy]
-            taub_x[ix, iy] = Nf * C * pow(ub_x[nx1, iy] / (ub_x[nx1, iy] + pow(abs(Nf), n) * lambda[nx1-1, iy]), inv_n)
+            abs_v = abs_ub[nx1-1, iy]
+            taub_x[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[nx1-1, iy]), inv_n) * (ub_x[nx1, iy] / abs_v) : zero(Nf)
         else
             Nf = (N[ix, iy] + N[ix-1, iy]) / 2
             lf = (lambda[ix, iy] + lambda[ix-1, iy]) / 2
-            taub_x[ix, iy] = Nf * C * pow(ub_x[ix, iy] / (ub_x[ix, iy] + pow(abs(Nf), n) * lf), inv_n)
+            abs_v = (abs_ub[ix, iy] + abs_ub[ix-1, iy]) / 2
+            taub_x[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lf), inv_n) * (ub_x[ix, iy] / abs_v) : zero(Nf)
         end
     end
     return
 end
-compute_taub_x!(s::State, p::ModelParameters, sl::RegularizedCoulombSlidingLaw) = (@parallel compute_taub_x_kernel!(s.taub_x, s.N, s.ub_x, s.lambda, sl.C, p.n_exp, p.inv_n_exp); s)
+compute_taub_x!(s::State, p::ModelParameters, sl::RegularizedCoulombSlidingLaw) = (@parallel compute_taub_x_kernel!(s.taub_x, s.N, s.ub_x, s.abs_ub, s.lambda, sl.C, p.n_exp, p.inv_n_exp); s)
 
-@parallel_indices (ix, iy) function compute_taub_y_kernel!(taub_y, N, ub_y, lambda, C, n, inv_n)
+@parallel_indices (ix, iy) function compute_taub_y_kernel!(taub_y, N, ub_y, abs_ub, lambda, C, n, inv_n)
     ny1 = size(taub_y, 2) # ny + 1
     if ix <= size(taub_y, 1) && iy <= ny1
         if iy == 1
             Nf = N[ix, 1]
-            taub_y[ix, iy] = Nf * C * pow(ub_y[ix, 1] / (ub_y[ix, 1] + pow(abs(Nf), n) * lambda[ix, 1]), inv_n)
+            abs_v = abs_ub[ix, 1]
+            taub_y[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[ix, 1]), inv_n) * (ub_y[ix, 1] / abs_v) : zero(Nf)
         elseif iy == ny1
             Nf = N[ix, ny1-1]
-            taub_y[ix, iy] = Nf * C * pow(ub_y[ix, ny1] / (ub_y[ix, ny1] + pow(abs(Nf), n) * lambda[ix, ny1-1]), inv_n)
+            abs_v = abs_ub[ix, ny1-1]
+            taub_y[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[ix, ny1-1]), inv_n) * (ub_y[ix, ny1] / abs_v) : zero(Nf)
         else
             Nf = (N[ix, iy] + N[ix, iy-1]) / 2
             lf = (lambda[ix, iy] + lambda[ix, iy-1]) / 2
-            taub_y[ix, iy] = Nf * C * pow(ub_y[ix, iy] / (ub_y[ix, iy] + pow(abs(Nf), n) * lf), inv_n)
+            abs_v = (abs_ub[ix, iy] + abs_ub[ix, iy-1]) / 2
+            taub_y[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lf), inv_n) * (ub_y[ix, iy] / abs_v) : zero(Nf)
         end
     end
     return
 end
-compute_taub_y!(s::State, p::ModelParameters, sl::RegularizedCoulombSlidingLaw) = (@parallel compute_taub_y_kernel!(s.taub_y, s.N, s.ub_y, s.lambda, sl.C, p.n_exp, p.inv_n_exp); s)
+compute_taub_y!(s::State, p::ModelParameters, sl::RegularizedCoulombSlidingLaw) = (@parallel compute_taub_y_kernel!(s.taub_y, s.N, s.ub_y, s.abs_ub, s.lambda, sl.C, p.n_exp, p.inv_n_exp); s)
 
 # Fused hot-path version: one launch instead of two (see field_gradients.jl's
 # compute_dhdxy! for why passing both differently-shaped face arrays as
 # arguments makes ParallelStencil infer the right union launch range).
-@parallel_indices (ix, iy) function compute_taub_xy_kernel!(taub_x, taub_y, N, ub_x, ub_y, lambda, C, n, inv_n)
+@parallel_indices (ix, iy) function compute_taub_xy_kernel!(taub_x, taub_y, N, ub_x, ub_y, abs_ub, lambda, C, n, inv_n)
     nx1 = size(taub_x, 1) # nx + 1
     if ix <= nx1 && iy <= size(taub_x, 2)
         if ix == 1
             Nf = N[1, iy]
-            taub_x[ix, iy] = Nf * C * pow(ub_x[1, iy] / (ub_x[1, iy] + pow(abs(Nf), n) * lambda[1, iy]), inv_n)
+            abs_v = abs_ub[1, iy]
+            taub_x[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[1, iy]), inv_n) * (ub_x[1, iy] / abs_v) : zero(Nf)
         elseif ix == nx1
             Nf = N[nx1-1, iy]
-            taub_x[ix, iy] = Nf * C * pow(ub_x[nx1, iy] / (ub_x[nx1, iy] + pow(abs(Nf), n) * lambda[nx1-1, iy]), inv_n)
+            abs_v = abs_ub[nx1-1, iy]
+            taub_x[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[nx1-1, iy]), inv_n) * (ub_x[nx1, iy] / abs_v) : zero(Nf)
         else
             Nf = (N[ix, iy] + N[ix-1, iy]) / 2
             lf = (lambda[ix, iy] + lambda[ix-1, iy]) / 2
-            taub_x[ix, iy] = Nf * C * pow(ub_x[ix, iy] / (ub_x[ix, iy] + pow(abs(Nf), n) * lf), inv_n)
+            abs_v = (abs_ub[ix, iy] + abs_ub[ix-1, iy]) / 2
+            taub_x[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lf), inv_n) * (ub_x[ix, iy] / abs_v) : zero(Nf)
         end
     end
     ny1 = size(taub_y, 2) # ny + 1
     if ix <= size(taub_y, 1) && iy <= ny1
         if iy == 1
             Nf = N[ix, 1]
-            taub_y[ix, iy] = Nf * C * pow(ub_y[ix, 1] / (ub_y[ix, 1] + pow(abs(Nf), n) * lambda[ix, 1]), inv_n)
+            abs_v = abs_ub[ix, 1]
+            taub_y[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[ix, 1]), inv_n) * (ub_y[ix, 1] / abs_v) : zero(Nf)
         elseif iy == ny1
             Nf = N[ix, ny1-1]
-            taub_y[ix, iy] = Nf * C * pow(ub_y[ix, ny1] / (ub_y[ix, ny1] + pow(abs(Nf), n) * lambda[ix, ny1-1]), inv_n)
+            abs_v = abs_ub[ix, ny1-1]
+            taub_y[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[ix, ny1-1]), inv_n) * (ub_y[ix, ny1] / abs_v) : zero(Nf)
         else
             Nf = (N[ix, iy] + N[ix, iy-1]) / 2
             lf = (lambda[ix, iy] + lambda[ix, iy-1]) / 2
-            taub_y[ix, iy] = Nf * C * pow(ub_y[ix, iy] / (ub_y[ix, iy] + pow(abs(Nf), n) * lf), inv_n)
+            abs_v = (abs_ub[ix, iy] + abs_ub[ix, iy-1]) / 2
+            taub_y[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lf), inv_n) * (ub_y[ix, iy] / abs_v) : zero(Nf)
         end
     end
     return
 end
-compute_taub_xy!(s::State, p::ModelParameters, sl::RegularizedCoulombSlidingLaw) = (@parallel compute_taub_xy_kernel!(s.taub_x, s.taub_y, s.N, s.ub_x, s.ub_y, s.lambda, sl.C, p.n_exp, p.inv_n_exp); s)
+compute_taub_xy!(s::State, p::ModelParameters, sl::RegularizedCoulombSlidingLaw) = (@parallel compute_taub_xy_kernel!(s.taub_x, s.taub_y, s.N, s.ub_x, s.ub_y, s.abs_ub, s.lambda, sl.C, p.n_exp, p.inv_n_exp); s)
 
 # Melt rate = geothermal flux + frictional (sliding) heating + potential
 # energy released by water flowing downgradient + sensible heat exchanged as
