@@ -111,8 +111,10 @@ function run_to_steady_state(mask)
     taub_x = zeros(NX + 1, NY) # unused: RegularizedCoulombSlidingLaw recomputes taub from N/ub every Picard iteration
     taub_y = zeros(NX, NY + 1)
 
-    # Moulin input spread over a fixed physical footprint (rather than a single cell), so the
-    # total flux doesn't depend on grid resolution.
+    ## Moulin input spread over a fixed physical footprint (rather than a single cell), so the
+    ## total flux doesn't depend on grid resolution. (## here, not #: an indented single-# comment
+    ## is still a Literate.jl markdown-boundary line regardless of indentation, which would split
+    ## this function's body into broken, non-executing code chunks.)
     ieb = zeros(NX, NY)
     xm, ym = grid.x[im], grid.y[jm]
     footprint = [(grid.x[i] - xm)^2 + (grid.y[j] - ym)^2 <= 15.0^2 for i in 1:NX, j in 1:NY]

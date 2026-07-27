@@ -17,3 +17,6 @@ Thumbs.db
 *.jl.*.cov
 *.jl.mem
 /docs/build/
+
+# Literate.jl output: regenerated from docs/src/examples/*.jl by docs/make.jl on every build.
+/docs/src/examples/*.md
