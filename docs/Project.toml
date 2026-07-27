@@ -1,6 +1,12 @@
 [deps]
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+Literate = "98b081ad-f1c9-55d3-8b20-4c87d4299306"
+MAT = "23992714-dd62-5051-b70f-ba57cb901cac"
 Shakti = "d638fb90-b6c0-422d-b96d-ad6c4615b4d0"
 
 [compat]
+CairoMakie = "0.15.13"
 Documenter = "1.17.0"
+Literate = "2.21.0"
+MAT = "0.12.1"

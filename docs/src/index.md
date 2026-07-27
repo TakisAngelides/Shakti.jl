@@ -18,6 +18,18 @@ See the [`API`](@ref) page for the full reference, or the
 [README](https://github.com/TakisAngelides/Shakti.jl#readme) for installation and a quick-start
 example.
 
+## Examples
+
+Three complete, runnable examples:
+
+- [Seasonal melt input](@ref SeasonalMeltInput) -- a synthetic slab reproducing (a small, fast
+  version of) the original SHAKTI paper's seasonal-cycle experiment.
+- [Mask variants](@ref MaskVariants) -- three synthetic domain geometries (simple, barrier,
+  semi-circle), showing what each mask value does to the drainage pattern.
+- [Helheim Glacier](@ref Helheim) -- real data: rasterizing an unstructured ISSM mesh onto a
+  regular grid and solving for the winter subglacial hydrology of a real Greenland outlet
+  glacier.
+
 ## Package structure
 
 The package is organized around a handful of core types, each with an abstract supertype where

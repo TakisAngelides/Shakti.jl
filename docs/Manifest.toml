@@ -2,7 +2,7 @@
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "9ae6cb4e42b5939a8895ff3577a784b8fa243a5a"
+project_hash = "b52f0a1b16df7e11d0c5935ac479b3545714fe95"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "ec6be48a85c93d995563b84bff8a86bc98df45ce"
@@ -1334,6 +1334,12 @@ version = "5.2.0"
     blis_jll = "6136c539-28a5-5bf0-87cc-b183200dce32"
     cuSOLVER = "887afef0-6a32-4de5-add4-7827692ba8fc"
 
+[[deps.Literate]]
+deps = ["Base64", "IOCapture", "JSON", "REPL"]
+git-tree-sha1 = "bb26d8b8ed0fa451ce3511e99c950653a2f31fe1"
+uuid = "98b081ad-f1c9-55d3-8b20-4c87d4299306"
+version = "2.21.0"
+
 [[deps.LogExpFunctions]]
 deps = ["DocStringExtensions", "IrrationalConstants", "LinearAlgebra"]
 git-tree-sha1 = "bba2d9aa057d8f126415de240573e86a8f39d2a1"
@@ -2100,7 +2106,7 @@ version = "0.5.0"
 deps = ["AlgebraicMultigrid", "CSV", "CUDA", "CairoMakie", "DocStringExtensions", "HDF5", "JLD2", "KernelAbstractions", "Krylov", "LinearAlgebra", "MAT", "Metal", "NetCDF", "ParallelStencil", "Preferences", "SparseArrays", "Statistics"]
 path = "/albedo/home/taange001/Shakti.jl"
 uuid = "d638fb90-b6c0-422d-b96d-ad6c4615b4d0"
-version = "1.0.0-DEV"
+version = "0.1.0"
 
 [[deps.SharedArrays]]
 deps = ["Distributed", "Mmap", "Random", "Serialization"]
