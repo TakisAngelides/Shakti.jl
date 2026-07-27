@@ -101,7 +101,7 @@ export prepare!, observe!, openfile!, write2file!, finalize!, resume!, reopenfil
 
 # melt_rate.jl
 export AbstractSensibleHeatScheme, WithSensibleHeat, NoSensibleHeat
-export AbstractSlidingLaw, RegularizedCoulombSlidingLaw, PrescribedSlidingLaw, initialize_taub!
+export AbstractSlidingLaw, RegularizedCoulombSlidingLaw, PrescribedSlidingLaw, LinearSlidingLaw, initialize_taub!
 export compute_taub_x!, compute_taub_y!, compute_taub_xy!, compute_shear!, compute_potential!, compute_sensible!, compute_mdot!
 
 # elliptic_solver.jl

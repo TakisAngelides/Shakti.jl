@@ -41,3 +41,9 @@ Thumbs.db
 *.jl.*.cov
 *.jl.mem
 /docs/build/
+
+# Real-data application to Helheim Glacier (Sommers and others 2023
+# dataset, via Zenodo 10.5281/zenodo.7019805): rasterizer/initial-
+# conditions/Picard/time-stepping/plotting scripts, the raw+rasterized
+# data, and generated figures/NetCDF output/logs.
+/test/helheim/
