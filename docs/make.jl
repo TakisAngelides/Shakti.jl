@@ -20,7 +20,7 @@ makedocs(
     pages = PAGES,
     doctest = CI,
     draft = false,
-    checkdocs = :none,
+    checkdocs = :exports,
     warnonly = true,
 )
 

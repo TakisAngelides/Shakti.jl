@@ -2,7 +2,7 @@
 
 [![Build Status](https://github.com/TakisAngelides/Shakti.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/TakisAngelides/Shakti.jl/actions/workflows/CI.yml?query=branch%3Amain)
 [![](https://img.shields.io/badge/docs-dev-blue.svg)](https://TakisAngelides.github.io/Shakti.jl/dev/)
-[![](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![](https://img.shields.io/badge/license-GNU_GPL_3.0-green.svg)](https://www.gnu.org/licenses/gpl-3.0.en.html)
 
 A Julia solver for the SHAKTI subglacial hydrology model ([Sommers and others,
 2018](https://doi.org/10.3389/feart.2018.00104)): a continuum model of hydraulic head, effective
@@ -137,4 +137,4 @@ AMG/Chebyshev), every observer/file-writer combination, and checkpoint/restart. 
 
 ## License
 
-MIT -- see [LICENSE](LICENSE).
+GNU General Public License v3.0 -- see [LICENSE](LICENSE).

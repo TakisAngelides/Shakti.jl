@@ -29,9 +29,21 @@ using CSV
 using CairoMakie
 using DocStringExtensions
 
+"""
+Which array/compute backend Shakti runs on: `"Threads"` (CPU), `"CUDA"`, or `"Metal"`. A
+`Preferences`-backed constant, read once at module load from `LocalPreferences.toml` (default
+`"Threads"`) rather than a runtime argument -- see `Preferences.jl` for how to set it before
+`using Shakti`.
+"""
 const backend = @load_preference("backend", "Threads")
 const floattype_str = @load_preference("floattype", "Float64")
 
+"""
+The floating-point element type every `State`/`Grid`/`ModelParameters` field is stored as
+(`Float64` or `Float32`). A `Preferences`-backed constant, read once at module load from
+`LocalPreferences.toml` (default `Float64`) rather than a runtime argument -- see
+`Preferences.jl` for how to set it before `using Shakti`.
+"""
 const floattype = floattype_str == "Float64" ? Float64 :
                   floattype_str == "Float32" ? Float32 :
                   error("Unknown floattype preference: $floattype_str (expected \"Float64\" or \"Float32\")")
