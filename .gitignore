@@ -1,36 +1,12 @@
 /Manifest*.toml
 /LocalPreferences.toml
 
-# Everything under test/ is grouped into category folders by purpose; only
-# runtests.jl (the real, maintained test suite) is tracked. Each folder below
-# is ignored wholesale -- cluster-only tooling/exploratory scripts/generated
-# output, kept off every machine that isn't the cluster rather than tracked
-# in git, and any new file added under one of these folders stays ignored
-# automatically without needing a new .gitignore line.
-
-# options_explorer.jl (try-a-config-and-run driver) + its sbatch launcher,
-# logs, and generated figures/videos.
-/test/options_explorer/
-
-# Cluster-only benchmark tooling for the solver x thread-count sweep: sbatch
-# job arrays, the single-run worker script, plotting scripts, and their
-# results/logs/figures.
-/test/benchmarks/
-
-# One-off diagnostic/profiling scripts (malloc, GC, preconditioner
-# investigations, GPU checks, etc.): exploratory, not maintained as part of
-# the test suite (that's runtests.jl's job).
-/test/diagnostics/
-
-# Section 3.3 seasonal-cycle reproduction (365-day, hourly-dt run): cheap
-# enough per step, but the full annual cycle plus mp4 rendering is more than
-# worth doing on the cluster instead of the laptop.
-/test/reproduction/
-
-# Real-data application to Thwaites (Kazmierczak et al. 2024 dataset, via
-# FastHydrology.jl): loader/topography/Picard/time-stepping scripts, the
-# trimmed JLD2 dataset, and generated figures/NetCDF output.
-/test/thwaites/
+# Only runtests.jl (the real, maintained test suite) is tracked under test/.
+# Everything else -- cluster-only tooling, exploratory/one-off scripts,
+# generated figures/videos/data -- is ignored wholesale so new files never
+# need a new .gitignore line.
+/test/*
+!/test/runtests.jl
 
 # OS junk
 .DS_Store
@@ -41,9 +17,3 @@ Thumbs.db
 *.jl.*.cov
 *.jl.mem
 /docs/build/
-
-# Real-data application to Helheim Glacier (Sommers and others 2023
-# dataset, via Zenodo 10.5281/zenodo.7019805): rasterizer/initial-
-# conditions/Picard/time-stepping/plotting scripts, the raw+rasterized
-# data, and generated figures/NetCDF output/logs.
-/test/helheim/
