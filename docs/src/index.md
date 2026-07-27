@@ -1,7 +1,7 @@
 # Shakti.jl
 
-A Julia solver for the SHAKTI subglacial hydrology model ([Sommers and others,
-2018](https://doi.org/10.3389/feart.2018.00104)): a continuum model of hydraulic head, effective
+A Julia solver for the SHAKTI subglacial hydrology model ([Sommers, Rajaram & Morlighem,
+2018](https://gmd.copernicus.org/articles/11/2955/2018/)): a continuum model of hydraulic head, effective
 pressure, water flux, and drainage-system geometry (gap height) beneath an ice sheet, that
 transitions smoothly between laminar (distributed) and turbulent (channelized) flow regimes
 rather than treating them as separate model components.
