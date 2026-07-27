@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Helheim Glacier · Shakti.jl</title><meta name="title" content="Helheim Glacier · Shakti.jl"/><meta property="og:title" content="Helheim Glacier · Shakti.jl"/><meta property="twitter:title" content="Helheim Glacier · Shakti.jl"/><meta name="description" content="Documentation for Shakti.jl."/><meta property="og:description" content="Documentation for Shakti.jl."/><meta property="twitter:description" content="Documentation for Shakti.jl."/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../../">Shakti.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Shakti.jl</a></li><li><span class="tocitem">Examples</span><ul><li><a class="tocitem" href="../SeasonalMeltInput/">Seasonal melt input</a></li><li><a class="tocitem" href="../MaskVariants/">Mask variants</a></li><li class="is-active"><a class="tocitem" href>Helheim Glacier</a><ul class="internal"><li><a class="tocitem" href="#Loading-the-raw-mesh"><span>Loading the raw mesh</span></a></li><li><a class="tocitem" href="#Rasterizing-onto-a-regular-grid"><span>Rasterizing onto a regular grid</span></a></li><li><a class="tocitem" href="#The-terminus:-an-open-drainage-boundary"><span>The terminus: an open drainage boundary</span></a></li><li><a class="tocitem" href="#Building-the-state"><span>Building the state</span></a></li><li><a class="tocitem" href="#Running-to-the-winter-base-state"><span>Running to the winter base state</span></a></li><li><a class="tocitem" href="#Results"><span>Results</span></a></li></ul></li></ul></li><li><a class="tocitem" href="../../API/">API</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Examples</a></li><li class="is-active"><a href>Helheim Glacier</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Helheim Glacier</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/TakisAngelides/Shakti.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/TakisAngelides/Shakti.jl/blob/main/docs/src/examples/Helheim.jl" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Helheim"><a class="docs-heading-anchor" href="#Helheim">Helheim Glacier</a><a id="Helheim-1"></a><a class="docs-heading-anchor-permalink" href="#Helheim" title="Permalink"></a></h1><p>Applies Shakti to real data: the winter subglacial hydrology of Helheim Glacier, Greenland, from Sommers and others (2023), <a href="https://doi.org/10.1017/jog.2023.39">doi:10.1017/jog.2023.39</a> (data: <a href="https://doi.org/10.5281/zenodo.7019805">10.5281/zenodo.7019805</a>). Unlike a synthetic slab, this data arrives as native ISSM/SHAKTI output on an <em>unstructured</em> triangular mesh (6371 vertices, 12472 elements) – Shakti&#39;s <a href="../../API/#Grid"><code>Grid</code></a> needs a regular grid, so the first step here is rasterizing the mesh onto one via barycentric interpolation, before building a <a href="../../API/#State"><code>State</code></a> and time-stepping it to Sommers and others (2023)&#39;s &quot;winter base state&quot; – reproducing the paper&#39;s Fig. 2.</p><pre><code class="language-julia hljs">using Shakti
+using MAT
+using CairoMakie
+
+const DATADIR = joinpath(@__DIR__, &quot;input&quot;, &quot;Helheim&quot;)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">&quot;/home/runner/work/Shakti.jl/Shakti.jl/docs/build/examples/input/Helheim&quot;</code></pre><h2 id="Loading-the-raw-mesh"><a class="docs-heading-anchor" href="#Loading-the-raw-mesh">Loading the raw mesh</a><a id="Loading-the-raw-mesh-1"></a><a class="docs-heading-anchor-permalink" href="#Loading-the-raw-mesh" title="Permalink"></a></h2><p>The <code>.mat</code> file is a saved ISSM model object (MATLAB classdef, not a plain struct) – <code>MAT.jl</code> reads it as a nested <code>Dict</code>-like structure, <code>md.d[&quot;mesh&quot;].d[&quot;x&quot;]</code> etc.</p><pre><code class="language-julia hljs">d = matread(joinpath(DATADIR, &quot;Helheim_winter_A0_1d.mat&quot;))
+md = d[&quot;md&quot;].d
+
+mesh_s = md[&quot;mesh&quot;].d
+xs = vec(mesh_s[&quot;x&quot;])                 # per-vertex coordinates, meters, EPSG:3413
+ys = vec(mesh_s[&quot;y&quot;])
+elements = Int.(mesh_s[&quot;elements&quot;])   # (Ntri, 3), 1-based vertex indices
+Nv, Ntri = Int(mesh_s[&quot;numberofvertices&quot;]), Int(mesh_s[&quot;numberofelements&quot;])
+
+bed       = vec(md[&quot;geometry&quot;].d[&quot;bed&quot;])
+thickness = vec(md[&quot;geometry&quot;].d[&quot;thickness&quot;])
+G_in      = vec(md[&quot;basalforcings&quot;].d[&quot;geothermalflux&quot;])
+vx        = vec(md[&quot;initialization&quot;].d[&quot;vx&quot;])   # m/yr
+vy        = vec(md[&quot;initialization&quot;].d[&quot;vy&quot;])
+B_visc    = vec(md[&quot;materials&quot;].d[&quot;rheology_B&quot;]) # ice hardness, Pa s^(1/n)
+
+friction_coefficient = vec(matread(joinpath(DATADIR, &quot;friction_coefficient_Nfinal.mat&quot;))[&quot;friction_coefficient&quot;])
+
+const GLEN_N = 3.0
+A_visc_vertex = B_visc .^ (-GLEN_N) # Glen&#39;s law rate factor from ISSM&#39;s hardness: tau = B*edot^(1/n) &lt;=&gt; A = B^(-n)
+
+println(&quot;Mesh: $Nv vertices, $Ntri elements&quot;)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">Mesh: 6371 vertices, 12472 elements</code></pre><h2 id="Rasterizing-onto-a-regular-grid"><a class="docs-heading-anchor" href="#Rasterizing-onto-a-regular-grid">Rasterizing onto a regular grid</a><a id="Rasterizing-onto-a-regular-grid-1"></a><a class="docs-heading-anchor-permalink" href="#Rasterizing-onto-a-regular-grid" title="Permalink"></a></h2><p>For each triangle, walk only the grid cells within its bounding box and interpolate via barycentric coordinates – cheap (each triangle touches only a handful of cells at this resolution) and exact (matches ISSM&#39;s own piecewise-linear field representation, unlike nearest-neighbor interpolation).</p><pre><code class="language-julia hljs">const DX = 500.0 # meters, matching the mesh&#39;s own nominal edge length
+x0, x1 = extrema(xs); y0, y1 = extrema(ys)
+Nx = floor(Int, (x1 - x0) / DX) + 1
+Ny = floor(Int, (y1 - y0) / DX) + 1
+xc = [x0 + (i - 1) * DX for i in 1:Nx]
+yc = [y0 + (j - 1) * DX for j in 1:Ny]
+
+H, B, A, G, VX, VY, FRIC = (zeros(Nx, Ny) for _ in 1:7)
+mask = fill(OTHER_BASIN, Nx, Ny) # default: outside the mesh -&gt; no data, frozen
+
+const EPS = 1e-9
+for t in 1:Ntri
+    i1, i2, i3 = elements[t, 1], elements[t, 2], elements[t, 3]
+    x1v, y1v, x2v, y2v, x3v, y3v = xs[i1], ys[i1], xs[i2], ys[i2], xs[i3], ys[i3]
+    denom = (y2v - y3v) * (x1v - x3v) + (x3v - x2v) * (y1v - y3v)
+    abs(denom) &lt; EPS &amp;&amp; continue
+
+    i_lo = max(1, floor(Int, (min(x1v, x2v, x3v) - x0) / DX) + 1)
+    i_hi = min(Nx, ceil(Int, (max(x1v, x2v, x3v) - x0) / DX) + 1)
+    j_lo = max(1, floor(Int, (min(y1v, y2v, y3v) - y0) / DX) + 1)
+    j_hi = min(Ny, ceil(Int, (max(y1v, y2v, y3v) - y0) / DX) + 1)
+
+    for j in j_lo:j_hi, i in i_lo:i_hi
+        px, py = xc[i], yc[j]
+        w1 = ((y2v - y3v) * (px - x3v) + (x3v - x2v) * (py - y3v)) / denom
+        w2 = ((y3v - y1v) * (px - x3v) + (x1v - x3v) * (py - y3v)) / denom
+        w3 = 1 - w1 - w2
+        if w1 &gt;= -EPS &amp;&amp; w2 &gt;= -EPS &amp;&amp; w3 &gt;= -EPS
+            H[i, j]    = w1 * thickness[i1] + w2 * thickness[i2] + w3 * thickness[i3]
+            B[i, j]    = w1 * bed[i1]       + w2 * bed[i2]       + w3 * bed[i3]
+            A[i, j]    = w1 * A_visc_vertex[i1] + w2 * A_visc_vertex[i2] + w3 * A_visc_vertex[i3]
+            G[i, j]    = w1 * G_in[i1]      + w2 * G_in[i2]      + w3 * G_in[i3]
+            VX[i, j]   = w1 * vx[i1]        + w2 * vx[i2]        + w3 * vx[i3]
+            VY[i, j]   = w1 * vy[i1]        + w2 * vy[i2]        + w3 * vy[i3]
+            FRIC[i, j] = w1 * friction_coefficient[i1] + w2 * friction_coefficient[i2] + w3 * friction_coefficient[i3]
+            mask[i, j] = GROUNDED
+        end
+    end
+end
+
+println(&quot;Rasterized onto a $(Nx) x $(Ny) grid; &quot;, count(==(GROUNDED), mask), &quot; GROUNDED cells&quot;)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">Rasterized onto a 134 x 104 grid; 8207 GROUNDED cells</code></pre><h2 id="The-terminus:-an-open-drainage-boundary"><a class="docs-heading-anchor" href="#The-terminus:-an-open-drainage-boundary">The terminus: an open drainage boundary</a><a id="The-terminus:-an-open-drainage-boundary-1"></a><a class="docs-heading-anchor-permalink" href="#The-terminus:-an-open-drainage-boundary" title="Permalink"></a></h2><p>The original ISSM setup gives the terminus (a small polygon marking the outlet, <code>terminus13.exp</code>) a Dirichlet head=0 boundary – water can actually flow out there, unlike the rest of the domain edge (closed/zero-flux, <code>OTHER_BASIN</code>). We find the mesh&#39;s own boundary vertices inside that polygon (the same rule the original setup used), then reclassify nearby raster boundary cells as <a href="../../API/#Shakti.OCEAN"><code>OCEAN</code></a> (Shakti&#39;s open-drainage Dirichlet condition).</p><pre><code class="language-julia hljs">function read_exp_points(path)
+    lines = readlines(path)
+    header_idx = findfirst(l -&gt; startswith(l, &quot;# X pos&quot;), lines)
+    pts = [parse.(Float64, split(l)) for l in lines[header_idx+1:end] if !isempty(strip(l))]
+    return [p[1] for p in pts], [p[2] for p in pts]
+end
+
+function point_in_polygon(px, py, poly_x, poly_y)
+    n = length(poly_x)
+    inside = false
+    j = n
+    for i in 1:n
+        xi, yi, xj, yj = poly_x[i], poly_y[i], poly_x[j], poly_y[j]
+        if ((yi &gt; py) != (yj &gt; py)) &amp;&amp; (px &lt; (xj - xi) * (py - yi) / (yj - yi) + xi)
+            inside = !inside
+        end
+        j = i
+    end
+    return inside
+end
+
+term_x, term_y = read_exp_points(joinpath(DATADIR, &quot;terminus13.exp&quot;))
+vertex_on_boundary = vec(mesh_s[&quot;vertexonboundary&quot;]) .&gt; 0.5
+terminus_idx = [v for v in 1:Nv if vertex_on_boundary[v] &amp;&amp; point_in_polygon(xs[v], ys[v], term_x, term_y)]
+
+const TERMINUS_BUFFER = 1.5 * DX
+n_ocean = 0
+for j in 1:Ny, i in 1:Nx
+    global n_ocean
+    mask[i, j] != GROUNDED &amp;&amp; continue
+    is_boundary = (i == 1 || i == Nx || j == 1 || j == Ny) ||
+                  mask[i-1, j] == OTHER_BASIN || mask[i+1, j] == OTHER_BASIN ||
+                  mask[i, j-1] == OTHER_BASIN || mask[i, j+1] == OTHER_BASIN
+    if is_boundary &amp;&amp; any(v -&gt; hypot(xc[i] - xs[v], yc[j] - ys[v]) &lt;= TERMINUS_BUFFER, terminus_idx)
+        mask[i, j] = OCEAN
+        n_ocean += 1
+    end
+end
+println(&quot;Terminus: reclassified $n_ocean boundary cells to OCEAN&quot;)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">Terminus: reclassified 8 boundary cells to OCEAN</code></pre><h2 id="Building-the-state"><a class="docs-heading-anchor" href="#Building-the-state">Building the state</a><a id="Building-the-state-1"></a><a class="docs-heading-anchor-permalink" href="#Building-the-state" title="Permalink"></a></h2><p><code>LinearSlidingLaw</code> matches the paper&#39;s own basal stress formula, <code>taub = C^2*N*u_b</code>, using their inverted per-cell friction field. <code>rho_i=917</code>/<code>omega=1e-3</code>/<code>br=0</code> match Table 2 exactly; <code>ct=0</code> matches their text right after Eq. 7, which drops the sensible-heat term Table 2&#39;s <code>ct</code>/<code>cw</code> would otherwise imply – see <a href="../../API/#Shakti.NoSensibleHeat"><code>NoSensibleHeat</code></a>.</p><pre><code class="language-julia hljs">grid = Grid(Nx, Ny, (Nx - 1) * DX, (Ny - 1) * DX)
+
+zb = B
+gap = fill(1e-3, Nx, Ny)
+zs = zb .+ H .+ gap
+ieb = zeros(Nx, Ny)
+
+const SECONDS_PER_YEAR = 365 * 86400.0
+VX_ms, VY_ms = VX ./ SECONDS_PER_YEAR, VY ./ SECONDS_PER_YEAR
+ub_x = zeros(Nx + 1, Ny)
+ub_x[1, :] .= VX_ms[1, :]; ub_x[Nx+1, :] .= VX_ms[Nx, :]
+ub_x[2:Nx, :] .= (VX_ms[1:Nx-1, :] .+ VX_ms[2:Nx, :]) ./ 2
+ub_y = zeros(Nx, Ny + 1)
+ub_y[:, 1] .= VY_ms[:, 1]; ub_y[:, Ny+1] .= VY_ms[:, Ny]
+ub_y[:, 2:Ny] .= (VY_ms[:, 1:Ny-1] .+ VY_ms[:, 2:Ny]) ./ 2
+taub_x, taub_y = zeros(Nx + 1, Ny), zeros(Nx, Ny + 1)
+
+p = ModelParameters(rho_i = 917.0, omega = 1e-3, br = 0.0, lr = 2.0, ct = 0.0, b_min = 1e-3)
+mi = ConstantMeltInput()
+sl = LinearSlidingLaw(grid, FRIC)
+
+state = State(grid)
+set_initial_conditions!(state, grid, p, mi, sl, mask, A, zb, zs, gap, G, ub_x, ub_y, ieb, taub_x, taub_y)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">State{Matrix{Float64}}([0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0; … ; 0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0], [0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0; … ; 0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0], [8.99577 8.99577 … 8.99577 8.99577; 8.99577 8.99577 … 8.99577 8.99577; … ; 8.99577 8.99577 … 8.99577 8.99577; 8.99577 8.99577 … 8.99577 8.99577], [0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0; … ; 0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0], [0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0; … ; 0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0], [0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0; … ; 0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0], [0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0; … ; 0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0], [0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0; … ; 0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0], [0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0; … ; 0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0], [0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0; … ; 0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0], [1000.0 1000.0 … 1000.0 1000.0; 1000.0 1000.0 … 1000.0 1000.0; … ; 1000.0 1000.0 … 1000.0 1000.0; 1000.0 1000.0 … 1000.0 1000.0], [0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0; … ; 0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0], [0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0; … ; 0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0], [0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0; … ; 0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0], [0.001 0.001 … 0.001 0.001; 0.001 0.001 … 0.001 0.001; … ; 0.001 0.001 … 0.001 0.001; 0.001 0.001 … 0.001 0.001], [0.001 0.001 … 0.001 0.001; 0.001 0.001 … 0.001 0.001; … ; 0.001 0.001 … 0.001 0.001; 0.001 0.001 … 0.001 0.001], [0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0; … ; 0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0], [0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0; … ; 0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0], [0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0; … ; 0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0], [8.99577 8.99577 … 8.99577 8.99577; 8.99577 8.99577 … 8.99577 8.99577; … ; 8.99577 8.99577 … 8.99577 8.99577; 8.99577 8.99577 … 8.99577 8.99577], [3.0 3.0 … 3.0 3.0; 3.0 3.0 … 3.0 3.0; … ; 3.0 3.0 … 3.0 3.0; 3.0 3.0 … 3.0 3.0], [0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0; … ; 0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0], [-0.0 -0.0 … -0.0 -0.0; -0.0 -0.0 … -0.0 -0.0; … ; -0.0 -0.0 … -0.0 -0.0; -0.0 -0.0 … -0.0 -0.0], [1000.0 1000.0 … 1000.0 1000.0; 1000.0 1000.0 … 1000.0 1000.0; … ; 1000.0 1000.0 … 1000.0 1000.0; 1000.0 1000.0 … 1000.0 1000.0], [0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0; … ; 0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0], [0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0; … ; 0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0], [0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0; … ; 0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0], [0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0; … ; 0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0], [1.0 1.0 … 1.0 1.0; 0.0 0.0 … 0.0 0.0; … ; 0.0 0.0 … 0.0 0.0; 1.0 1.0 … 1.0 1.0], [0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0; … ; 0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0], [-0.0 -0.0 … -0.0 -0.0; -0.0 -0.0 … -0.0 -0.0; … ; -0.0 -0.0 … -0.0 -0.0; -0.0 -0.0 … -0.0 -0.0], [1000.0 1000.0 … 1000.0 1000.0; 1000.0 1000.0 … 1000.0 1000.0; … ; 1000.0 1000.0 … 1000.0 1000.0; 1000.0 1000.0 … 1000.0 1000.0], [0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0; … ; 0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0], [0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0; … ; 0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0], [0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0; … ; 0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0], [0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0; … ; 0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0], [1.0 0.0 … 0.0 1.0; 1.0 0.0 … 0.0 1.0; … ; 1.0 0.0 … 0.0 1.0; 1.0 0.0 … 0.0 1.0])</code></pre><h2 id="Running-to-the-winter-base-state"><a class="docs-heading-anchor" href="#Running-to-the-winter-base-state">Running to the winter base state</a><a id="Running-to-the-winter-base-state-1"></a><a class="docs-heading-anchor-permalink" href="#Running-to-the-winter-base-state" title="Permalink"></a></h2><p>Sommers and others (2023) reach their &quot;winter base state&quot; (zero external meltwater input – channels drain only what the geothermal/frictional melt itself supplies) after about 90 days of time evolution; <code>dt=1800</code> s, <code>tsteps=4320</code> matches that exactly. Only the final state is kept (<code>tracked_times = [tsteps]</code>) since Fig. 2 only needs the converged snapshot.</p><pre><code class="language-julia hljs">ls = CholeskyDirectSolver(grid)
+ps = PicardSolver(500, 1e-6, ls, grid)
+
+dt, tsteps = 1800.0, 4320
+sim = Simulation(grid, state, tsteps, floattype(dt), p, &quot;implicit&quot;, [&quot;h&quot;, &quot;b&quot;, &quot;N&quot;, &quot;mdot&quot;, &quot;pw&quot;, &quot;po&quot;, &quot;Re&quot;], mi, sl;
+                 ps = ps, which_observer = &quot;Live&quot;, tracked_times = [tsteps])
+run!(sim)
+
+println(&quot;Ran $tsteps steps (dt=$dt s, $(tsteps * dt / 86400) days)&quot;)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">Ran 4320 steps (dt=1800.0 s, 90.0 days)</code></pre><h2 id="Results"><a class="docs-heading-anchor" href="#Results">Results</a><a id="Results-1"></a><a class="docs-heading-anchor-permalink" href="#Results" title="Permalink"></a></h2><p>Reproduction of Fig. 2: (a) water pressure as a fraction of overburden, (b) gap height, (c) Reynolds number (with a second colorbar for the equivalent water flux <code>q = Re*nu</code>), (d) effective pressure, (e) transmissivity (<code>K = b^3*g / (12*nu*(1+omega*Re))</code>, Eq. 6 – not itself a tracked field), (f) basal melt rate. Colors are pixel-sampled directly from the published PDF&#39;s own colorbars, since no built-in Makie/ColorSchemes.jl map matched closely enough.</p><pre><code class="language-julia hljs">const HELHEIM_CMAP = cgrad([
+    &quot;#051c59&quot;, &quot;#0d345f&quot;, &quot;#114461&quot;, &quot;#185361&quot;, &quot;#236160&quot;, &quot;#366956&quot;,
+    &quot;#4d734d&quot;, &quot;#667a3e&quot;, &quot;#808131&quot;, &quot;#9c892b&quot;, &quot;#bb8f34&quot;, &quot;#d79348&quot;,
+    &quot;#ed9a64&quot;, &quot;#faa489&quot;, &quot;#fcb1ac&quot;, &quot;#fbbccd&quot;, &quot;#fac8f1&quot;,
+])
+const HELHEIM_DIVERGING_CMAP = cgrad([
+    &quot;#001564&quot;, &quot;#042b6e&quot;, &quot;#054583&quot;, &quot;#0d6193&quot;, &quot;#327ea6&quot;, &quot;#629fbb&quot;,
+    &quot;#769ba7&quot;, &quot;#c5dbe6&quot;, &quot;#eae6e5&quot;, &quot;#edccbb&quot;, &quot;#dcae94&quot;, &quot;#d19370&quot;,
+    &quot;#c67549&quot;, &quot;#b75e24&quot;, &quot;#98350a&quot;, &quot;#7a1a07&quot;, &quot;#5f0306&quot;,
+])
+
+hist = sim.observer.history
+final(name) = view(hist[name], :, :, 1)
+b, N, pw, po, Re, mdot = final(&quot;b&quot;), final(&quot;N&quot;), final(&quot;pw&quot;), final(&quot;po&quot;), final(&quot;Re&quot;), final(&quot;mdot&quot;)
+K = b .^ 3 .* p.g ./ (12 .* p.nu .* (1 .+ p.omega .* Re)) # Eq. 6, not itself tracked
+
+pw_frac = pw ./ po
+mdot_myr = max.(mdot ./ p.rho_w .* SECONDS_PER_YEAR, 1e-6) # kg/m^2/s -&gt; m/yr w.e.; floor avoids log10 of the handful of refreezing (mdot&lt;0) GROUNDED cells
+
+xc_km, yc_km = xc ./ 1000, yc ./ 1000
+grounded = mask .== GROUNDED
+mask_nan(field) = ifelse.(grounded, field, NaN)
+
+fig = Figure(size = (1600, 900))
+
+function panel!(pos, title, field; colorrange, colorscale = identity, colormap = HELHEIM_CMAP, cb_label = &quot;&quot;)
+    ax = Axis(fig[pos...]; title = title, xlabel = &quot;x (km)&quot;, ylabel = &quot;y (km)&quot;, aspect = DataAspect())
+    hm = heatmap!(ax, xc_km, yc_km, mask_nan(field), colormap = colormap, colorscale = colorscale, colorrange = colorrange, nan_color = :transparent)
+    Colorbar(fig[pos[1], pos[2]+1], hm, label = cb_label)
+    return ax, hm
+end
+
+panel!((1, 1), &quot;a) Basal Water Pressure\n(pw / pi)&quot;, pw_frac; colorrange = (0, 1))
+panel!((1, 3), &quot;b) Gap Height (m)&quot;, b; colorrange = (1e-3, 1e-1), colorscale = log10)
+
+panel!((1, 5), &quot;c) Reynolds Number&quot;, Re; colorrange = (1, 1e4), colorscale = log10)
+Colorbar(fig[1, 7]; colormap = HELHEIM_CMAP, scale = log10, limits = (1 * p.nu, 1e4 * p.nu), label = &quot;Water Flux (m² s⁻¹)&quot;)
+
+panel!((2, 1), &quot;d) Effective Pressure (MPa)&quot;, N ./ 1e6; colorrange = (0, 3))
+panel!((2, 3), &quot;e) Transmissivity (m² s⁻¹)&quot;, K; colorrange = (1e-4, 1e4), colorscale = log10)
+panel!((2, 5), &quot;f) Basal Melt Rate (m yr⁻¹)&quot;, mdot_myr; colorrange = (1e-2, 1e1), colorscale = log10, colormap = HELHEIM_DIVERGING_CMAP)
+
+fig</code></pre><img src="c0f4da98.png" alt="Example block output"/></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../MaskVariants/">« Mask variants</a><a class="docs-footer-nextpage" href="../../API/">API »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Monday 27 July 2026 18:32">Monday 27 July 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
