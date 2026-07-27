@@ -7,11 +7,22 @@
 # and observer.jl's resume!/reopenfile! for resuming the tracked-output file
 # itself alongside the physics state.
 
-# Written to a temp file and renamed into place (same filesystem, so mv is
-# an atomic rename) rather than written directly to `path`, so a crash mid
-# checkpoint-write can't leave a truncated/corrupt checkpoint behind -- the
-# previous good checkpoint at `path` stays intact until the new one has
-# fully landed.
+"""
+$(TYPEDSIGNATURES)
+
+Saves everything needed to resume `sim`'s physics at timestep `t`: the full `State` (not just
+the observer's `tracked_obs` subset, which is often a small slice picked for output/analysis) and
+`sim.total_time[]`.
+
+# Notes
+
+Written to a temp file and renamed into place (same filesystem, so `mv` is an atomic rename)
+rather than written directly to `path`, so a crash mid checkpoint-write can't leave a
+truncated/corrupt checkpoint behind -- the previous good checkpoint at `path` stays intact until
+the new one has fully landed. See `run.jl` for how `tsteps`/`checkpoint_every`/`restart_path` tie
+together, and `observer.jl`'s `resume!`/`reopenfile!` for resuming the tracked-output file itself
+alongside the physics state.
+"""
 function save_checkpoint(path::String, sim::Simulation, t::Int)
     state = sim.state
     tmp_path = path * ".tmp"
@@ -26,10 +37,18 @@ function save_checkpoint(path::String, sim::Simulation, t::Int)
     return nothing
 end
 
-# Restores sim.state and sim.total_time[] in place from a checkpoint and
-# returns the tstep it was saved at, so run! knows where to resume the loop
-# (see run.jl). Generic over State's fieldnames rather than a hardcoded field
-# list, so it stays correct if State ever gains/loses fields.
+"""
+$(TYPEDSIGNATURES)
+
+Restores `sim.state` and `sim.total_time[]` in place from a checkpoint written by
+[`save_checkpoint`](@ref), and returns the timestep it was saved at, so [`run!`](@ref) knows
+where to resume the loop.
+
+# Notes
+
+Generic over `State`'s fieldnames rather than a hardcoded field list, so it stays correct if
+`State` ever gains/loses fields.
+"""
 function load_checkpoint!(sim::Simulation, path::String)
     state = sim.state
     t, total_time = JLD2.jldopen(path, "r") do file

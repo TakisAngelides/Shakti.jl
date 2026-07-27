@@ -1,3 +1,15 @@
+"""
+$(TYPEDSIGNATURES)
+
+Every field of the subglacial hydrology solve: cell-centered quantities (hydraulic head, water
+and overburden pressure, effective pressure, gap height, melt rate and its three heat-source
+components, ...) and the x-/y-face quantities needed for the finite-volume flux/gradient stencils
+(`Nx+1 x Ny` and `Nx x Ny+1` respectively). Every field shares one array/element type `A`, so
+switching backend or floating-point precision (see the `Preferences`-backed `backend`/`floattype`
+constants in `Shakti.jl`) only ever touches [`Grid`](@ref)/`State` construction, not the kernels
+that operate on them. Build one with `State(grid)`, then populate it via
+[`set_initial_conditions!`](@ref).
+"""
 struct State{A <: AbstractArray}
 
     # Center fields
@@ -44,10 +56,33 @@ struct State{A <: AbstractArray}
     valid_y::A    # 1.0 where the y-face does NOT touch an OTHER_BASIN cell, else 0.0
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Allocates a zeroed cell-centered (`nx x ny`) field on `g`'s backend.
+"""
 initialize_center_field(g::Grid) = @zeros(g.nx, g.ny)
+
+"""
+$(TYPEDSIGNATURES)
+
+Allocates a zeroed x-face (`nx+1 x ny`) field on `g`'s backend.
+"""
 initialize_xface_field(g::Grid)  = @zeros(g.nx + 1, g.ny)
+
+"""
+$(TYPEDSIGNATURES)
+
+Allocates a zeroed y-face (`nx x ny+1`) field on `g`'s backend.
+"""
 initialize_yface_field(g::Grid)  = @zeros(g.nx, g.ny + 1)
 
+"""
+$(TYPEDSIGNATURES)
+
+Builds a [`State`](@ref) on `g`, with every field zeroed (`mask` defaults to all-`GROUNDED`) --
+see [`set_initial_conditions!`](@ref) to populate it with real data.
+"""
 function State(g::Grid)
 
     # Center fields

@@ -1,3 +1,11 @@
+"""
+$(TYPEDSIGNATURES)
+
+Physical constants and model parameters shared by every kernel, plus three precomputed
+"canonical" exponents (`n_exp`, `n_minus_1_exp`, `inv_n_exp`) used for fast exponentiation of
+Glen's-flow-law-style powers -- see the module-level note below the constructor for why. Build
+one with the keyword constructor below rather than this positional one directly.
+"""
 struct ModelParameters{F <: AbstractFloat, NE1, NE2, NE3}
     rho_w::F   # density of water
     rho_i::F   # density of ice
@@ -18,6 +26,20 @@ struct ModelParameters{F <: AbstractFloat, NE1, NE2, NE3}
     inv_n_exp::NE3     # canonical_exponent(1 / n)
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Builds a [`ModelParameters`](@ref) from keyword arguments (all have defaults), converting every
+value to `F` and precomputing the canonical Glen's-flow-law exponents.
+
+# Notes
+
+`omega`'s default (`1e-4`) deliberately differs from Table 2 of Sommers et al. (2018) (`0.001`):
+`0.001` puts the Reynolds range reached during channelization (`~1e3`-`1e4`) right in the flux
+law's steepest, hardest-to-converge transitional band (`omega*Re ~ O(1)-O(10)`), while `1e-4`
+pushes the same range into the flatter, near-linear part of the curve where Picard iteration
+actually converges (see `test/reproduce_section_3_3.jl`).
+"""
 function ModelParameters(;
     F::Type{<:AbstractFloat} = floattype,
     rho_w = 1000.0,
@@ -78,23 +100,21 @@ end
 # fractional `n` (e.g. 2.5) still works correctly, just without the
 # speedup -- pow's fallback method is exactly `x^y` either way.
 """
-    canonical_exponent(n)
+$(TYPEDSIGNATURES)
 
-Returns `n` converted to a plain `Int` if it has an exact integer value
-(e.g. `3.0 -> 3`), otherwise returns `n` unchanged. See the module-level
-note above for why/how this is used.
+Returns `n` converted to a plain `Int` if it has an exact integer value (e.g. `3.0 -> 3`),
+otherwise returns `n` unchanged. See the module-level note above for why/how this is used.
 """
 canonical_exponent(n::AbstractFloat) = isinteger(n) ? Int(n) : n
 canonical_exponent(n::Integer) = n
 
 """
-    pow(x, n)
+$(TYPEDSIGNATURES)
 
-`x^n`, dispatching on `n`'s type: `n::Integer` takes Julia's fast
-power-by-squaring path; `n::AbstractFloat` falls back to the general (much
-slower) floating-point-exponent path. Meant to be called with an exponent
-that has already been through `canonical_exponent` -- see the module-level
-note above.
+`x^n`, dispatching on `n`'s type: `n::Integer` takes Julia's fast power-by-squaring path;
+`n::AbstractFloat` falls back to the general (much slower) floating-point-exponent path. Meant to
+be called with an exponent that has already been through [`canonical_exponent`](@ref) -- see the
+module-level note above.
 """
 @inline pow(x, n::Integer) = x^n
 @inline pow(x, n::AbstractFloat) = x^n

@@ -1,3 +1,17 @@
+"""
+A Julia solver for the SHAKTI subglacial hydrology model (Sommers and others, 2018,
+https://doi.org/10.3389/feart.2018.00104): a continuum model of hydraulic head, effective
+pressure, water flux, and drainage-system geometry (gap height) beneath an ice sheet, that
+transitions smoothly between laminar (distributed) and turbulent (channelized) flow regimes
+rather than treating them as separate model components.
+
+Built on `Grid`/`State`/`Simulation` (see their own docstrings): construct a `Grid` and `State`,
+populate the state with [`set_initial_conditions!`](@ref), wrap everything in a `Simulation`
+(choosing a linear solver, sliding law, melt input, and observer), then call [`run!`](@ref). Runs
+on CPU (`Threads`) or GPU (`CUDA`/`Metal`) backends, selected via `Preferences`-backed
+`backend`/`floattype` constants (see `LocalPreferences.toml`) rather than a runtime argument, so
+every kernel can be compiled once for the right array/element type.
+"""
 module Shakti
 
 using Preferences
@@ -13,6 +27,7 @@ using HDF5
 using JLD2
 using CSV
 using CairoMakie
+using DocStringExtensions
 
 const backend = @load_preference("backend", "Threads")
 const floattype_str = @load_preference("floattype", "Float64")

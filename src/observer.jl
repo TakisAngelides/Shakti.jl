@@ -1,14 +1,68 @@
+"""
+$(TYPEDSIGNATURES)
+
+Which file format an [`IOObserver`](@ref) writes to -- multiple dispatch on the concrete subtype
+(see `openfile!`/`write2file!`/`reopenfile!`/`close_handle!` below) picks
+[`NetCDFFileWriter`](@ref), [`HDF5FileWriter`](@ref), [`JLD2FileWriter`](@ref), or
+[`CSVFileWriter`](@ref).
+"""
 abstract type AbstractFileWriter end
 
+"""
+$(TYPEDSIGNATURES)
+
+Records the full tracked fields at each tracked time, one dataset per field (shape `field's own
+shape..., ntimes`), written one time-slice at a time.
+"""
 struct NetCDFFileWriter <: AbstractFileWriter end
+
+"""
+$(TYPEDSIGNATURES)
+
+Same recording scheme as [`NetCDFFileWriter`](@ref), backed by HDF5 instead.
+"""
 struct HDF5FileWriter <: AbstractFileWriter end
+
+"""
+$(TYPEDSIGNATURES)
+
+Same recording scheme as [`NetCDFFileWriter`](@ref), backed by JLD2 instead (no preallocated
+shape -- each tracked time is its own key).
+"""
 struct JLD2FileWriter <: AbstractFileWriter end
+
+"""
+$(TYPEDSIGNATURES)
+
+Records one row per tracked time, with min/max/mean columns per tracked field -- unlike the other
+writers, meant for scalar summaries (e.g. domain-averaged melt rate over time), not full grids.
+"""
 struct CSVFileWriter <: AbstractFileWriter end
 
+"""
+$(TYPEDSIGNATURES)
+
+How simulation output is recorded each timestep -- multiple dispatch on the concrete subtype
+picks [`NoObserver`](@ref) (nothing recorded), [`LiveObserver`](@ref) (kept in RAM), or
+[`IOObserver`](@ref) (written to disk). See [`prepare!`](@ref)/[`observe!`](@ref)/
+[`finalize!`](@ref), called from `run!` (`run.jl`).
+"""
 abstract type AbstractObserver end
 
+"""
+$(TYPEDSIGNATURES)
+
+Records nothing. Used when `tracked_obs` is empty (see `Simulation`'s constructor).
+"""
 struct NoObserver <: AbstractObserver end
 
+"""
+$(TYPEDSIGNATURES)
+
+Writes `tracked_obs` (names of `State` fields) at each of `tracked_times` (timestep indices) to
+`path`, in the file format given by `fr`. `handle` is set by [`prepare!`](@ref)/[`resume!`](@ref)
+and holds the open file/dataset handle.
+"""
 struct IOObserver{FR <: AbstractFileWriter} <: AbstractObserver
     tracked_obs::Vector{String}   # names of State fields to record
     tracked_times::AbstractVector{Int}      # time step indices at which to record
@@ -17,26 +71,53 @@ struct IOObserver{FR <: AbstractFileWriter} <: AbstractObserver
     handle::Ref{Any}              # set by prepare!; holds the open file/dataset handle
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Builds an [`IOObserver`](@ref) with an unopened handle (set later by [`prepare!`](@ref)).
+"""
 IOObserver(tracked_obs, tracked_times, fr, path) = IOObserver(tracked_obs, tracked_times, fr, path, Ref{Any}(nothing))
 
+"""
+$(TYPEDSIGNATURES)
+
+Keeps `tracked_obs` (names of `State` fields) at each of `tracked_times` (timestep indices) in
+memory (`history`, one preallocated array per tracked observable) rather than writing to disk.
+"""
 struct LiveObserver <: AbstractObserver # no writing to files, just arrays kept in RAM
     tracked_obs::Vector{String}   # names of State fields to record
     tracked_times::AbstractVector{Int}      # time step indices at which to record
     history::Dict{String, Array}  # set by prepare!; one preallocated array per tracked observable
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Builds a [`LiveObserver`](@ref) with an empty `history` (populated later by [`prepare!`](@ref)).
+"""
 LiveObserver(tracked_obs, tracked_times) = LiveObserver(tracked_obs, tracked_times, Dict{String, Array}())
 
-# Resolves a tracked observable's name (as given by the user in tracked_obs)
-# to the actual State field, e.g. get_observable(state, "h") -> state.h.
-# Validity of `name` (i.e. that it's really a State field) is checked once,
-# at Simulation-construction time (see simulation.jl), not on every call here.
+"""
+$(TYPEDSIGNATURES)
+
+Resolves a tracked observable's name (as given by the user in `tracked_obs`) to the actual
+`State` field, e.g. `get_observable(state, "h") -> state.h`. Validity of `name` (i.e. that it's
+really a `State` field) is checked once, at `Simulation`-construction time (see `simulation.jl`),
+not on every call here.
+"""
 get_observable(state::State, name::String) = getfield(state, Symbol(name))
 
 # =============================================================================
 # Observer setup, called once before the time loop
 # =============================================================================
 
+"""
+$(TYPEDSIGNATURES)
+
+Sets up `observer` before the time loop starts -- a no-op for [`NoObserver`](@ref); preallocates
+`history` for [`LiveObserver`](@ref); opens the output file for [`IOObserver`](@ref) (see
+`openfile!`, dispatched on `observer.fr`).
+"""
 prepare!(observer::NoObserver, state::State) = nothing
 
 function prepare!(observer::LiveObserver, state::State)
@@ -60,6 +141,13 @@ end
 # scalar summaries (e.g. domain-averaged melt rate over time), not full grids.
 csv_stat_colnames(tracked_obs) = (:t, :total_time, (Symbol(name * suffix) for name in tracked_obs for suffix in ("_min", "_max", "_mean"))...)
 
+"""
+$(TYPEDSIGNATURES)
+
+Creates and opens `observer.path` for writing under `observer.fr`'s format, sized to hold every
+tracked field at every tracked time. Called once by [`prepare!`](@ref); returns the handle stored
+in `observer.handle`.
+"""
 function openfile!(fr::NetCDFFileWriter, observer::IOObserver, state::State)
     ntimes = length(observer.tracked_times)
     tdim = NcDim("time", ntimes)
@@ -110,6 +198,16 @@ end
 # recovered, so it just starts a fresh (gap-containing) buffer via prepare!.
 # =============================================================================
 
+"""
+$(TYPEDSIGNATURES)
+
+Sets up `observer` when resuming from a checkpoint at `resume_t` (see `checkpoint.jl`/`run.jl`),
+instead of [`prepare!`](@ref): a no-op for [`NoObserver`](@ref) (nothing to resume);
+[`LiveObserver`](@ref) just starts a fresh (gap-containing) buffer via `prepare!`, since its
+history lived only in the crashed process's RAM and can't be recovered; [`IOObserver`](@ref)
+reopens its existing output file for further writes instead of truncating it (see `reopenfile!`),
+so the resumed run continues writing into the same file.
+"""
 resume!(observer::NoObserver, state::State, resume_t::Int) = nothing
 resume!(observer::LiveObserver, state::State, resume_t::Int) = prepare!(observer, state)
 
@@ -122,6 +220,12 @@ end
 # shape up front, so reopening for write and overwriting a given time index
 # is always well-defined -- no special handling needed for a tstep the
 # crashed run already wrote.
+"""
+$(TYPEDSIGNATURES)
+
+Reopens `observer.path` for further writes when resuming from a checkpoint at `resume_t`,
+instead of truncating it via [`openfile!`](@ref). Called once by [`resume!`](@ref).
+"""
 reopenfile!(fr::NetCDFFileWriter, observer::IOObserver, state::State, resume_t::Int) = NetCDF.open(observer.path; mode = NetCDF.NC_WRITE)
 reopenfile!(fr::HDF5FileWriter, observer::IOObserver, state::State, resume_t::Int) = HDF5.h5open(observer.path, "r+")
 
@@ -146,6 +250,14 @@ end
 # Per-time-step observation
 # =============================================================================
 
+"""
+$(TYPEDSIGNATURES)
+
+Records `state` at timestep `t` (elapsed time `total_time`) if `t` is one of `observer`'s tracked
+times -- a no-op for [`NoObserver`](@ref); appends into `history` for [`LiveObserver`](@ref);
+writes to disk for [`IOObserver`](@ref) (see `write2file!`, dispatched on `observer.fr`). Called
+once per timestep from `run!` (`run.jl`).
+"""
 observe!(observer::NoObserver, state::State, t, total_time) = nothing
 
 function observe!(observer::LiveObserver, state::State, t, total_time)
@@ -165,6 +277,12 @@ function observe!(observer::IOObserver, state::State, t, total_time)
     return nothing
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Writes `state`'s tracked fields (and `total_time`) into `observer`'s open file at time-slice
+`idx`. Called once per tracked timestep by [`observe!`](@ref).
+"""
 function write2file!(fr::NetCDFFileWriter, observer::IOObserver, state::State, idx::Int, total_time::AbstractFloat)
     nc = observer.handle[]
     NetCDF.putvar(nc, "time", [total_time]; start = [idx], count = [1])
@@ -220,6 +338,13 @@ end
 # Teardown, called once after the time loop
 # =============================================================================
 
+"""
+$(TYPEDSIGNATURES)
+
+Tears down `observer` after the time loop finishes -- a no-op for [`NoObserver`](@ref)/
+[`LiveObserver`](@ref) (nothing to close); closes the output file/handle for [`IOObserver`](@ref).
+Called once from `run!` (`run.jl`).
+"""
 finalize!(observer::AbstractObserver, state::State) = nothing # NoObserver/LiveObserver hold nothing to close
 
 function finalize!(observer::IOObserver, state::State)

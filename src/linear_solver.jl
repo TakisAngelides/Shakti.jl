@@ -2,6 +2,14 @@
 # cell's own row (h_j = g_j) and by any GROUNDED neighbour that needs to fold
 # g_j into its rhs instead of coupling to it in the matrix (see the symmetric
 # elimination comment in update_SALS_kernel!/update_MFLS_kernel!).
+"""
+$(TYPEDSIGNATURES)
+
+Known hydraulic head at a Dirichlet (`OCEAN`/`LAND`) cell -- shared by that cell's own row
+(`h_j = g_j`) and by any `GROUNDED` neighbour that needs to fold `g_j` into its rhs instead of
+coupling to it in the matrix (see the symmetric-elimination note on [`update_SALS!`](@ref)/
+[`update_MFLS!`](@ref)).
+"""
 @inline function dirichlet_head(m, zb_ij, p_atm, rho_w, ggrav)
     if m == OCEAN
         # Hydrostatic ocean pressure at the bed: zb is elevation relative to sea
@@ -16,11 +24,49 @@
     end
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+How the linearized elliptic equation for `h` (one per Picard iteration) is solved -- multiple
+dispatch on the concrete subtype picks a direct ([`AbstractDirectSolver`](@ref)) or iterative
+([`AbstractIterativeSolver`](@ref)) method, via [`solve_linear_system!`](@ref).
+"""
 abstract type AbstractLinearSolver end
+
+"""
+$(TYPEDSIGNATURES)
+
+A direct linear solver (currently just [`CholeskyDirectSolver`](@ref)).
+"""
 abstract type AbstractDirectSolver <: AbstractLinearSolver end
+
+"""
+$(TYPEDSIGNATURES)
+
+An iterative linear solver (currently just [`CGIterativeSolver`](@ref)).
+"""
 abstract type AbstractIterativeSolver <: AbstractLinearSolver end
 
+"""
+$(TYPEDSIGNATURES)
+
+How the assembled linear system is represented -- multiple dispatch on the concrete subtype picks
+between an explicit sparse matrix ([`SparseAssembledLinearSystem`](@ref), CPU-only, needed by
+[`CholeskyDirectSolver`](@ref)) and a matrix-free stencil representation
+([`MatrixFreeLinearSystem`](@ref), GPU-capable).
+"""
 abstract type AbstractLinearSystem end
+
+"""
+$(TYPEDSIGNATURES)
+
+The linear system as an explicit sparse matrix `M` (5-point stencil) and dense `rhs`, plus index
+arrays (`idxP`/`idxE`/`idxW`/`idxN`/`idxS`) mapping each grid cell to where its diagonal/neighbour
+coefficients live in `M.nzval` -- built once (the sparsity pattern never changes across Picard
+iterations/timesteps) so [`update_SALS!`](@ref) only ever rewrites values, not structure. CPU-only
+(`SparseArrays`/CHOLMOD have no GPU path); see [`MatrixFreeLinearSystem`](@ref) for the
+GPU-capable alternative.
+"""
 struct SparseAssembledLinearSystem{F <: AbstractFloat} <: AbstractLinearSystem
     M::SparseMatrixCSC{F, Int}
     rhs::Vector{F}
@@ -31,6 +77,15 @@ struct SparseAssembledLinearSystem{F <: AbstractFloat} <: AbstractLinearSystem
     idxS::Matrix{Int}
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+The linear system as per-cell stencil coefficients (`aP`/`aE`/`aW`/`aN`/`aS`, one value per grid
+cell each) with no sparse matrix ever materialized -- the matvec ([`stencil_matvec_kernel!`](@ref)
+via [`StencilOperator`](@ref)) applies the stencil directly. GPU-capable (every array lands on the
+active backend, see the constructor below); the alternative to
+[`SparseAssembledLinearSystem`](@ref) for backends without a sparse-direct-solver path.
+"""
 struct MatrixFreeLinearSystem{F <: AbstractFloat, A <: AbstractMatrix{F}, V <: AbstractVector{F}} <: AbstractLinearSystem
     aP::A # diagonal coefficient, one per grid cell
     aE::A # east-neighbor coupling (stored positive; the matvec applies the minus sign)
@@ -40,6 +95,12 @@ struct MatrixFreeLinearSystem{F <: AbstractFloat, A <: AbstractMatrix{F}, V <: A
     rhs::V # flat, so it can be handed to Krylov.jl directly like SparseAssembledLinearSystem's rhs
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Builds an empty (all-zero) [`MatrixFreeLinearSystem`](@ref) on grid `g`, with every array
+allocated on `g`'s active backend.
+"""
 function MatrixFreeLinearSystem(g::Grid{F}) where F
 
     # @zeros/initialize_center_field (not plain zeros/Array) so these land on
@@ -57,12 +118,27 @@ function MatrixFreeLinearSystem(g::Grid{F}) where F
 
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Direct solve via sparse Cholesky factorization (`SparseArrays`/CHOLMOD) of the assembled
+[`SparseAssembledLinearSystem`](@ref) -- the fastest solver at every grid size benchmarked so far
+(see `test/benchmarks/`), but CPU-only. Refactorizes in place each solve, reusing the symbolic
+factorization since the sparsity pattern never changes.
+"""
 struct CholeskyDirectSolver{FACT, SALS <: SparseAssembledLinearSystem, V <: AbstractVector} <: AbstractDirectSolver
     sals::SALS
     fact::FACT
     h_vec::V # ldiv!'s preallocated output buffer (vectorized hydraulic head)
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Builds a [`SparseAssembledLinearSystem`](@ref) on grid `g`: a 5-point-stencil sparse matrix `M`
+(placeholder zero off-diagonal values, filled in properly by [`update_SALS!`](@ref) each solve)
+and the index arrays needed to address into `M.nzval` by grid coordinate.
+"""
 function SparseAssembledLinearSystem(g::Grid{F}) where F
 
     # Create a sparse matrix M representing the 5-point stencil for the 2D Laplacian operator on a grid of size nx by ny. The matrix is constructed in a way that each grid point corresponds to a row in the matrix, and the non-zero entries correspond to the neighboring points (north, south, east, west) and the point itself (center).
@@ -119,6 +195,12 @@ function SparseAssembledLinearSystem(g::Grid{F}) where F
 
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Builds a [`CholeskyDirectSolver`](@ref) on grid `g`. CPU (`"Threads"` backend) only -- errors at
+construction time (rather than deeper in the solve) under any other backend.
+"""
 function CholeskyDirectSolver(g::Grid{F}) where F
 
     # SparseArrays' sparse Cholesky/CHOLMOD has no GPU path at all, on any
@@ -227,6 +309,15 @@ end
     return
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Rebuilds `sals.M`/`sals.rhs` in place from the current `s`/`p` (mask, head, transmissivity, ...):
+`GROUNDED` cells get the diffusion + Newton-linearized creep-closure stencil, `OCEAN`/`LAND` cells
+get a Dirichlet row, `OTHER_BASIN` cells get a frozen (`h` held at its current value) row. `M`
+stays exactly symmetric: a `GROUNDED` cell's Dirichlet neighbours are eliminated by folding their
+known head into `rhs` rather than left as a one-sided matrix coupling.
+"""
 function update_SALS!(sals::SparseAssembledLinearSystem, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, mi::AbstractMeltInput)
 
     # Unpack the solver's preallocated matrix/rhs/index-map workspace (see CholeskyDirectSolver's docstring)
@@ -315,6 +406,13 @@ end
     return
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Rebuilds `mfls.aP`/`aE`/`aW`/`aN`/`aS`/`rhs` in place from the current `s`/`p` -- the
+[`MatrixFreeLinearSystem`](@ref) counterpart of [`update_SALS!`](@ref) (same per-cell logic, no
+sparse matrix to address into).
+"""
 function update_MFLS!(mfls::MatrixFreeLinearSystem, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, mi::AbstractMeltInput)
 
     fill!(mfls.aP, 0)
@@ -352,6 +450,13 @@ end
     return
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Wraps a [`MatrixFreeLinearSystem`](@ref)'s stencil coefficients as a `LinearAlgebra`-compatible
+linear operator (`eltype`, `size`, `mul!` are implemented below), so Krylov.jl's `cg!` can use it
+directly without ever materializing a matrix.
+"""
 struct StencilOperator{F <: AbstractFloat, A <: AbstractMatrix{F}}
     aP::A
     aE::A
@@ -362,6 +467,11 @@ struct StencilOperator{F <: AbstractFloat, A <: AbstractMatrix{F}}
     ny::Int
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Builds a [`StencilOperator`](@ref) view of `mfls`'s current coefficients.
+"""
 StencilOperator(mfls::MatrixFreeLinearSystem) = StencilOperator(mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, size(mfls.aP, 1), size(mfls.aP, 2))
 
 Base.eltype(::StencilOperator{F}) where F = F
@@ -380,6 +490,12 @@ end
 # as `M = Diagonal(d), ldiv = true`, so Krylov calls ldiv!(y, Diagonal(d), x)
 # i.e. y = x ./ d -- LinearAlgebra.Diagonal already implements this, no
 # custom preconditioner type needed.
+"""
+$(TYPEDSIGNATURES)
+
+Refreshes the Jacobi (diagonal) preconditioner vector `d` from `sals`'s current diagonal
+(`sals.M.nzval[sals.idxP]`). Passed to Krylov.jl as `M = Diagonal(d), ldiv = true`.
+"""
 function update_diag_precond!(d::AbstractVector, sals::SparseAssembledLinearSystem)
     nzval = sals.M.nzval
     idxP = sals.idxP
@@ -389,11 +505,24 @@ function update_diag_precond!(d::AbstractVector, sals::SparseAssembledLinearSyst
     return d
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Refreshes the Jacobi (diagonal) preconditioner vector `d` from `mfls`'s current `aP`, the
+[`MatrixFreeLinearSystem`](@ref) counterpart of the `SparseAssembledLinearSystem` method above.
+"""
 function update_diag_precond!(d::AbstractVector, mfls::MatrixFreeLinearSystem)
     d .= vec(mfls.aP)
     return d
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Solves the linearized elliptic equation for `h`, storing the result in `s.h` -- the
+[`CholeskyDirectSolver`](@ref) method: rebuilds the system ([`update_SALS!`](@ref)),
+refactorizes in place, and solves via `ldiv!`.
+"""
 function solve_linear_system!(ls::CholeskyDirectSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, mi::AbstractMeltInput)
 
     update_SALS!(ls.sals, s, g, p, kfs, mi) # prepare the new linear system sparse matrix M and rhs
@@ -406,6 +535,26 @@ function solve_linear_system!(ls::CholeskyDirectSolver, s::State, g::Grid, p::Mo
 
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Iterative solve via preconditioned conjugate gradient (Krylov.jl's `cg!`) -- valid because the
+assembled operator is symmetric positive definite (diffusion with reciprocal face fluxes plus a
+strictly positive diagonal reaction term from the Newton-linearized creep closure, Dirichlet
+neighbours eliminated symmetrically). Works over either linear-system representation
+([`SparseAssembledLinearSystem`](@ref) or [`MatrixFreeLinearSystem`](@ref), chosen via the `LSy`
+type parameter at construction, see the constructors below) and warm-starts from the previous
+head each solve.
+
+# Notes
+
+`precond` picks the preconditioner: `nothing` for plain Jacobi, or an `AMGPreconditioner`/
+`ChebyshevPreconditioner` (see `preconditioner.jl`) for a much faster-converging accelerated
+preconditioner -- AMG is the default for `SparseAssembledLinearSystem` (near mesh-independent CG
+iteration counts; measured to consistently beat both plain Jacobi and Chebyshev, see
+`test/benchmarks/`) but is CPU/`SparseMatrixCSC`-only, so `MatrixFreeLinearSystem` defaults to
+plain Jacobi with Chebyshev available as a GPU-capable accelerated option instead.
+"""
 struct CGIterativeSolver{LSy <: AbstractLinearSystem, WS, V <: AbstractVector, P} <: AbstractIterativeSolver
     lsy::LSy
     ws::WS # workspace
@@ -440,6 +589,14 @@ end
 # chebyshev_degree = nothing together give plain Jacobi. amg is SALS-only
 # (AlgebraicMultigrid.jl has no GPU array support), hence defaulting to
 # false and not offered at all on the MatrixFreeLinearSystem constructor below.
+"""
+$(TYPEDSIGNATURES)
+
+Builds a [`CGIterativeSolver`](@ref) over a [`SparseAssembledLinearSystem`](@ref) on grid `g`.
+`amg = true` (default) opts into `AMGPreconditioner`; `chebyshev_degree` (an `Int`) opts into
+`ChebyshevPreconditioner` instead (mutually exclusive with `amg`); both `false`/`nothing` gives
+plain Jacobi. CPU-only, same reasoning as [`CholeskyDirectSolver`](@ref).
+"""
 function CGIterativeSolver(g::Grid{F}, ::Type{SparseAssembledLinearSystem}; chebyshev_degree::Union{Nothing, Int} = nothing, chebyshev_nsteps_estimate::Int = 15, amg::Bool = true) where F
 
     # Krylov.jl's sparse matvec (SparseArrays.mul!) is CPU-only, same reasoning as CholeskyDirectSolver.
@@ -462,6 +619,15 @@ function CGIterativeSolver(g::Grid{F}, ::Type{SparseAssembledLinearSystem}; cheb
 
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Builds a [`CGIterativeSolver`](@ref) over a [`MatrixFreeLinearSystem`](@ref) on grid `g`
+(GPU-capable). `chebyshev_degree` (an `Int`) opts into `ChebyshevPreconditioner`; `nothing`
+(default) gives plain Jacobi. `amg = true` errors -- `AMGPreconditioner` needs a
+`SparseMatrixCSC`, use the [`CGIterativeSolver`](@ref) constructor over
+[`SparseAssembledLinearSystem`](@ref) instead.
+"""
 function CGIterativeSolver(g::Grid{F}, ::Type{MatrixFreeLinearSystem}; chebyshev_degree::Union{Nothing, Int} = nothing, chebyshev_nsteps_estimate::Int = 15, amg::Bool = false) where F
 
     amg && error("AMGPreconditioner is CPU/SparseMatrixCSC-only (AlgebraicMultigrid.jl has no GPU array support); use CGIterativeSolver(g, SparseAssembledLinearSystem; amg = true) instead, or chebyshev_degree here for a GPU-capable accelerated preconditioner.")
@@ -493,6 +659,13 @@ function _cg_precond!(ls::CGIterativeSolver{<:SparseAssembledLinearSystem, WS, V
     return ls.precond
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Solves the linearized elliptic equation for `h`, storing the result in `s.h` -- the
+[`CGIterativeSolver`](@ref) over [`SparseAssembledLinearSystem`](@ref) method: rebuilds the
+system, refreshes the preconditioner, and runs `cg!` warm-started from the current `s.h`.
+"""
 function solve_linear_system!(ls::CGIterativeSolver{<:SparseAssembledLinearSystem}, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, mi::AbstractMeltInput)
 
     update_SALS!(ls.lsy, s, g, p, kfs, mi) # prepare the new linear system sparse matrix M and rhs
@@ -510,6 +683,13 @@ function solve_linear_system!(ls::CGIterativeSolver{<:SparseAssembledLinearSyste
 
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Solves the linearized elliptic equation for `h`, storing the result in `s.h` -- the
+[`CGIterativeSolver`](@ref) over [`MatrixFreeLinearSystem`](@ref) method, using
+[`StencilOperator`](@ref) as `cg!`'s matvec.
+"""
 function solve_linear_system!(ls::CGIterativeSolver{<:MatrixFreeLinearSystem}, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, mi::AbstractMeltInput)
 
     update_MFLS!(ls.lsy, s, g, p, kfs, mi)

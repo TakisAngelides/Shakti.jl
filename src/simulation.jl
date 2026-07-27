@@ -1,15 +1,61 @@
+"""
+$(TYPEDSIGNATURES)
+
+How the hydraulic head is advanced each timestep -- multiple dispatch on the concrete subtype
+(see [`step_h!`](@ref) in `run.jl`) picks between [`EllipticHeadScheme`](@ref) (Picard iteration,
+used when `p.e_v == 0`) and [`ParabolicHeadScheme`](@ref) (not yet implemented).
+"""
 abstract type AbstractHeadScheme end
 
+"""
+$(TYPEDSIGNATURES)
+
+Head scheme for `p.e_v != 0` (nonzero englacial storage void ratio) -- not yet implemented, see
+`run.jl`'s `step_h!`.
+"""
 struct ParabolicHeadScheme <: AbstractHeadScheme end
+
+"""
+$(TYPEDSIGNATURES)
+
+Head scheme used when `p.e_v == 0`: each timestep, `ps` (a [`PicardSolver`](@ref)) is run to
+convergence via Picard iteration.
+"""
 struct EllipticHeadScheme{PS <: PicardSolver} <: AbstractHeadScheme
     ps::PS
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+How the gap height `b` is time-integrated each timestep -- multiple dispatch on the concrete
+subtype picks between [`ExplicitGapScheme`](@ref) and [`ImplicitGapScheme`](@ref) (see
+`compute_b!` in `gap_height.jl`).
+"""
 abstract type AbstractGapScheme end
 
+"""
+$(TYPEDSIGNATURES)
+
+Explicit (forward-Euler) update of `b`: cheaper per step, but only stable for small enough `dt`.
+"""
 struct ExplicitGapScheme <: AbstractGapScheme end
+
+"""
+$(TYPEDSIGNATURES)
+
+Implicit (backward-Euler) update of `b`: unconditionally stable, the default choice.
+"""
 struct ImplicitGapScheme <: AbstractGapScheme end
 
+"""
+$(TYPEDSIGNATURES)
+
+Everything needed to run a subglacial hydrology simulation: the grid, state, model parameters,
+and every "which scheme/law" choice (head, gap, sensible-heat, K-face, melt-input, sliding-law)
+bundled together with the observer that records output. Build one with the keyword constructor
+below (not this positional one directly), then call [`run!`](@ref).
+"""
 struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHeadScheme, GS <: AbstractGapScheme, SHS <: AbstractSensibleHeatScheme, O <: AbstractObserver, G <: Grid, S <: State, MI <: AbstractMeltInput, KFS <: AbstractKFaceScheme, SL <: AbstractSlidingLaw}
     tsteps::Int
     dt::F
@@ -27,6 +73,24 @@ struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHea
     total_time::Base.RefValue{F} # elapsed simulation time in seconds; a Ref so run!/step_h! can update it in place despite Simulation itself being immutable (same reason PicardSolver -- nested under hs -- is a mutable struct)
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Builds a [`Simulation`](@ref): `tsteps` steps of size `dt` (seconds), on `grid`/`state`, with
+model parameters `p`, melt input `mi`, and sliding law `sl`.
+
+# Notes
+
+- Head scheme: [`EllipticHeadScheme`](@ref) if `p.e_v == 0` (requires `ps`, a
+  [`PicardSolver`](@ref)), else [`ParabolicHeadScheme`](@ref).
+- `gap_scheme_choice`: `"explicit"` or `"implicit"` (see [`AbstractGapScheme`](@ref)).
+- Sensible-heat scheme: off automatically ([`NoSensibleHeat`](@ref)) if either `p.ct` or `p.cw` is
+  zero, else [`WithSensibleHeat`](@ref).
+- `k_face_choice`: `"arithmetic"` or `"harmonic"` (see [`AbstractKFaceScheme`](@ref)).
+- Observer: [`NoObserver`](@ref) if `tracked_obs` is empty; otherwise `which_observer` must be
+  `"IO"` (writes to `path` via `which_file_writer`, one of `"NetCDF"`/`"HDF5"`/`"JLD2"`/`"CSV"`,
+  at `tracked_times`) or `"Live"` (keeps `tracked_times` in memory instead of writing to disk).
+"""
 function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::Vector{String}, mi::AbstractMeltInput, sl::AbstractSlidingLaw; ps = nothing, which_observer = nothing, which_file_writer = nothing, tracked_times = nothing, path = nothing, k_face_choice = "arithmetic", verbose = false)
 
     # Check that all tracked observables are valid State fields

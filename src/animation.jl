@@ -16,6 +16,16 @@
 # frame, so titles below label frames by real time-step number rather than by
 # save order.
 
+"""
+$(TYPEDSIGNATURES)
+
+Renders an animated `.mp4` of a 1D slice (row `j`) of a tracked field's time history `hist`
+(shape `field's own shape..., ntimes`, e.g. from [`LiveObserver`](@ref)'s `history[name]`) to
+`filename`, one frame per tracked time, labeled by the real timestep number (`tracked_times`).
+`moulin_ij` (a vector of `(i,j)` grid indices, see [`get_moulin_ij`](@ref)) optionally overlays
+moulin locations on row `j` as red markers. Uses CairoMakie's software rasterizer, so this works
+on headless HPC nodes as well as locally.
+"""
 function make_mp4_mid(hist::AbstractArray, tracked_times, j, moulin_ij; filename, show_moulins::Bool = true)
     ntimes = size(hist, ndims(hist))
     ymin   = minimum(hist)
@@ -43,6 +53,12 @@ function make_mp4_mid(hist::AbstractArray, tracked_times, j, moulin_ij; filename
     end
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Renders an animated `.mp4` heatmap of a tracked field's full 2D time history `hist`, the 2D
+counterpart of [`make_mp4_mid`](@ref) above (same arguments otherwise).
+"""
 function make_mp4_2d(hist::AbstractArray, tracked_times, moulin_ij; filename, show_moulins::Bool = true)
     ntimes = size(hist, ndims(hist))
     vmin   = minimum(hist)
@@ -65,24 +81,30 @@ function make_mp4_2d(hist::AbstractArray, tracked_times, moulin_ij; filename, sh
     end
 end
 
-# Convenience wrappers so you can call these directly off a LiveObserver
-# instead of manually unpacking obs.history[name]/obs.tracked_times every time.
+"""
+$(TYPEDSIGNATURES)
+
+Convenience wrapper: [`make_mp4_mid`](@ref) directly off a [`LiveObserver`](@ref)'s `name`d
+tracked field, instead of manually unpacking `obs.history[name]`/`obs.tracked_times`.
+"""
 make_mp4_mid(obs::LiveObserver, name::String, j, moulin_ij; filename, show_moulins::Bool = true) =
     make_mp4_mid(obs.history[name], obs.tracked_times, j, moulin_ij; filename = filename, show_moulins = show_moulins)
 
+"""
+$(TYPEDSIGNATURES)
+
+Convenience wrapper: [`make_mp4_2d`](@ref) directly off a [`LiveObserver`](@ref)'s `name`d tracked
+field.
+"""
 make_mp4_2d(obs::LiveObserver, name::String, moulin_ij; filename, show_moulins::Bool = true) =
     make_mp4_2d(obs.history[name], obs.tracked_times, moulin_ij; filename = filename, show_moulins = show_moulins)
 
-# Extracts (i,j) moulin locations from state.ieb (nonzero entries), so you
-# don't have to hand-build moulin_ij yourself.
-#
-# state.ieb may be GPU-resident (under a GPU backend): `findall` on it isn't
-# guaranteed to be implemented/efficient for every GPU array type, and the
-# comprehension below would need scalar getindex on its result either way --
-# disallowed on GPU arrays. Array(...) brings it to the host first (a
-# deliberate, one-off device->host transfer, same as observer.jl's
-# Array{Float64}(...) conversion -- this is a post-processing/plotting
-# convenience function, not a hot loop).
+"""
+$(TYPEDSIGNATURES)
+
+Extracts `(i,j)` moulin locations from `state.ieb`'s nonzero entries, so you don't have to
+hand-build `moulin_ij` yourself for [`make_mp4_mid`](@ref)/[`make_mp4_2d`](@ref).
+"""
 function get_moulin_ij(state::State)
     idxs = findall(!iszero, Array(state.ieb))
     return [(I[1], I[2]) for I in idxs]

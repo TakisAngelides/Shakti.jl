@@ -1,3 +1,16 @@
+"""
+$(TYPEDSIGNATURES)
+
+Populates `s` (built with [`State(::Grid)`](@ref), fields all zero) with a real starting state:
+the raw input fields (`mask`, `A_visc`, `zb`, `zs`, `b`, `G`, `ub_x`, `ub_y`, `ieb`, `taub_x`,
+`taub_y`) are copied in (converting to `s`'s backend/element type via `Data.Array`), then every
+derived field (`H`, `beta`, `abs_ub`, `po`, `pw`, `N`, `h`, gradients, `Re`, `b_x`/`b_y`,
+`q_x`/`q_y`, `taub_x`/`taub_y`, `mdot`, `K`) is computed from those in the same order the Picard
+loop itself would produce them, so `s` is immediately a valid state to time-step or Picard-solve
+from. `pw` is initialized to half of ice overburden pressure (`po/2`) as a generic starting
+guess -- not a converged solution, see the elliptic solver for that -- except where the mask
+calls for a prescribed Dirichlet value.
+"""
 function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, mi::AbstractMeltInput, sl::AbstractSlidingLaw, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
 
     # State's fields all share one array/element type, so any field's eltype

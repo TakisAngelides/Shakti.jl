@@ -4,6 +4,12 @@
     end
     return
 end
+
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.pw` (water pressure) from the current `s.h` (hydraulic head): `pw = rho_w*g*(h - zb)`.
+"""
 compute_pw!(s::State, p::ModelParameters) = (@parallel compute_pw_kernel!(s.pw, s.h, s.zb, p.rho_w, p.g); s)
 
 @parallel_indices (ix, iy) function compute_N_kernel!(N, po, pw)
@@ -12,4 +18,10 @@ compute_pw!(s::State, p::ModelParameters) = (@parallel compute_pw_kernel!(s.pw, 
     end
     return
 end
+
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.N` (effective pressure) from the current `s.po`/`s.pw`: `N = po - pw`.
+"""
 compute_N!(s::State) = (@parallel compute_N_kernel!(s.N, s.po, s.pw); s)

@@ -11,14 +11,29 @@
 # `0.0 == 0` is `true`), since mask only ever takes these four small
 # integer-valued floats.
 
-const GROUNDED    = 0 # dynamic hydrology solved here (Picard/Poisson + gap-height evolution)
-const OCEAN       = 1 # Dirichlet: pw = p_atm - rho_w*g*min(zb, 0), zb = bedrock elevation
-                       # relative to sea level (positive up), so a marine bed at zb < 0
-                       # gets the correct hydrostatic pressure at depth -zb
-const LAND        = 2 # Dirichlet: pw = p_atm (0.0 by default)
-const OTHER_BASIN = 3 # not solved here; frozen row. Any GROUNDED neighbour treats the shared face
-                       # as zero-flux (Neumann), and any face-based quantity (dhdx, dpwdx, q_x, ...)
-                       # touching this cell is zeroed.
+"""
+Mask value: dynamic hydrology solved here (Picard/Poisson elliptic solve + gap-height evolution).
+"""
+const GROUNDED    = 0
+
+"""
+Mask value: Dirichlet boundary, `pw = p_atm - rho_w*g*min(zb, 0)` (`zb` = bedrock elevation
+relative to sea level, positive up, so a marine bed at `zb < 0` gets the correct hydrostatic
+pressure at depth `-zb`).
+"""
+const OCEAN       = 1
+
+"""
+Mask value: Dirichlet boundary, `pw = p_atm` (`0.0` by default).
+"""
+const LAND        = 2
+
+"""
+Mask value: not solved here; frozen row. Any `GROUNDED` neighbour treats the shared face as
+zero-flux (Neumann), and any face-based quantity (`dhdx`, `dpwdx`, `q_x`, ...) touching this cell
+is zeroed.
+"""
+const OTHER_BASIN = 3
 
 # =============================================================================
 # Face-validity bookkeeping
@@ -64,10 +79,18 @@ end
 end
 
 """
-    compute_face_masks!(s)
+$(TYPEDSIGNATURES)
 
-Recomputes `s.valid_x`/`s.valid_y` from `s.mask`. Must be called (directly, or
-via `set_initial_conditions!`) any time `s.mask` changes.
+Recomputes `s.valid_x`/`s.valid_y` from `s.mask`. Must be called (directly, or via
+[`set_initial_conditions!`](@ref)) any time `s.mask` changes.
+
+# Notes
+
+A face is invalid iff either cell it connects is `OTHER_BASIN`: that cell's hydrology isn't
+solved, so any gradient computed across that face would spuriously reflect a frozen,
+non-evolving neighbour value rather than a real head/pressure difference. `LAND` and `OCEAN`
+faces are left valid, since those are genuine (Dirichlet) drainage boundaries where a real flux
+is physically meaningful.
 """
 function compute_face_masks!(s::State)
     @parallel compute_valid_x_kernel!(s.valid_x, s.mask)
@@ -108,7 +131,12 @@ end
 end
 
 """
-    apply_mask_to_sliding!(s)
+$(TYPEDSIGNATURES)
+
+Zeroes `s.ub_x`/`s.ub_y` on any face touching a non-`GROUNDED` cell: sliding velocity is only
+physically meaningful where grounded ice is actually sliding on a bed with an evolving hydraulic
+system, so a face touching `OTHER_BASIN` (or a domain boundary) cannot contribute melting via the
+`taub . ub` term, consistent with the Neumann condition imposed on the elliptic head solve there.
 """
 function apply_mask_to_sliding!(s::State)
     @parallel apply_mask_to_sliding_x_kernel!(s.ub_x, s.mask)

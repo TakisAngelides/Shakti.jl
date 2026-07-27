@@ -1,18 +1,59 @@
+"""
+$(TYPEDSIGNATURES)
+
+Whether/how the raw Picard update to `state.h` is damped before the next iteration -- multiple
+dispatch on the concrete subtype ([`NoHeadRelaxation`](@ref)/[`UnderHeadRelaxation`](@ref)) picks
+whether [`relax_h!`](@ref) is a no-op or an under-relaxation blend with the previous iteration's
+head.
+"""
 abstract type AbstractHeadRelaxation end
 
+"""
+$(TYPEDSIGNATURES)
+
+No damping: each Picard iteration's raw linear-solve result is used as-is.
+"""
 struct NoHeadRelaxation <: AbstractHeadRelaxation end
+
+"""
+$(TYPEDSIGNATURES)
+
+Under-relaxation: blends the new head with the previous iteration's head by `alpha` (see
+[`relax_h!`](@ref)), trading slower convergence for extra stability on stiff problems.
+"""
 struct UnderHeadRelaxation{F <: AbstractFloat}  <: AbstractHeadRelaxation
     alpha::F
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+No-op under [`NoHeadRelaxation`](@ref).
+"""
 relax_h!(::NoHeadRelaxation, state::State, h_prev) = state
 
+"""
+$(TYPEDSIGNATURES)
+
+Blends `state.h` with `h_prev` by `hr.alpha`: `h = alpha*h + (1-alpha)*h_prev`. Applied before
+anything downstream of `h` is recomputed, so the next iteration's coefficients are consistent
+with the relaxed `h`.
+"""
 function relax_h!(hr::UnderHeadRelaxation, state::State, h_prev)
     alpha = hr.alpha
     @. state.h = alpha * state.h + (1 - alpha) * h_prev
     return state
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Drives the Picard iteration used to solve the nonlinear elliptic equation for hydraulic head:
+holds the linear solver (`ls`), optional head relaxation (`hr`), iteration/tolerance settings,
+and the scratch fields (`h_prev`, `delta_h`) the convergence check needs. Build one with the
+keyword-free constructor below; `converged`/`last_iter` are updated in place by
+[`Picard_loop!`](@ref) each time it's called.
+"""
 mutable struct PicardSolver{F <: AbstractFloat, LS <: AbstractLinearSolver, HR <: AbstractHeadRelaxation, A <: AbstractArray}
     iters::Int
     tol::F
@@ -38,8 +79,19 @@ end
 # where each iteration does enough real work to make the sync proportionally
 # cheaper, might tip this the other way, but untested for now. Revisit if that
 # changes.
+"""
+Default value of [`PicardSolver`](@ref)'s `check_every`: `1` (check convergence every
+iteration). See the module-level note above for the benchmarking behind this choice.
+"""
 const DEFAULT_CHECK_EVERY = 1
 
+"""
+$(TYPEDSIGNATURES)
+
+Builds a [`PicardSolver`](@ref) with up to `iters` iterations, relative tolerance `tol`, linear
+solver `ls`, on grid `g`. `alpha` (in `(0, 1]`) enables [`UnderHeadRelaxation`](@ref) if given,
+otherwise [`NoHeadRelaxation`](@ref) is used.
+"""
 function PicardSolver(iters, tol, ls::AbstractLinearSolver, g::Grid; alpha = nothing, check_every::Int = DEFAULT_CHECK_EVERY)
 
     if alpha === nothing
@@ -54,15 +106,31 @@ function PicardSolver(iters, tol, ls::AbstractLinearSolver, g::Grid; alpha = not
     return PicardSolver(iters, floattype(tol), ls, false, 0, hr, h_prev, delta_h, check_every)
 end
 
-# state/grid/p/shs are taken as separate arguments (rather than a bundled
-# sim::Simulation) so this file doesn't need Simulation to already be
-# defined -- it can be included, and PicardSolver's struct fully written,
-# before simulation.jl, letting EllipticHeadScheme{PS} (simulation.jl) use a
-# proper PS <: PicardSolver bound instead of leaving PS unbounded.
+"""
+$(TYPEDSIGNATURES)
+
+Solves the nonlinear elliptic equation for hydraulic head at the current timestep via Picard
+iteration ([`Picard_loop!`](@ref)), updating `state` and `ps` (`ps.converged`/`ps.last_iter`) in
+place.
+
+# Notes
+
+`state`/`grid`/`p`/`shs` are taken as separate arguments (rather than a bundled `sim::Simulation`)
+so this file doesn't need `Simulation` to already be defined -- it can be included, and
+`PicardSolver`'s struct fully written, before `simulation.jl`, letting `EllipticHeadScheme{PS}`
+(`simulation.jl`) use a proper `PS <: PicardSolver` bound instead of leaving `PS` unbounded.
+"""
 function elliptic_solver!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, shs::AbstractSensibleHeatScheme, kfs::AbstractKFaceScheme, mi::AbstractMeltInput, sl::AbstractSlidingLaw)
     Picard_loop!(ps, state, grid, p, shs, kfs, mi, sl)
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Repeatedly calls [`Picard_iteration!`](@ref) (up to `ps.iters` times), checking convergence every
+`ps.check_every` iterations via a relative max-norm on the head update
+(`max|delta_h| / (max|h| + eps) < ps.tol`), and sets `ps.converged`/`ps.last_iter` accordingly.
+"""
 function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, shs::AbstractSensibleHeatScheme, kfs::AbstractKFaceScheme, mi::AbstractMeltInput, sl::AbstractSlidingLaw)
 
     s = state
@@ -104,6 +172,13 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
 
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+One Picard iteration: solves the linearized system for a new `h` ([`solve_linear_system!`](@ref)),
+optionally relaxes it ([`relax_h!`](@ref)), then refreshes every field that depends on the new `h`
+(`pw`, `N`, `q`/`Re`, `taub`, `mdot`, `K`) so the next iteration's linearization is consistent.
+"""
 function Picard_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation, s::State, g::Grid, p::ModelParameters, shs::AbstractSensibleHeatScheme, kfs::AbstractKFaceScheme, mi::AbstractMeltInput, sl::AbstractSlidingLaw, h_prev)
 
     solve_linear_system!(ls, s, g, p, kfs, mi)

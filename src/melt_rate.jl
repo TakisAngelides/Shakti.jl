@@ -1,45 +1,80 @@
-# Whether compute_mdot! includes the sensible-heat term. Decided ONCE in
-# Simulation's constructor (from p.ct/p.cw, see simulation.jl) rather than
-# every call, so turning the term off skips compute_sensible!'s kernel launch
-# and array traffic entirely instead of just multiplying its contribution by
-# zero -- same "dispatch on a type decided once outside the hot loop" idiom
-# as canonical_exponent/pow (model_parameters.jl) and the head/gap schemes
-# (simulation.jl). Defined here, next to their sole consumer (compute_mdot!
-# below), rather than in simulation.jl: elliptic_solver.jl (included before
-# simulation.jl for its own PicardSolver/Simulation ordering reasons) needs
-# AbstractSensibleHeatScheme to type-annotate shs, so this file is included
-# before elliptic_solver.jl too.
+"""
+$(TYPEDSIGNATURES)
+
+Whether `compute_mdot!` includes the sensible-heat term -- multiple dispatch on the concrete
+subtype ([`WithSensibleHeat`](@ref)/[`NoSensibleHeat`](@ref)), decided ONCE in `Simulation`'s
+constructor (from `p.ct`/`p.cw`, see `simulation.jl`) rather than every call, so turning the term
+off skips `compute_sensible!`'s kernel launch and array traffic entirely instead of just
+multiplying its contribution by zero -- same "dispatch on a type decided once outside the hot
+loop" idiom as `canonical_exponent`/`pow` (`model_parameters.jl`) and the head/gap schemes
+(`simulation.jl`).
+
+# Notes
+
+Defined here, next to their sole consumer ([`compute_mdot!`](@ref) below), rather than in
+`simulation.jl`: `elliptic_solver.jl` (included before `simulation.jl` for its own
+`PicardSolver`/`Simulation` ordering reasons) needs `AbstractSensibleHeatScheme` to type-annotate
+`shs`, so this file is included before `elliptic_solver.jl` too.
+"""
 abstract type AbstractSensibleHeatScheme end
 
+"""
+$(TYPEDSIGNATURES)
+
+Include the sensible-heat term (`ct*cw*rho_w*sens`) in [`compute_mdot!`](@ref).
+"""
 struct WithSensibleHeat <: AbstractSensibleHeatScheme end
+
+"""
+$(TYPEDSIGNATURES)
+
+Skip the sensible-heat term in [`compute_mdot!`](@ref) entirely (not just multiply by zero).
+"""
 struct NoSensibleHeat   <: AbstractSensibleHeatScheme end
 
-# How taub (basal shear stress, feeding compute_mdot!'s frictional-heating
-# term below) is obtained. The original SHAKTI paper (Sommers et al. 2018)
-# never actually specifies this -- taub is listed in its Table 1 as a state
-# variable with no formula, since it normally comes from a coupled ice-
-# dynamics solve; Table 2's constants have no friction coefficient at all.
-# So this is a real modeling choice, not just an internal solver detail --
-# multiple dispatch on sl::AbstractSlidingLaw, decided once per Simulation
-# (same idiom as AbstractSensibleHeatScheme above), keeps that choice
-# explicit and swappable instead of silently baking in one assumption.
+"""
+$(TYPEDSIGNATURES)
+
+How `taub` (basal shear stress, feeding [`compute_mdot!`](@ref)'s frictional-heating term) is
+obtained -- multiple dispatch on the concrete subtype ([`RegularizedCoulombSlidingLaw`](@ref),
+[`LinearSlidingLaw`](@ref), [`PrescribedSlidingLaw`](@ref)), decided once per `Simulation` (same
+idiom as [`AbstractSensibleHeatScheme`](@ref) above).
+
+# Notes
+
+The original SHAKTI paper (Sommers et al. 2018) never actually specifies this -- `taub` is listed
+in its Table 1 as a state variable with no formula, since it normally comes from a coupled
+ice-dynamics solve; Table 2's constants have no friction coefficient at all. So this is a real
+modeling choice, not just an internal solver detail; keeping it explicit and swappable rather
+than silently baking in one assumption is the point of this abstraction.
+"""
 abstract type AbstractSlidingLaw end
 
-# Regularized-Coulomb sliding law: taub -> C*N as ub/N^n*lambda -> infinity
-# (hard Coulomb limit), but stays finite (unlike a bare Coulomb law) as
-# ub -> 0. Recomputed from N/ub every Picard iteration (see compute_taub_x!
-# etc. below). n/inv_n read from p.n_exp/p.inv_n_exp, canonicalized once at
-# ModelParameters construction (see model_parameters.jl's pow/
-# canonical_exponent note), not per call or per grid cell.
+"""
+$(TYPEDSIGNATURES)
+
+Regularized-Coulomb sliding law: `taub -> C*N` as `ub/N^n*lambda -> infinity` (hard Coulomb
+limit), but stays finite (unlike a bare Coulomb law) as `ub -> 0`. Recomputed from `N`/`ub` every
+Picard iteration (see [`compute_taub_x!`](@ref) etc. below).
+
+# Notes
+
+`n`/`inv_n` are read from `p.n_exp`/`p.inv_n_exp`, canonicalized once at `ModelParameters`
+construction (see `model_parameters.jl`'s `pow`/`canonical_exponent` note), not per call or per
+grid cell.
+"""
 struct RegularizedCoulombSlidingLaw{F <: AbstractFloat} <: AbstractSlidingLaw
     C::F # Coulomb friction coefficient
 end
 
-# taub_x/taub_y prescribed once (initialize_taub!, from whatever formula or
-# data the caller supplies -- e.g. a driving-stress balance
-# taub = rho_i*g*H*(surface slope), the standard parameter-free choice for
-# synthetic slab/margin setups) and left unchanged thereafter: compute_taub_x!
-# etc. below are no-ops for this law.
+"""
+$(TYPEDSIGNATURES)
+
+`taub_x`/`taub_y` prescribed once ([`initialize_taub!`](@ref), from whatever formula or data the
+caller supplies -- e.g. a driving-stress balance `taub = rho_i*g*H*(surface slope)`, the standard
+parameter-free choice for synthetic slab/margin setups) and left unchanged thereafter:
+[`compute_taub_x!`](@ref) etc. are no-ops for this law.
+"""
 struct PrescribedSlidingLaw <: AbstractSlidingLaw end
 
 # Linear (viscous) sliding law: taub = C^2*N*u_b (Sommers and others 2023,
@@ -61,6 +96,13 @@ struct LinearSlidingLaw{A <: AbstractArray} <: AbstractSlidingLaw
     Cy2::A # C^2 staggered onto y-faces (Nx, Ny+1)
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Builds a [`LinearSlidingLaw`](@ref) on grid `g` from a drag coefficient `C` given at cell centers
+(an `(nx, ny)` array, e.g. an inverted per-cell field) or as a uniform scalar, staggering it onto
+faces and squaring it once here rather than in the per-iteration hot path.
+"""
 function LinearSlidingLaw(g::Grid, C)
     nx, ny = g.nx, g.ny
     F = eltype(g.x)
@@ -79,6 +121,14 @@ function LinearSlidingLaw(g::Grid, C)
     return LinearSlidingLaw(Data.Array(Cx .^ 2), Data.Array(Cy .^ 2))
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Sets up `state.taub_x`/`state.taub_y` for `sl` before the Picard loop starts. A no-op for
+[`RegularizedCoulombSlidingLaw`](@ref)/[`LinearSlidingLaw`](@ref) (`taub` is instead recomputed
+every Picard iteration from `N`/`ub`, see [`compute_taub_x!`](@ref) etc. below); copies `taub_x`/
+`taub_y` into `state` once for [`PrescribedSlidingLaw`](@ref) (see its own docstring).
+"""
 initialize_taub!(::RegularizedCoulombSlidingLaw, state::State, taub_x::AbstractArray, taub_y::AbstractArray) = state
 initialize_taub!(::LinearSlidingLaw, state::State, taub_x::AbstractArray, taub_y::AbstractArray) = state # recomputed every Picard iteration below, same as RegularizedCoulombSlidingLaw
 
@@ -88,8 +138,28 @@ function initialize_taub!(::PrescribedSlidingLaw, state::State, taub_x::Abstract
     return state
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+No-op for [`PrescribedSlidingLaw`](@ref): `taub_x`/`taub_y` were already set once by
+[`initialize_taub!`](@ref) and never change.
+"""
 compute_taub_x!(s::State, p::ModelParameters, ::PrescribedSlidingLaw) = s
+
+"""
+$(TYPEDSIGNATURES)
+
+No-op for [`PrescribedSlidingLaw`](@ref), the y-face counterpart of the `compute_taub_x!` method
+above.
+"""
 compute_taub_y!(s::State, p::ModelParameters, ::PrescribedSlidingLaw) = s
+
+"""
+$(TYPEDSIGNATURES)
+
+No-op for [`PrescribedSlidingLaw`](@ref), the fused `compute_taub_x!` + `compute_taub_y!`
+counterpart above.
+"""
 compute_taub_xy!(s::State, p::ModelParameters, ::PrescribedSlidingLaw) = s
 
 # taub_x/taub_y regularize on the *joint* sliding speed abs_ub = ‖v_b‖ (not
@@ -134,6 +204,11 @@ compute_taub_xy!(s::State, p::ModelParameters, ::PrescribedSlidingLaw) = s
     end
     return
 end
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.taub_x` under [`RegularizedCoulombSlidingLaw`](@ref) from the current `s.N`/`s.ub_x`.
+"""
 compute_taub_x!(s::State, p::ModelParameters, sl::RegularizedCoulombSlidingLaw) = (@parallel compute_taub_x_kernel!(s.taub_x, s.N, s.ub_x, s.abs_ub, s.lambda, sl.C, p.n_exp, p.inv_n_exp); s)
 
 @parallel_indices (ix, iy) function compute_taub_y_kernel!(taub_y, N, ub_y, abs_ub, lambda, C, n, inv_n)
@@ -156,6 +231,12 @@ compute_taub_x!(s::State, p::ModelParameters, sl::RegularizedCoulombSlidingLaw) 
     end
     return
 end
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.taub_y` under [`RegularizedCoulombSlidingLaw`](@ref), the y-face counterpart of the
+`compute_taub_x!` method above.
+"""
 compute_taub_y!(s::State, p::ModelParameters, sl::RegularizedCoulombSlidingLaw) = (@parallel compute_taub_y_kernel!(s.taub_y, s.N, s.ub_y, s.abs_ub, s.lambda, sl.C, p.n_exp, p.inv_n_exp); s)
 
 # Fused hot-path version: one launch instead of two (see field_gradients.jl's
@@ -198,6 +279,12 @@ compute_taub_y!(s::State, p::ModelParameters, sl::RegularizedCoulombSlidingLaw) 
     end
     return
 end
+"""
+$(TYPEDSIGNATURES)
+
+Fused version of `compute_taub_x!` + `compute_taub_y!` under [`RegularizedCoulombSlidingLaw`](@ref):
+one `@parallel` launch instead of two.
+"""
 compute_taub_xy!(s::State, p::ModelParameters, sl::RegularizedCoulombSlidingLaw) = (@parallel compute_taub_xy_kernel!(s.taub_x, s.taub_y, s.N, s.ub_x, s.ub_y, s.abs_ub, s.lambda, sl.C, p.n_exp, p.inv_n_exp); s)
 
 # taub = C^2*N*u_b (LinearSlidingLaw, see its struct docstring above): N
@@ -214,6 +301,11 @@ compute_taub_xy!(s::State, p::ModelParameters, sl::RegularizedCoulombSlidingLaw)
     end
     return
 end
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.taub_x` under [`LinearSlidingLaw`](@ref) from the current `s.N`/`s.ub_x`.
+"""
 compute_taub_x!(s::State, p::ModelParameters, sl::LinearSlidingLaw) = (@parallel compute_taub_x_linear_kernel!(s.taub_x, s.N, s.ub_x, sl.Cx2); s)
 
 @parallel_indices (ix, iy) function compute_taub_y_linear_kernel!(taub_y, N, ub_y, Cy2)
@@ -224,6 +316,12 @@ compute_taub_x!(s::State, p::ModelParameters, sl::LinearSlidingLaw) = (@parallel
     end
     return
 end
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.taub_y` under [`LinearSlidingLaw`](@ref), the y-face counterpart of the
+`compute_taub_x!` method above.
+"""
 compute_taub_y!(s::State, p::ModelParameters, sl::LinearSlidingLaw) = (@parallel compute_taub_y_linear_kernel!(s.taub_y, s.N, s.ub_y, sl.Cy2); s)
 
 # Fused hot-path version, same rationale as compute_taub_xy_kernel! above.
@@ -240,6 +338,12 @@ compute_taub_y!(s::State, p::ModelParameters, sl::LinearSlidingLaw) = (@parallel
     end
     return
 end
+"""
+$(TYPEDSIGNATURES)
+
+Fused version of `compute_taub_x!` + `compute_taub_y!` under [`LinearSlidingLaw`](@ref): one
+`@parallel` launch instead of two.
+"""
 compute_taub_xy!(s::State, p::ModelParameters, sl::LinearSlidingLaw) = (@parallel compute_taub_xy_linear_kernel!(s.taub_x, s.taub_y, s.N, s.ub_x, s.ub_y, sl.Cx2, sl.Cy2); s)
 
 # Melt rate = geothermal flux + frictional (sliding) heating + potential
@@ -262,6 +366,15 @@ compute_taub_xy!(s::State, p::ModelParameters, sl::LinearSlidingLaw) = (@paralle
     end
     return
 end
+
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.shear`: the frictional (sliding) heating contribution to the melt rate, `|u_b . taub|`
+averaged from faces onto cell centers. Standalone/diagnostic use (e.g. as a `tracked_obs` name,
+see `Simulation`'s `tracked_obs`) -- [`compute_mdot!`](@ref)'s hot path recomputes this term
+itself in a fused kernel rather than calling this function.
+"""
 compute_shear!(s::State) = (@parallel compute_shear_kernel!(s.shear, s.ub_x, s.taub_x, s.ub_y, s.taub_y); s)
 
 @parallel_indices (ix, iy) function compute_potential_kernel!(potential, q_x, dhdx, q_y, dhdy)
@@ -271,6 +384,13 @@ compute_shear!(s::State) = (@parallel compute_shear_kernel!(s.shear, s.ub_x, s.t
     end
     return
 end
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.potential`: the potential-energy-dissipation contribution to the melt rate (water
+flowing down the hydraulic-head gradient), `|q . dhdx|` averaged from faces onto cell centers.
+Standalone/diagnostic use, same caveat as [`compute_shear!`](@ref).
+"""
 compute_potential!(s::State) = (@parallel compute_potential_kernel!(s.potential, s.q_x, s.dhdx, s.q_y, s.dhdy); s)
 
 # Requires dpwdx/dpwdy (computed above) already current.
@@ -281,6 +401,15 @@ compute_potential!(s::State) = (@parallel compute_potential_kernel!(s.potential,
     end
     return
 end
+
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.sensible`: the sensible-heat-exchange contribution to the melt rate (water moving to
+regions of different pressure-melting-point temperature), `q . dpwdx` averaged from faces onto
+cell centers. Requires `s.dpwdx`/`s.dpwdy` already current. Standalone/diagnostic use, same
+caveat as [`compute_shear!`](@ref).
+"""
 compute_sensible!(s::State) = (@parallel compute_sensible_kernel!(s.sensible, s.q_x, s.dpwdx, s.q_y, s.dpwdy); s)
 
 # Fused hot-path kernel: shear/potential/sensible/mdot in one launch instead of
@@ -321,16 +450,32 @@ end
     return
 end
 
-# sim.shs (WithSensibleHeat()/NoSensibleHeat(), decided once in Simulation's
-# constructor from p.ct/p.cw -- see simulation.jl) picks which method
-# compiles in: the NoSensibleHeat path never touches s.sensible or dpwdx/dpwdy
-# at all, rather than computing sensible and multiplying by a zero ct*cw
-# prefactor.
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.mdot` (subglacial melt rate) = geothermal flux + frictional (sliding) heating +
+potential energy released by water flowing downgradient + sensible heat exchanged as water moves
+to regions of different pressure melting point, all divided by the latent heat of fusion `p.L`.
+Also refreshes `s.shear`/`s.potential`/`s.sensible` as a side effect (needed by
+[`compute_shear!`](@ref) etc. for standalone/diagnostic use), computed via its own fused kernel
+rather than by calling those three functions (one launch instead of four).
+
+Dispatches on `sim.shs` (decided once in `Simulation`'s constructor from `p.ct`/`p.cw`, see
+[`AbstractSensibleHeatScheme`](@ref)): the [`NoSensibleHeat`](@ref) method never touches
+`s.sensible` or `s.dpwdx`/`s.dpwdy` at all, rather than computing `sensible` and multiplying by a
+zero `ct*cw` prefactor.
+"""
 function compute_mdot!(s::State, p::ModelParameters, ::WithSensibleHeat)
     @parallel compute_mdot_kernel!(s.mdot, s.shear, s.potential, s.sensible, s.G, s.ub_x, s.taub_x, s.ub_y, s.taub_y, s.q_x, s.dhdx, s.q_y, s.dhdy, s.dpwdx, s.dpwdy, 1/p.L, p.rho_w, p.g, p.ct, p.cw)
     return s
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+`compute_mdot!` without the sensible-heat term -- see the `WithSensibleHeat` method's docstring
+above.
+"""
 function compute_mdot!(s::State, p::ModelParameters, ::NoSensibleHeat)
     @parallel compute_mdot_kernel!(s.mdot, s.shear, s.potential, s.G, s.ub_x, s.taub_x, s.ub_y, s.taub_y, s.q_x, s.dhdx, s.q_y, s.dhdy, 1/p.L, p.rho_w, p.g)
     return s

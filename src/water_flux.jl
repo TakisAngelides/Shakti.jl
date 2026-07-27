@@ -8,6 +8,22 @@
     end
     return
 end
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.q_x` (x water flux) from the current `s.b_x`/`s.dhdx`/`s.Re_x` via the cubic
+(Poiseuille) flux law with a Darcy-Weisbach-style turbulence correction: `q_x = -b_x^3*g*dhdx /
+(12*nu*(1+omega*Re_x))`.
+
+# Notes
+
+This and [`compute_Re_x!`](@ref) are a LAGGED pair: `q` is computed from whatever `Re` the
+*previous* Picard iteration left behind, then `Re` is updated to match the new `q` -- consistent
+with each other, but `q` is one iteration stale relative to the current `dhdx`/`b`. That lag can
+lock into a period-2 oscillation for large gradients instead of converging. The hot Picard path
+uses [`compute_q_and_Re_x!`](@ref) (exact, lag-free) instead; this pair is still used for the
+one-shot initial-condition seed, where a lagged initial guess is harmless.
+"""
 compute_q_x!(s::State, p::ModelParameters) = (@parallel compute_q_x_kernel!(s.q_x, s.b_x, s.dhdx, s.Re_x, p.g, p.nu, p.omega); s)
 
 @parallel_indices (ix, iy) function compute_q_y_kernel!(q_y, b_y, dhdy, Re_y, ggrav, nu, omega)
@@ -16,6 +32,12 @@ compute_q_x!(s::State, p::ModelParameters) = (@parallel compute_q_x_kernel!(s.q_
     end
     return
 end
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.q_y` (y water flux), the y-face counterpart of [`compute_q_x!`](@ref) (same lagged-pair
+caveat with [`compute_Re_y!`](@ref)).
+"""
 compute_q_y!(s::State, p::ModelParameters) = (@parallel compute_q_y_kernel!(s.q_y, s.b_y, s.dhdy, s.Re_y, p.g, p.nu, p.omega); s)
 
 # Fused hot-path version: one launch instead of two (see field_gradients.jl's
@@ -30,6 +52,12 @@ compute_q_y!(s::State, p::ModelParameters) = (@parallel compute_q_y_kernel!(s.q_
     end
     return
 end
+"""
+$(TYPEDSIGNATURES)
+
+Fused version of [`compute_q_x!`](@ref) + [`compute_q_y!`](@ref): one `@parallel` launch instead
+of two.
+"""
 compute_q_xy!(s::State, p::ModelParameters) = (@parallel compute_q_xy_kernel!(s.q_x, s.q_y, s.b_x, s.b_y, s.dhdx, s.dhdy, s.Re_x, s.Re_y, p.g, p.nu, p.omega); s)
 
 @parallel_indices (ix, iy) function compute_Re_x_kernel!(Re_x, q_x, nu)
@@ -38,6 +66,12 @@ compute_q_xy!(s::State, p::ModelParameters) = (@parallel compute_q_xy_kernel!(s.
     end
     return
 end
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.Re_x` (x-face Reynolds number) from the current `s.q_x`: `Re_x = |q_x|/nu`. See
+[`compute_q_x!`](@ref) for the lagged-pair caveat.
+"""
 compute_Re_x!(s::State, p::ModelParameters) = (@parallel compute_Re_x_kernel!(s.Re_x, s.q_x, p.nu); s)
 
 @parallel_indices (ix, iy) function compute_Re_y_kernel!(Re_y, q_y, nu)
@@ -46,6 +80,11 @@ compute_Re_x!(s::State, p::ModelParameters) = (@parallel compute_Re_x_kernel!(s.
     end
     return
 end
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.Re_y` (y-face Reynolds number), the y-face counterpart of [`compute_Re_x!`](@ref).
+"""
 compute_Re_y!(s::State, p::ModelParameters) = (@parallel compute_Re_y_kernel!(s.Re_y, s.q_y, p.nu); s)
 
 @parallel_indices (ix, iy) function compute_Re_xy_kernel!(Re_x, Re_y, q_x, q_y, nu)
@@ -57,6 +96,12 @@ compute_Re_y!(s::State, p::ModelParameters) = (@parallel compute_Re_y_kernel!(s.
     end
     return
 end
+"""
+$(TYPEDSIGNATURES)
+
+Fused version of [`compute_Re_x!`](@ref) + [`compute_Re_y!`](@ref): one `@parallel` launch instead
+of two.
+"""
 compute_Re_xy!(s::State, p::ModelParameters) = (@parallel compute_Re_xy_kernel!(s.Re_x, s.Re_y, s.q_x, s.q_y, p.nu); s)
 
 @parallel_indices (ix, iy) function compute_Re_kernel!(Re, Re_x, Re_y)
@@ -65,6 +110,12 @@ compute_Re_xy!(s::State, p::ModelParameters) = (@parallel compute_Re_xy_kernel!(
     end
     return
 end
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.Re` (cell-centered Reynolds number) by averaging the four surrounding face values
+(`s.Re_x`/`s.Re_y`).
+"""
 compute_Re!(s::State) = (@parallel compute_Re_kernel!(s.Re, s.Re_x, s.Re_y); s)
 
 # =============================================================================
@@ -103,6 +154,21 @@ compute_Re!(s::State) = (@parallel compute_Re_kernel!(s.Re, s.Re_x, s.Re_y); s)
     end
     return
 end
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.q_x`/`s.Re_x` together, exactly (no lag), from the current `s.b_x`/`s.dhdx` -- the
+version used in the hot Picard path (see [`compute_q_x!`](@ref) for why the lagged pair isn't
+used there).
+
+# Notes
+
+Substituting `Re = |q|/nu` into the flux law (Eq. 5, Sommers et al. 2018) gives a quadratic in
+`Re`. Let `D = b^3*g*|dhdx| / (12*nu^2)`; then `omega*Re^2 + Re - D = 0`, i.e.
+`Re = (-1 + sqrt(1 + 4*omega*D)) / (2*omega)`, rearranged (multiply by the conjugate) to avoid
+catastrophic cancellation as `omega -> 0` (exactly this model's regime, `omega = 1e-4` to
+`1e-3`): `Re = 2*D / (1 + sqrt(1 + 4*omega*D))`.
+"""
 compute_q_and_Re_x!(s::State, p::ModelParameters) = (@parallel compute_q_and_Re_x_kernel!(s.q_x, s.Re_x, s.b_x, s.dhdx, p.g, p.nu, p.omega); s)
 
 @parallel_indices (ix, iy) function compute_q_and_Re_y_kernel!(q_y, Re_y, b_y, dhdy, ggrav, nu, omega)
@@ -115,6 +181,12 @@ compute_q_and_Re_x!(s::State, p::ModelParameters) = (@parallel compute_q_and_Re_
     end
     return
 end
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.q_y`/`s.Re_y` together, exactly, the y-face counterpart of
+[`compute_q_and_Re_x!`](@ref).
+"""
 compute_q_and_Re_y!(s::State, p::ModelParameters) = (@parallel compute_q_and_Re_y_kernel!(s.q_y, s.Re_y, s.b_y, s.dhdy, p.g, p.nu, p.omega); s)
 
 @parallel_indices (ix, iy) function compute_q_and_Re_xy_kernel!(q_x, q_y, Re_x, Re_y, b_x, b_y, dhdx, dhdy, ggrav, nu, omega)
@@ -134,6 +206,13 @@ compute_q_and_Re_y!(s::State, p::ModelParameters) = (@parallel compute_q_and_Re_
     end
     return
 end
+"""
+$(TYPEDSIGNATURES)
+
+Fused version of [`compute_q_and_Re_x!`](@ref) + [`compute_q_and_Re_y!`](@ref): one `@parallel`
+launch instead of two. This is the method actually called from the Picard loop
+(`elliptic_solver.jl`'s `Picard_iteration!`).
+"""
 compute_q_and_Re_xy!(s::State, p::ModelParameters) = (@parallel compute_q_and_Re_xy_kernel!(s.q_x, s.q_y, s.Re_x, s.Re_y, s.b_x, s.b_y, s.dhdx, s.dhdy, p.g, p.nu, p.omega); s)
 
 # Same cubic/turbulence-corrected law as compute_q_x!/compute_q_y! above,
@@ -145,4 +224,11 @@ compute_q_and_Re_xy!(s::State, p::ModelParameters) = (@parallel compute_q_and_Re
     end
     return
 end
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.K` (hydraulic transmissivity) from the current `s.b`/`s.Re`: the same cubic/
+turbulence-corrected law as [`compute_q_x!`](@ref)/[`compute_q_y!`](@ref), but expressed without
+the `-dhdx`/`-dhdy` factor, for use as the linear system's (off-diagonal) coefficients.
+"""
 compute_K!(s::State, p::ModelParameters) = (@parallel compute_K_kernel!(s.K, s.b, s.Re, p.g, p.nu, p.omega); s)

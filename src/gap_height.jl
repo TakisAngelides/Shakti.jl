@@ -16,6 +16,15 @@
     end
     return
 end
+
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.beta` (opening rate of the gap by sliding over bedrock bumps of height `p.br` and
+spacing `p.lr`, Röthlisberger-style cavity opening): positive only while the gap is still smaller
+than the bump height, zero once `b` has grown past `br`. `p.br = 0` disables this opening
+mechanism entirely (`beta` is identically `0`).
+"""
 compute_beta!(s::State, p::ModelParameters) = (@parallel compute_beta_kernel!(s.beta, s.b, p.br, p.lr); s)
 
 @parallel_indices (ix, iy) function compute_b_x_kernel!(b_x, b)
@@ -31,6 +40,12 @@ compute_beta!(s::State, p::ModelParameters) = (@parallel compute_beta_kernel!(s.
     end
     return
 end
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.b_x` by staggering `s.b` onto x-faces (boundary faces duplicate the nearest cell,
+interior faces average their two neighbours).
+"""
 compute_b_x!(s::State) = (@parallel compute_b_x_kernel!(s.b_x, s.b); s)
 
 @parallel_indices (ix, iy) function compute_b_y_kernel!(b_y, b)
@@ -46,6 +61,12 @@ compute_b_x!(s::State) = (@parallel compute_b_x_kernel!(s.b_x, s.b); s)
     end
     return
 end
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.b_y` by staggering `s.b` onto y-faces (boundary faces duplicate the nearest cell,
+interior faces average their two neighbours).
+"""
 compute_b_y!(s::State) = (@parallel compute_b_y_kernel!(s.b_y, s.b); s)
 
 # compute_b! only touches each cell using its own local values (mdot, beta,
@@ -72,26 +93,40 @@ end
 end
 
 """
-    compute_b!(sim)
+$(TYPEDSIGNATURES)
 
-Only evolves the gap height `b` where hydrology is actually being solved
-(GROUNDED). Cells with a Dirichlet-prescribed pw (LAND/OCEAN) or a frozen h
-(OTHER_BASIN) don't have a meaningfully-evolving `b` in this model, so their
-`b` is simply left untouched at whatever it was initialized to.
+Evolves the gap height `sim.state.b` by one timestep, dispatching on `sim.gs`
+(`ImplicitGapScheme()`/`ExplicitGapScheme()`) to [`compute_b!(sim, sim.gs)`](@ref) below.
 
-Dispatches on `sim.gs` (`ImplicitGapScheme()`/`ExplicitGapScheme()`) instead
-of branching on a Symbol, so there's no `error("Unknown scheme ...")`
-fallback to reach -- the type system already guarantees `sim.gs` is one of
-the two.
+# Notes
+
+Only evolves `b` where hydrology is actually being solved (`GROUNDED`). Cells with a
+Dirichlet-prescribed `pw` (`LAND`/`OCEAN`) or a frozen `h` (`OTHER_BASIN`) don't have a
+meaningfully-evolving `b` in this model, so their `b` is simply left untouched at whatever it was
+initialized to. Dispatching on `sim.gs`'s type (rather than branching on a `Symbol`) means there's
+no `error("Unknown scheme ...")` fallback to reach -- the type system already guarantees `sim.gs`
+is one of the two schemes.
 """
 compute_b!(sim::Simulation) = compute_b!(sim, sim.gs)
 
+"""
+$(TYPEDSIGNATURES)
+
+Implicit (backward-Euler) update of `sim.state.b`: unconditionally stable, the scheme used by
+default.
+"""
 function compute_b!(sim::Simulation, ::ImplicitGapScheme)
     s, p = sim.state, sim.p
     @parallel compute_b_implicit_kernel!(s.b, s.mask, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, sim.dt, p.b_min)
     return sim
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Explicit (forward-Euler) update of `sim.state.b`: cheaper per step, but only stable for small
+enough `sim.dt`.
+"""
 function compute_b!(sim::Simulation, ::ExplicitGapScheme)
     s, p = sim.state, sim.p
     @parallel compute_b_explicit_kernel!(s.b, s.mask, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, sim.dt, p.b_min)

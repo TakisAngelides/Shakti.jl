@@ -1,3 +1,10 @@
+"""
+$(TYPEDSIGNATURES)
+
+A regular Cartesian grid: `nx * ny` cells spanning a domain of size `lx * ly`, with cell-center
+coordinate vectors `x`/`y` starting at the origin. `dx2`/`dy2` are `dx^2`/`dy^2`, precomputed
+once since they appear in every finite-difference/finite-volume stencil in the solver.
+"""
 struct Grid{F <: AbstractFloat, A <: AbstractArray}
     nx::Int
     ny::Int
@@ -11,6 +18,12 @@ struct Grid{F <: AbstractFloat, A <: AbstractArray}
     dy2::F
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Builds a [`Grid`](@ref) with `nx * ny` cells over a domain of size `lx * ly`, deriving `dx`, `dy`,
+and the cell-center coordinate vectors `x`/`y`.
+"""
 function Grid(nx, ny, lx, ly)
 
     lx, ly = floattype(lx), floattype(ly)

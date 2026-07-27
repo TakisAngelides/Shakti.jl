@@ -89,6 +89,14 @@
 # for both SparseAssembledLinearSystem's SparseMatrixCSC and
 # MatrixFreeLinearSystem's StencilOperator, since both already have a mul!
 # method -- nothing here is backend- or representation-specific.
+"""
+$(TYPEDSIGNATURES)
+
+Applies the diagonal-Jacobi-scaled operator `D^-1*A` via `mul!` below. The same wrapper works for
+both `SparseAssembledLinearSystem`'s `SparseMatrixCSC` and `MatrixFreeLinearSystem`'s
+[`StencilOperator`](@ref), since both already have a `mul!` method -- nothing here is backend- or
+representation-specific. Used internally by [`ChebyshevPreconditioner`](@ref).
+"""
 struct JacobiScaledOperator{Op, V <: AbstractVector}
     A::Op
     d::V # Jacobi diagonal -- a *reference* to CGIterativeSolver's precond_diag, refreshed in place by update_diag_precond! before every solve
@@ -108,6 +116,15 @@ end
 # separate power-iteration machinery. A tiny (nsteps x nsteps) dense
 # eigenproblem at the end is solved on the host regardless of backend --
 # nsteps is a handful, so this is negligible next to the matvecs.
+"""
+$(TYPEDSIGNATURES)
+
+Estimates `[lambda_min, lambda_max]` of the Jacobi-scaled operator `op` (`D^-1*A`) via `nsteps`
+iterations of ordinary (unpreconditioned) CG, extracting the associated Lanczos tridiagonal
+matrix from the CG alpha/beta recurrence (Saad, section 6.7 -- the same trick PETSc's
+`KSPCHEBYSHEV` uses) rather than running separate power-iteration machinery. Used by
+[`update_chebyshev_bounds!`](@ref) to size [`ChebyshevPreconditioner`](@ref)'s polynomial.
+"""
 function estimate_eigenvalue_bounds(op::JacobiScaledOperator, rhs::AbstractVector, nsteps::Int)
 
     T = eltype(rhs)
@@ -160,6 +177,25 @@ end
 # ldiv! call. lambda_min/lambda_max are refreshed once per *solve* by
 # update_chebyshev_bounds! (not on every ldiv! call within that solve's CG
 # run), since the operator only changes between solves, not within one.
+"""
+$(TYPEDSIGNATURES)
+
+A GPU-capable, dot-product-free accelerated preconditioner for [`CGIterativeSolver`](@ref):
+approximates `A^-1` by a degree-`degree` Chebyshev polynomial in the Jacobi-scaled operator
+(Saad Algorithm 12.1), applied via `LinearAlgebra.ldiv!` below using only matvecs and
+axpy-style updates -- no reductions (and so no GPU->CPU syncs) within one preconditioner
+application. `lambda_min`/`lambda_max` (the polynomial's eigenvalue bounds) are refreshed once
+per solve by [`update_chebyshev_bounds!`](@ref), not on every `ldiv!` call.
+
+# Notes
+
+Confirmed on real GPU hardware (see the module-level note above) that this does NOT eliminate
+CG's own per-iteration host syncs (those come from CG's own dot products, not the preconditioner)
+-- measured to lose to plain Jacobi in wall time at the grid sizes tested. Kept available as an
+option (and the only GPU-capable *accelerated* one) since a differently-shaped or larger problem
+could tip that balance; [`AMGPreconditioner`](@ref) is the better choice when available
+(CPU/`SparseMatrixCSC`-only).
+"""
 mutable struct ChebyshevPreconditioner{Op, V <: AbstractVector, T <: AbstractFloat}
     op::JacobiScaledOperator{Op, V}
     degree::Int
@@ -171,6 +207,14 @@ mutable struct ChebyshevPreconditioner{Op, V <: AbstractVector, T <: AbstractFlo
     Ap::V
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Builds a [`ChebyshevPreconditioner`](@ref) wrapping operator `A` with Jacobi diagonal `d`, degree
+`degree` (`>= 1`), estimating eigenvalue bounds from `nsteps_estimate` (`>= 2`) Lanczos steps.
+`lambda_min`/`lambda_max` start at placeholder value `1` (degenerates to plain Jacobi) until the
+first real [`update_chebyshev_bounds!`](@ref) call.
+"""
 function ChebyshevPreconditioner(A, d::V, degree::Int; nsteps_estimate::Int = 15) where V <: AbstractVector
     T = eltype(d)
     degree >= 1 || error("ChebyshevPreconditioner: degree must be >= 1 (got $degree)")
@@ -180,6 +224,15 @@ function ChebyshevPreconditioner(A, d::V, degree::Int; nsteps_estimate::Int = 15
     return ChebyshevPreconditioner(op, degree, nsteps_estimate, one(T), one(T), r, p, Ap) # placeholder bounds, overwritten before first use
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Refreshes `P.lambda_min`/`P.lambda_max` from the current `rhs` via
+[`estimate_eigenvalue_bounds`](@ref) -- cheap (`P.nsteps_estimate` matvecs) but real, since the
+operator's spectrum shifts between Picard iterations/timesteps. Falls back to the previous
+(valid) bounds if the estimate is numerically invalid (see the extensive in-code note for why
+that can happen and why the fallback is always safe).
+"""
 function update_chebyshev_bounds!(P::ChebyshevPreconditioner, rhs::AbstractVector)
 
     # The short, unreorthogonalized Lanczos recurrence in estimate_eigenvalue_bounds
@@ -271,16 +324,40 @@ end
 # so -- like CholeskyDirectSolver -- this is only offered for
 # CGIterativeSolver{<:SparseAssembledLinearSystem}, not MatrixFreeLinearSystem.
 
+"""
+$(TYPEDSIGNATURES)
+
+The default, fastest-converging preconditioner for `CGIterativeSolver{<:SparseAssembledLinearSystem}`:
+Ruge-Stuben algebraic multigrid (AlgebraicMultigrid.jl), giving near mesh-independent CG iteration
+counts (measured ~flat 5-6 iterations from 64x64 to 256x256, vs. Jacobi's 192->745 and
+Chebyshev's 58->350 over the same grids -- see `test/benchmarks/`). CPU/`SparseMatrixCSC`-only
+(AlgebraicMultigrid.jl has no GPU array support), so unlike [`ChebyshevPreconditioner`](@ref) this
+isn't offered for `MatrixFreeLinearSystem`.
+"""
 mutable struct AMGPreconditioner{P}
     precond::P # AlgebraicMultigrid.jl's aspreconditioner(::MultiLevel) wrapper; already implements LinearAlgebra.ldiv!, so ldiv! below just delegates
 end
 
-# M's sparsity pattern is fixed, but its VALUES change every Picard
-# iteration -- like ChebyshevPreconditioner's bounds, the AMG hierarchy
-# (strength-of-connection, aggregation, interpolation) is built from those
-# values, so it has to be rebuilt every solve, not just once at construction.
+"""
+$(TYPEDSIGNATURES)
+
+Builds an [`AMGPreconditioner`](@ref) hierarchy from `M`'s current values.
+
+# Notes
+
+`M`'s sparsity pattern is fixed, but its VALUES change every Picard iteration -- like
+[`ChebyshevPreconditioner`](@ref)'s bounds, the AMG hierarchy (strength-of-connection,
+aggregation, interpolation) is built from those values, so it has to be rebuilt every solve (see
+[`update_amg!`](@ref)), not just once at construction.
+"""
 AMGPreconditioner(M::SparseMatrixCSC) = AMGPreconditioner(aspreconditioner(ruge_stuben(M)))
 
+"""
+$(TYPEDSIGNATURES)
+
+Rebuilds `P`'s AMG hierarchy in place from `M`'s current values (not free -- see
+[`AMGPreconditioner`](@ref)'s docstring for why this can't just be done once at construction).
+"""
 function update_amg!(P::AMGPreconditioner, M::SparseMatrixCSC)
     P.precond = aspreconditioner(ruge_stuben(M))
     return P

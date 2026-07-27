@@ -1,15 +1,23 @@
-# checkpoint_every/checkpoint_path: if both given, sim.state is saved to
-# checkpoint_path (overwriting the previous checkpoint -- only the latest is
-# kept) every checkpoint_every tsteps, so a run killed at any point can be
-# resumed via restart_path below instead of starting over from t=0.
-#
-# restart_path: if given, resumes from a checkpoint written by a *previous*
-# run! call instead of starting fresh at t=0 -- loads sim.state/total_time
-# and continues the loop from the checkpointed tstep + 1 up to sim.tsteps
-# (still the *original* total step count, not "how many more steps to do").
-# The observer's output file is reopened (not truncated) via resume! so it's
-# appended to across the restart; see observer.jl for how each file writer
-# handles a tstep that the crashed run may have already written.
+"""
+$(TYPEDSIGNATURES)
+
+Runs `sim` from `t=0` (or from a checkpoint, see `restart_path`) up to `sim.tsteps`, calling
+[`step!`](@ref) each iteration and recording output via `sim.observer`.
+
+# Notes
+
+`checkpoint_every`/`checkpoint_path`: if both given, `sim.state` is saved to `checkpoint_path`
+(overwriting the previous checkpoint -- only the latest is kept) every `checkpoint_every` tsteps,
+so a run killed at any point can be resumed via `restart_path` below instead of starting over from
+`t=0`.
+
+`restart_path`: if given, resumes from a checkpoint written by a *previous* `run!` call instead of
+starting fresh at `t=0` -- loads `sim.state`/`sim.total_time` and continues the loop from the
+checkpointed tstep + 1 up to `sim.tsteps` (still the *original* total step count, not "how many
+more steps to do"). The observer's output file is reopened (not truncated) via `resume!` so it's
+appended to across the restart; see `observer.jl` for how each file writer handles a tstep that
+the crashed run may have already written.
+"""
 function run!(sim::Simulation; checkpoint_every::Union{Nothing, Int} = nothing, checkpoint_path::Union{Nothing, String} = nothing, restart_path::Union{Nothing, String} = nothing)
 
     if (checkpoint_every === nothing) != (checkpoint_path === nothing)
@@ -54,13 +62,23 @@ function run!(sim::Simulation; checkpoint_every::Union{Nothing, Int} = nothing, 
 
 end
 
-# Dispatched (rather than an isa check) so this stays correct if another
-# AbstractHeadScheme is ever added: EllipticHeadScheme has a PicardSolver to
-# report on, ParabolicHeadScheme (not yet implemented, see step_h! below)
-# doesn't.
+"""
+$(TYPEDSIGNATURES)
+
+Returns `(converged, last_iter)` for `hs`'s Picard solve at the current timestep -- dispatched
+(rather than an `isa` check) so this stays correct if another `AbstractHeadScheme` is ever added:
+`EllipticHeadScheme` has a `PicardSolver` to report on, `ParabolicHeadScheme` (not yet
+implemented, see `step_h!` below) doesn't.
+"""
 picard_status(hs::EllipticHeadScheme) = (hs.ps.converged, hs.ps.last_iter)
 picard_status(hs::ParabolicHeadScheme) = (missing, missing)
 
+"""
+$(TYPEDSIGNATURES)
+
+Advances `sim` by one timestep: solves for the new head ([`step_h!`](@ref)) then evolves the gap
+height ([`step_b!`](@ref)).
+"""
 function step!(sim::Simulation)
 
     step_h!(sim.hs, sim)
@@ -68,18 +86,33 @@ function step!(sim::Simulation)
 
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Solves for the new hydraulic head under [`EllipticHeadScheme`](@ref): updates `sim.mi`'s melt
+input for the current time, then runs the Picard/elliptic solve.
+"""
 function step_h!(hs::EllipticHeadScheme, sim::Simulation)
     update_ieb!(sim.mi, sim.state, sim.total_time[]) # no-op for ConstantMeltInput; rescales state.ieb for e.g. SeasonalMeltInput
     elliptic_solver!(hs.ps, sim.state, sim.grid, sim.p, sim.shs, sim.kfs, sim.mi, sim.sl)
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Not yet implemented.
+"""
 function step_h!(hs::ParabolicHeadScheme, sim::Simulation)
     error("Parabolic head scheme is not yet implemented.") # TODO
 end
 
-# compute_b! dispatches on sim.gs (ImplicitGapScheme/ExplicitGapScheme, see
-# simulation.jl and compute_fields.jl) internally, so step_b! itself doesn't
-# need to branch on the gap scheme.
+"""
+$(TYPEDSIGNATURES)
+
+Evolves the gap height `sim.state.b` for one timestep ([`compute_b!`](@ref), dispatching
+internally on `sim.gs`), then refreshes everything that depends on it (`beta`, `b_x`, `b_y`) so
+they're ready for the *next* timestep's Picard loop.
+"""
 function step_b!(sim::Simulation)
 
     s, p = sim.state, sim.p

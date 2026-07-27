@@ -11,6 +11,12 @@
     end
     return
 end
+
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.H` (ice thickness) from the current `s.zs`/`s.zb`/`s.b`: `H = zs - (zb + b)`.
+"""
 compute_H!(s::State) = (@parallel compute_H_kernel!(s.H, s.zs, s.zb, s.b); s)
 
 @parallel_indices (ix, iy) function compute_po_kernel!(po, H, rho_i, ggrav)
@@ -19,6 +25,12 @@ compute_H!(s::State) = (@parallel compute_H_kernel!(s.H, s.zs, s.zb, s.b); s)
     end
     return
 end
+
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.po` (ice overburden pressure) from the current `s.H`: `po = rho_i*g*H`.
+"""
 compute_po!(s::State, p::ModelParameters) = (@parallel compute_po_kernel!(s.po, s.H, p.rho_i, p.g); s)
 
 # Inverse of compute_pw! below: seeds h from a prescribed initial pw. Once the
@@ -30,6 +42,18 @@ compute_po!(s::State, p::ModelParameters) = (@parallel compute_po_kernel!(s.po, 
     end
     return
 end
+
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.h` (hydraulic head) from the current `s.pw`: `h = pw/(rho_w*g) + zb`.
+
+# Notes
+
+Only meant for seeding `s.h` from a prescribed initial `s.pw` during initial-condition setup.
+Once the time loop is running, `h` is instead the Picard solver's primary unknown, and `pw` is
+derived FROM `h` every iteration ([`compute_pw!`](@ref)), not the other way round.
+"""
 compute_h!(s::State, p::ModelParameters) = (@parallel compute_h_kernel!(s.h, s.pw, s.zb, p.rho_w, p.g); s)
 
 @parallel_indices (ix, iy) function compute_abs_ub_kernel!(abs_ub, ub_x, ub_y)
@@ -40,4 +64,11 @@ compute_h!(s::State, p::ModelParameters) = (@parallel compute_h_kernel!(s.h, s.p
     end
     return
 end
+
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.abs_ub` (cell-centered sliding speed magnitude `‖v_b‖`) by averaging `s.ub_x`/`s.ub_y`
+onto cell centers and taking the norm.
+"""
 compute_abs_ub!(s::State) = (@parallel compute_abs_ub_kernel!(s.abs_ub, s.ub_x, s.ub_y); s)

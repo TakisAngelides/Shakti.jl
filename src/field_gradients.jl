@@ -20,6 +20,13 @@
     return
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.dhdx` (x-gradient of hydraulic head) from the current `s.h`, zeroed on any face
+touching an `OTHER_BASIN` cell (`s.valid_x`) so downstream flux/melt computations never see a
+spurious gradient driven by a frozen, non-evolving value. Feeds [`compute_q_x!`](@ref).
+"""
 function compute_dhdx!(s::State, g::Grid)
     @parallel compute_dhdx_kernel!(s.dhdx, s.h, s.valid_x, g.dx)
     return s
@@ -32,6 +39,12 @@ end
     return
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.dhdy` (y-gradient of hydraulic head), the y-face counterpart of
+[`compute_dhdx!`](@ref).
+"""
 function compute_dhdy!(s::State, g::Grid)
     @parallel compute_dhdy_kernel!(s.dhdy, s.h, s.valid_y, g.dy)
     return s
@@ -44,6 +57,12 @@ end
     return
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.dpwdx` (x-gradient of water pressure) from the current `s.pw`, zeroed the same way as
+[`compute_dhdx!`](@ref). Feeds the sensible-heat term in `compute_mdot!` (`melt_rate.jl`).
+"""
 function compute_dpwdx!(s::State, g::Grid)
     @parallel compute_dpwdx_kernel!(s.dpwdx, s.pw, s.valid_x, g.dx)
     return s
@@ -56,6 +75,12 @@ end
     return
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.dpwdy` (y-gradient of water pressure), the y-face counterpart of
+[`compute_dpwdx!`](@ref).
+"""
 function compute_dpwdy!(s::State, g::Grid)
     @parallel compute_dpwdy_kernel!(s.dpwdy, s.pw, s.valid_y, g.dy)
     return s
@@ -76,6 +101,12 @@ end
     end
     return
 end
+"""
+$(TYPEDSIGNATURES)
+
+Fused version of [`compute_dhdx!`](@ref) + [`compute_dhdy!`](@ref): one `@parallel` launch
+instead of two.
+"""
 compute_dhdxy!(s::State, g::Grid) = (@parallel compute_dhdxy_kernel!(s.dhdx, s.dhdy, s.h, s.valid_x, s.valid_y, g.dx, g.dy); s)
 
 @parallel_indices (ix, iy) function compute_dpwdxy_kernel!(dpwdx, dpwdy, pw, valid_x, valid_y, dx, dy)
@@ -87,4 +118,10 @@ compute_dhdxy!(s::State, g::Grid) = (@parallel compute_dhdxy_kernel!(s.dhdx, s.d
     end
     return
 end
+"""
+$(TYPEDSIGNATURES)
+
+Fused version of [`compute_dpwdx!`](@ref) + [`compute_dpwdy!`](@ref): one `@parallel` launch
+instead of two.
+"""
 compute_dpwdxy!(s::State, g::Grid) = (@parallel compute_dpwdxy_kernel!(s.dpwdx, s.dpwdy, s.pw, s.valid_x, s.valid_y, g.dx, g.dy); s)
