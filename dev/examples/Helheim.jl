@@ -6,7 +6,8 @@ Sommers and others (2023), [doi:10.1017/jog.2023.39](https://doi.org/10.1017/jog
 slab, this data arrives as native ISSM/SHAKTI output on an *unstructured* triangular mesh (6371
 vertices, 12472 elements) -- Shakti's [`Grid`](@ref) needs a regular grid, so the first step here
 is rasterizing the mesh onto one via barycentric interpolation, before building a
-[`State`](@ref) and running the Picard/elliptic solve.
+[`State`](@ref) and time-stepping it to Sommers and others (2023)'s "winter base state" --
+reproducing the paper's Fig. 2.
 =#
 
 using Shakti
@@ -137,11 +138,11 @@ for j in 1:Ny, i in 1:Nx
 end
 println("Terminus: reclassified $n_ocean boundary cells to OCEAN")
 
-# ## Building the state and solving
+# ## Building the state
 # `LinearSlidingLaw` matches the paper's own basal stress formula, `taub = C^2*N*u_b`, using
-# their inverted per-cell friction field. `br=0`/`omega=1e-3` match Table 2; `ct=0` matches their
-# text right after Eq. 7, which drops the sensible-heat term Table 2's `ct`/`cw` would otherwise
-# imply.
+# their inverted per-cell friction field. `rho_i=917`/`omega=1e-3`/`br=0` match Table 2 exactly;
+# `ct=0` matches their text right after Eq. 7, which drops the sensible-heat term Table 2's
+# `ct`/`cw` would otherwise imply -- see [`NoSensibleHeat`](@ref).
 
 grid = Grid(Nx, Ny, (Nx - 1) * DX, (Ny - 1) * DX)
 
@@ -160,34 +161,76 @@ ub_y[:, 1] .= VY_ms[:, 1]; ub_y[:, Ny+1] .= VY_ms[:, Ny]
 ub_y[:, 2:Ny] .= (VY_ms[:, 1:Ny-1] .+ VY_ms[:, 2:Ny]) ./ 2
 taub_x, taub_y = zeros(Nx + 1, Ny), zeros(Nx, Ny + 1)
 
-p = ModelParameters(rho_i = 917.0, omega = 1e-3, br = 0.0, lr = 2.0, ct = 0.0)
+p = ModelParameters(rho_i = 917.0, omega = 1e-3, br = 0.0, lr = 2.0, ct = 0.0, b_min = 1e-3)
 mi = ConstantMeltInput()
 sl = LinearSlidingLaw(grid, FRIC)
 
 state = State(grid)
 set_initial_conditions!(state, grid, p, mi, sl, mask, A, zb, zs, gap, G, ub_x, ub_y, ieb, taub_x, taub_y)
 
+# ## Running to the winter base state
+# Sommers and others (2023) reach their "winter base state" (zero external meltwater input --
+# channels drain only what the geothermal/frictional melt itself supplies) after about 90 days
+# of time evolution; `dt=1800` s, `tsteps=4320` matches that exactly. Only the final state is
+# kept (`tracked_times = [tsteps]`) since Fig. 2 only needs the converged snapshot.
+
 ls = CholeskyDirectSolver(grid)
 ps = PicardSolver(500, 1e-6, ls, grid)
-shs = NoSensibleHeat() # p.ct == 0
-elliptic_solver!(ps, state, grid, p, shs, Arithmetic(), mi, sl)
 
-println("Picard solve converged=$(ps.converged) in $(ps.last_iter) iterations")
+dt, tsteps = 1800.0, 4320
+sim = Simulation(grid, state, tsteps, floattype(dt), p, "implicit", ["h", "b", "N", "mdot", "pw", "po", "Re"], mi, sl;
+                 ps = ps, which_observer = "Live", tracked_times = [tsteps])
+run!(sim)
+
+println("Ran $tsteps steps (dt=$dt s, $(tsteps * dt / 86400) days)")
 
 # ## Results
-# Effective pressure and gap height at the converged (Picard-only, `b` still frozen at its
-# initial value) state -- for the fully time-evolved, channelized steady state that this winter
-# base-state spin-up reaches after ~90 days, see Sommers and others (2023) Fig. 2.
+# Reproduction of Fig. 2: (a) water pressure as a fraction of overburden, (b) gap height, (c)
+# Reynolds number (with a second colorbar for the equivalent water flux `q = Re*nu`), (d)
+# effective pressure, (e) transmissivity (`K = b^3*g / (12*nu*(1+omega*Re))`, Eq. 6 -- not itself
+# a tracked field), (f) basal melt rate. Colors are pixel-sampled directly from the published
+# PDF's own colorbars, since no built-in Makie/ColorSchemes.jl map matched closely enough.
+
+const HELHEIM_CMAP = cgrad([
+    "#051c59", "#0d345f", "#114461", "#185361", "#236160", "#366956",
+    "#4d734d", "#667a3e", "#808131", "#9c892b", "#bb8f34", "#d79348",
+    "#ed9a64", "#faa489", "#fcb1ac", "#fbbccd", "#fac8f1",
+])
+const HELHEIM_DIVERGING_CMAP = cgrad([
+    "#001564", "#042b6e", "#054583", "#0d6193", "#327ea6", "#629fbb",
+    "#769ba7", "#c5dbe6", "#eae6e5", "#edccbb", "#dcae94", "#d19370",
+    "#c67549", "#b75e24", "#98350a", "#7a1a07", "#5f0306",
+])
+
+hist = sim.observer.history
+final(name) = view(hist[name], :, :, 1)
+b, N, pw, po, Re, mdot = final("b"), final("N"), final("pw"), final("po"), final("Re"), final("mdot")
+K = b .^ 3 .* p.g ./ (12 .* p.nu .* (1 .+ p.omega .* Re)) # Eq. 6, not itself tracked
+
+pw_frac = pw ./ po
+mdot_myr = max.(mdot ./ p.rho_w .* SECONDS_PER_YEAR, 1e-6) # kg/m^2/s -> m/yr w.e.; floor avoids log10 of the handful of refreezing (mdot<0) GROUNDED cells
 
 xc_km, yc_km = xc ./ 1000, yc ./ 1000
 grounded = mask .== GROUNDED
 mask_nan(field) = ifelse.(grounded, field, NaN)
 
-fig = Figure(size = (900, 400))
-ax1 = Axis(fig[1, 1], title = "Effective pressure N (MPa)", xlabel = "x (km)", ylabel = "y (km)", aspect = DataAspect())
-hm1 = heatmap!(ax1, xc_km, yc_km, mask_nan(Array(state.N) ./ 1e6), colormap = :viridis, nan_color = :transparent)
-Colorbar(fig[1, 2], hm1)
-ax2 = Axis(fig[1, 3], title = "Hydraulic head h (m)", xlabel = "x (km)", ylabel = "y (km)", aspect = DataAspect())
-hm2 = heatmap!(ax2, xc_km, yc_km, mask_nan(Array(state.h)), colormap = :dense, nan_color = :transparent)
-Colorbar(fig[1, 4], hm2)
+fig = Figure(size = (1600, 900))
+
+function panel!(pos, title, field; colorrange, colorscale = identity, colormap = HELHEIM_CMAP, cb_label = "")
+    ax = Axis(fig[pos...]; title = title, xlabel = "x (km)", ylabel = "y (km)", aspect = DataAspect())
+    hm = heatmap!(ax, xc_km, yc_km, mask_nan(field), colormap = colormap, colorscale = colorscale, colorrange = colorrange, nan_color = :transparent)
+    Colorbar(fig[pos[1], pos[2]+1], hm, label = cb_label)
+    return ax, hm
+end
+
+panel!((1, 1), "a) Basal Water Pressure\n(pw / pi)", pw_frac; colorrange = (0, 1))
+panel!((1, 3), "b) Gap Height (m)", b; colorrange = (1e-3, 1e-1), colorscale = log10)
+
+panel!((1, 5), "c) Reynolds Number", Re; colorrange = (1, 1e4), colorscale = log10)
+Colorbar(fig[1, 7]; colormap = HELHEIM_CMAP, scale = log10, limits = (1 * p.nu, 1e4 * p.nu), label = "Water Flux (m² s⁻¹)")
+
+panel!((2, 1), "d) Effective Pressure (MPa)", N ./ 1e6; colorrange = (0, 3))
+panel!((2, 3), "e) Transmissivity (m² s⁻¹)", K; colorrange = (1e-4, 1e4), colorscale = log10)
+panel!((2, 5), "f) Basal Melt Rate (m yr⁻¹)", mdot_myr; colorrange = (1e-2, 1e1), colorscale = log10, colormap = HELHEIM_DIVERGING_CMAP)
+
 fig

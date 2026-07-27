@@ -115,3 +115,19 @@ lines!(ax_h, days, [mean(view(h_hist, :, :, i)) for i in axes(h_hist, 3)], label
 lines!(ax_h, days, [maximum(view(h_hist, :, :, i)) for i in axes(h_hist, 3)], label = "max")
 axislegend(ax_h)
 fig_ts
+
+# The spatial gap-height and head fields at the end of the run (back to the winter baseline,
+# day 365): the channel the melt season carved out along the outflow direction has mostly closed
+# again by the time the cycle completes.
+
+grounded = mask .== GROUNDED
+mask_nan(field) = ifelse.(grounded, field, NaN)
+
+fig_final = Figure(size = (900, 350))
+ax1 = Axis(fig_final[1, 1], title = "Gap height (m), day 365", xlabel = "x (m)", ylabel = "y (m)", aspect = DataAspect())
+hm1 = heatmap!(ax1, grid.x, grid.y, mask_nan(view(b_hist, :, :, tsteps + 1)), colormap = :inferno, nan_color = :transparent)
+Colorbar(fig_final[1, 2], hm1)
+ax2 = Axis(fig_final[1, 3], title = "Hydraulic head (m), day 365", xlabel = "x (m)", ylabel = "y (m)", aspect = DataAspect())
+hm2 = heatmap!(ax2, grid.x, grid.y, mask_nan(view(h_hist, :, :, tsteps + 1)), colormap = :dense, nan_color = :transparent)
+Colorbar(fig_final[1, 4], hm2)
+fig_final
