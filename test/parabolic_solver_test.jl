@@ -54,6 +54,38 @@
             @test all(isfinite, Array(state.K))
         end
 
+        @testset "Steady state matches EllipticHeadScheme's (p.e_v -> 0 limit)" begin
+
+            # e_v only sets how fast h relaxes toward the steady balance of diffusion vs.
+            # sources (Sommers et al. 2018 Eq. 13's e_v*dh/dt storage term vanishes once
+            # dh/dt -> 0) -- it doesn't change what that steady state *is*. Run both schemes
+            # from the same initial condition under the same constant forcing, long enough to
+            # plateau, and check they land on the same (h, b).
+            p_elliptic  = ModelParameters(e_v = 0.0,  b_min = 1e-3)
+            p_parabolic = ModelParameters(e_v = 1e-3, b_min = 1e-3)
+
+            state_elliptic  = State(grid)
+            state_parabolic = State(grid)
+            set_initial_conditions!(state_elliptic,  grid, p_elliptic,  sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
+            set_initial_conditions!(state_parabolic, grid, p_parabolic, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
+
+            dt, tsteps = 3600.0, 1000 # backward-Euler is unconditionally stable, so dt can be large; chosen (see git history) so both schemes fully plateau well within tsteps
+
+            ls_elliptic = CholeskyDirectSolver(grid)
+            ps_elliptic = PicardSolver(500, 1e-6, ls_elliptic, grid)
+            sim_elliptic = Simulation(grid, state_elliptic, tsteps, floattype(dt), p_elliptic, "implicit", String[], ConstantMeltInput(), sl; ps = ps_elliptic)
+            run!(sim_elliptic)
+
+            ls_parabolic = CholeskyDirectSolver(grid)
+            sim_parabolic = Simulation(grid, state_parabolic, tsteps, floattype(dt), p_parabolic, "implicit", String[], ConstantMeltInput(), sl; ls = ls_parabolic)
+            run!(sim_parabolic)
+
+            # Empirically ~3e-7 relative -- rtol here leaves ample margin rather than pinning the exact residual.
+            @test Array(state_elliptic.h) ≈ Array(state_parabolic.h) rtol = 1e-4
+            @test Array(state_elliptic.b) ≈ Array(state_parabolic.b) rtol = 1e-4
+
+        end
+
         @testset "run! completes under ParabolicHeadScheme" begin
             p = ModelParameters(e_v = 1e-3)
             state = State(grid)

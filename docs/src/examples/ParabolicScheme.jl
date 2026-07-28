@@ -127,3 +127,34 @@ ax2 = Axis(fig_b[1, 3], title = "Gap height (m), parabolic", aspect = DataAspect
 hm2 = heatmap!(ax2, grid.x, grid.y, mask_nan(Array(state_parabolic.b)), colormap = :inferno)
 Colorbar(fig_b[1, 4], hm2)
 fig_b
+
+# ## Steady state: same destination, different path
+# `e_v` only sets how fast `h` relaxes toward the steady balance of diffusion vs. sources
+# (Sommers et al. 2018 Eq. 13's `e_v*∂h/∂t` storage term vanishes once `∂h/∂t -> 0`) -- it doesn't
+# change what that balance *is*. Starting fresh from the spun-up baseline `state0` (the original
+# 1 m/yr background melt, not the 20x step above), running both schemes forward with a large `dt`
+# (backward-Euler is unconditionally stable, so this is fine) until each plateaus confirms they
+# land on the same fixed point.
+
+p_elliptic_ss  = ModelParameters(e_v = 0.0,  b_min = 1e-3, omega = 1e-4)
+p_parabolic_ss = ModelParameters(e_v = 1e-3, b_min = 1e-3, omega = 1e-4)
+
+state_elliptic_ss  = deepcopy(state0)
+state_parabolic_ss = deepcopy(state0)
+
+dt_ss, tsteps_ss = 86400.0, 300 # 1 day steps, ~10 months -- long enough for both schemes to plateau
+
+ls_elliptic_ss = CholeskyDirectSolver(grid)
+ps_elliptic_ss = PicardSolver(500, 1e-6, ls_elliptic_ss, grid; alpha = 0.1)
+sim_elliptic_ss = Simulation(grid, state_elliptic_ss, tsteps_ss, floattype(dt_ss), p_elliptic_ss, "implicit", String[], ConstantMeltInput(), sl;
+                             ps = ps_elliptic_ss)
+run!(sim_elliptic_ss)
+
+ls_parabolic_ss = CholeskyDirectSolver(grid)
+sim_parabolic_ss = Simulation(grid, state_parabolic_ss, tsteps_ss, floattype(dt_ss), p_parabolic_ss, "implicit", String[], ConstantMeltInput(), sl;
+                              ls = ls_parabolic_ss)
+run!(sim_parabolic_ss)
+
+h_e_ss, h_p_ss = Array(state_elliptic_ss.h), Array(state_parabolic_ss.h)
+h_diff_rel = maximum(abs.(h_e_ss .- h_p_ss)) / maximum(abs.(h_e_ss))
+println("max relative difference between the two steady-state h fields: $(round(h_diff_rel; sigdigits = 3))")
