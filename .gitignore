@@ -1,12 +1,17 @@
 /Manifest*.toml
 /LocalPreferences.toml
 
-# Only runtests.jl (the real, maintained test suite) is tracked under test/.
-# Everything else -- cluster-only tooling, exploratory/one-off scripts,
-# generated figures/videos/data -- is ignored wholesale so new files never
-# need a new .gitignore line.
+# Only the maintained test suite is tracked under test/ (runtests.jl plus the
+# topic files it includes). Everything else -- cluster-only tooling,
+# exploratory/one-off scripts, generated figures/videos/data -- is ignored
+# wholesale so new scratch files never need a new .gitignore line.
 /test/*
 !/test/runtests.jl
+!/test/linear_solver_test.jl
+!/test/observer_test.jl
+!/test/checkpoint_test.jl
+!/test/sliding_law_test.jl
+!/test/parabolic_solver_test.jl
 
 # OS junk
 .DS_Store

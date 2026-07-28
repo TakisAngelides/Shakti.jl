@@ -64,11 +64,11 @@ Writes `tracked_obs` (names of `State` fields) at each of `tracked_times` (times
 and holds the open file/dataset handle.
 """
 struct IOObserver{FR <: AbstractFileWriter} <: AbstractObserver
-    tracked_obs::Vector{String}   # names of State fields to record
-    tracked_times::AbstractVector{Int}      # time step indices at which to record
-    fr::FR                        # file format
-    path::String                  # where to write
-    handle::Ref{Any}              # set by prepare!; holds the open file/dataset handle
+    tracked_obs::Vector{String}        # names of State fields to record
+    tracked_times::AbstractVector{Int} # time step indices at which to record
+    fr::FR                             # file format
+    path::String                       # where to write
+    handle::Ref{Any}                   # set by prepare!; holds the open file/dataset handle
 end
 
 """

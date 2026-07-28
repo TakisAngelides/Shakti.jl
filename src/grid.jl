@@ -21,8 +21,7 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Builds a [`Grid`](@ref) with `nx * ny` cells over a domain of size `lx * ly`, deriving `dx`, `dy`,
-and the cell-center coordinate vectors `x`/`y`.
+Builds a [`Grid`](@ref) with `nx * ny` cells over a domain of size `lx * ly`, deriving `dx`, `dy`, and the cell-center coordinate vectors `x`/`y`.
 """
 function Grid(nx, ny, lx, ly)
 

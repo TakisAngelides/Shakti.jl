@@ -15,7 +15,7 @@
 
 @parallel_indices (ix, iy) function compute_dhdx_kernel!(dhdx, h, valid_x, dx)
     if ix > 1 && ix < size(dhdx, 1) && iy <= size(dhdx, 2)
-        dhdx[ix, iy] = ((h[ix, iy] - h[ix-1, iy]) / dx) * valid_x[ix, iy]
+        dhdx[ix, iy] = ((h[ix, iy] - h[ix-1, iy]) / dx) * valid_x[ix, iy] # staggered derivative from two center values times the validation of the face which gets zeroed if touching OTHER_BASIN
     end
     return
 end
@@ -94,7 +94,7 @@ end
 # its own field's bounds, exactly as the unfused kernels above already did.
 @parallel_indices (ix, iy) function compute_dhdxy_kernel!(dhdx, dhdy, h, valid_x, valid_y, dx, dy)
     if ix > 1 && ix < size(dhdx, 1) && iy <= size(dhdx, 2)
-        dhdx[ix, iy] = ((h[ix, iy] - h[ix-1, iy]) / dx) * valid_x[ix, iy]
+        dhdx[ix, iy] = ((h[ix, iy] - h[ix-1, iy]) / dx) * valid_x[ix, iy] # valid_x is an XFace field; 0 if face touches a 'OTHER_BASIN' cell or 1 otherwise
     end
     if iy > 1 && iy < size(dhdy, 2) && ix <= size(dhdy, 1)
         dhdy[ix, iy] = ((h[ix, iy] - h[ix, iy-1]) / dy) * valid_y[ix, iy]

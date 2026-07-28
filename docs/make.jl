@@ -4,7 +4,7 @@ ENV["JULIA_DEBUG"] = "Documenter"
 
 using Shakti
 
-for example in ("SeasonalMeltInput", "MaskVariants", "Helheim")
+for example in ("SeasonalMeltInput", "MaskVariants", "ParabolicScheme", "AllOptions", "Helheim")
     Literate.markdown(
         joinpath(@__DIR__, "src", "examples", "$example.jl"),
         joinpath(@__DIR__, "src", "examples");
@@ -15,6 +15,8 @@ end
 example_pages = [
     "examples/SeasonalMeltInput.md",
     "examples/MaskVariants.md",
+    "examples/ParabolicScheme.md",
+    "examples/AllOptions.md",
     "examples/Helheim.md",
 ]
 

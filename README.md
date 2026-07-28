@@ -10,13 +10,15 @@ pressure, water flux, and drainage-system geometry (gap height) beneath an ice s
 transitions smoothly between laminar (distributed) and turbulent (channelized) flow regimes
 rather than treating them as separate model components.
 
-Shakti solves the nonlinear elliptic equation for hydraulic head via Picard iteration each
-timestep, then evolves the gap height explicitly or implicitly, using either a direct (sparse
-Cholesky) or iterative (preconditioned conjugate gradient, with Chebyshev or algebraic-multigrid
-preconditioning) linear solver. It runs on CPU (`Threads`) or GPU (`CUDA`/`Metal`) backends via
-[ParallelStencil.jl](https://github.com/omlins/ParallelStencil.jl), selected once at load time
-through `Preferences`-backed `backend`/`floattype` constants rather than a runtime argument, so
-every kernel compiles for the right array/element type.
+Shakti solves for hydraulic head each timestep either via Picard iteration on the full nonlinear
+elliptic equation (`EllipticHeadScheme`, the default), or -- when a nonzero englacial storage void
+ratio (`e_v`) is set -- via a single backward-Euler linear solve under the parabolic head scheme
+(`ParabolicHeadScheme`). Either way, the gap height then evolves explicitly or implicitly, using
+either a direct (sparse Cholesky) or iterative (preconditioned conjugate gradient, with Chebyshev
+or algebraic-multigrid preconditioning) linear solver. It runs on CPU (`Threads`) or GPU
+(`CUDA`/`Metal`) backends via [ParallelStencil.jl](https://github.com/omlins/ParallelStencil.jl),
+selected once at load time through `Preferences`-backed `backend`/`floattype` constants rather than
+a runtime argument, so every kernel compiles for the right array/element type.
 
 ## Installation
 
@@ -50,14 +52,15 @@ sl = RegularizedCoulombSlidingLaw(C) # or LinearSlidingLaw(grid, C) / Prescribed
 #    OTHER_BASIN, see src/mask.jl), bed/surface elevation, ice thickness via gap height,
 #    Glen's-law rate factor, geothermal flux, and basal sliding velocity.
 state = State(grid)
-set_initial_conditions!(state, grid, p, mi, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
+set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
 
 # 4. Choose a linear solver for the Picard/elliptic head solve...
 ls = CholeskyDirectSolver(grid)               # fastest at every grid size benchmarked so far, CPU-only
 # ls = CGIterativeSolver(grid, MatrixFreeLinearSystem) # GPU-capable alternative
 ps = PicardSolver(500, 1e-6, ls, grid)
 
-# 5. ...and wrap everything in a Simulation.
+# 5. ...and wrap everything in a Simulation. (If p.e_v != 0 instead, pass `ls = ...` here in place
+#    of `ps` -- ParabolicHeadScheme's single backward-Euler solve needs no Picard loop.)
 sim = Simulation(grid, state, tsteps, dt, p, "implicit", ["h", "N", "b", "mdot"], mi, sl;
                   ps = ps, which_observer = "IO", which_file_writer = "NetCDF",
                   tracked_times = 0:tsteps, path = "output.nc")
@@ -68,8 +71,9 @@ run!(sim)
 ```
 
 See the [online documentation](https://TakisAngelides.github.io/Shakti.jl/dev/) for the full API
-reference, and `test/runtests.jl` for complete, runnable setups (synthetic grids exercising every
-sliding law, melt input, linear solver, and observer combination).
+reference and a gallery of complete, runnable examples (seasonal melt input, mask geometries, the
+parabolic head scheme, a full options reference, and a real-data reproduction of Sommers and others
+(2023)'s Helheim Glacier winter base state), and `test/runtests.jl` for the test suite's own setups.
 
 ## Package structure
 
@@ -83,9 +87,9 @@ there's more than one way to do that piece of the physics/numerics:
 | `ModelParameters` | Physical constants (densities, viscosity, Glen's-law exponent, bed-bump geometry, ...) | `ModelParameters` |
 | `AbstractSlidingLaw` | How basal shear stress `taub` (feeding frictional melt) is obtained | `RegularizedCoulombSlidingLaw`, `LinearSlidingLaw`, `PrescribedSlidingLaw` |
 | `AbstractMeltInput` | Englacial-to-bed meltwater input (moulins/crevasses) | `ConstantMeltInput`, `SeasonalMeltInput` |
-| `AbstractLinearSystem` | How the linearized elliptic equation is represented | `SparseAssembledLinearSystem`, `MatrixFreeLinearSystem` |
-| `AbstractLinearSolver` | How that system is solved each Picard iteration | `CholeskyDirectSolver` (direct), `CGIterativeSolver` (iterative, with `AMGPreconditioner`/`ChebyshevPreconditioner`) |
-| `AbstractHeadScheme` / `AbstractGapScheme` | Time-integration scheme for head / gap height | `EllipticHeadScheme` (Picard); `ExplicitGapScheme`, `ImplicitGapScheme` |
+| `AbstractLinearSystem` | How the linearized head equation is represented | `SparseAssembledLinearSystem`, `MatrixFreeLinearSystem` |
+| `AbstractLinearSolver` | How that system is solved each Picard iteration (or each parabolic timestep) | `CholeskyDirectSolver` (direct), `CGIterativeSolver` (iterative, with `AMGPreconditioner`/`ChebyshevPreconditioner`) |
+| `AbstractHeadScheme` / `AbstractGapScheme` | Time-integration scheme for head / gap height | `EllipticHeadScheme` (Picard, `e_v == 0`); `ParabolicHeadScheme` (backward-Euler, `e_v != 0`); `ExplicitGapScheme`, `ImplicitGapScheme` |
 | `AbstractObserver` | How output is recorded | `NoObserver`, `LiveObserver` (in-memory), `IOObserver` (to disk: NetCDF/HDF5/JLD2/CSV) |
 | `Simulation` | Bundles everything above and drives the time loop | `Simulation`, `run!` |
 
@@ -102,17 +106,21 @@ there's more than one way to do that piece of the physics/numerics:
 - `melt_input.jl` -- `AbstractMeltInput` and its implementations.
 - `k_face_scheme.jl` -- how hydraulic transmissivity is averaged across a cell face
   (`Arithmetic`/`Harmonic`).
-- `melt_rate.jl` -- sliding laws (`AbstractSlidingLaw`) and melt-rate computation (geothermal +
-  frictional + potential-energy + sensible-heat contributions).
+- `sliding_law.jl` -- sliding laws (`AbstractSlidingLaw`) and the basal shear stress they produce.
+- `melt_rate.jl` -- melt-rate computation (geothermal + frictional + potential-energy +
+  sensible-heat contributions).
 - `field_gradients.jl` -- hydraulic-head and water-pressure gradients.
 - `water_flux.jl` -- water flux, Reynolds number, and hydraulic transmissivity.
-- `gap_height.jl` -- gap-height (`b`) evolution.
+- `gap_height.jl` -- gap-height (`b`) evolution, including the opening-by-sliding term
+  (`AbstractOpenBySlidingScheme`).
 - `linear_solver.jl` -- the assembled-sparse and matrix-free linear-system representations, and
-  their direct/iterative solvers.
+  their direct/iterative solvers (elliptic and parabolic variants of each).
 - `preconditioner.jl` -- Chebyshev semi-iteration and algebraic-multigrid preconditioners for
   `CGIterativeSolver`.
 - `elliptic_solver.jl` -- the Picard iteration that solves the nonlinear elliptic equation for
-  head each timestep.
+  head each timestep (`EllipticHeadScheme`, `e_v == 0`).
+- `parabolic_solver.jl` -- the single backward-Euler linear solve used instead when englacial
+  storage is nonzero (`ParabolicHeadScheme`, `e_v != 0`).
 - `simulation.jl` -- `Simulation`.
 - `initial_conditions.jl` -- `set_initial_conditions!`.
 - `static_fields.jl`, `pressure.jl` -- fields derived directly from geometry/head (thickness,
@@ -129,11 +137,15 @@ using Pkg
 Pkg.test("Shakti")
 ```
 
-The test suite exercises the full pipeline (initial conditions -> Picard solve -> time-stepping)
-on synthetic grids: `RegularizedCoulombSlidingLaw`/`LinearSlidingLaw`, every linear
-solver/preconditioner combination (`CholeskyDirectSolver`, `CGIterativeSolver` with Jacobi/
-AMG/Chebyshev), every observer/file-writer combination, and checkpoint/restart. Not yet covered:
-`PrescribedSlidingLaw` and `SeasonalMeltInput`.
+`test/runtests.jl` just includes a handful of topic files, split out as the suite grew:
+`linear_solver_test.jl` (assembled-sparse vs. matrix-free agreement, every linear
+solver/preconditioner combination -- `CholeskyDirectSolver`, `CGIterativeSolver` with
+Jacobi/AMG/Chebyshev), `observer_test.jl` (every observer/file-writer combination),
+`checkpoint_test.jl` (save/restore mid-run), `sliding_law_test.jl`
+(`RegularizedCoulombSlidingLaw`/`LinearSlidingLaw`), and `parabolic_solver_test.jl`
+(`ParabolicHeadScheme`). Together they exercise the full pipeline (initial conditions -> head
+solve -> time-stepping) on synthetic grids. Not yet covered: `PrescribedSlidingLaw` and
+`SeasonalMeltInput`.
 
 ## License
 

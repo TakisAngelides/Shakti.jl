@@ -124,7 +124,7 @@ compute_Re!(s::State) = (@parallel compute_Re_kernel!(s.Re, s.Re_x, s.Re_y); s)
 # compute_q_x!/compute_Re_x! above are a LAGGED pair: q is computed from
 # whatever Re the *previous* Picard iteration left behind, then Re is
 # immediately updated to match the new q -- so q and Re are always exactly
-# consistent with EACH OTHER, but q is one iteration stale relative to the
+# consistent with each other, but q is one iteration stale relative to the
 # current dhdx/b. That lag is a real defect, not just theoretically fragile:
 # for large gradients it can lock into a period-2 oscillation around the true
 # fixed point instead of converging to it at all (confirmed empirically,
@@ -133,7 +133,7 @@ compute_Re!(s::State) = (@parallel compute_Re_kernel!(s.Re, s.Re_x, s.Re_y); s)
 # test/runtests.jl's setup, where a lagged initial guess is harmless -- it's
 # immediately superseded by the first real Picard iteration either way.
 #
-# q and Re are solved for here with NO lag, given only the current b/dhdx:
+# q and Re are solved for here with no lag, given only the current b/dhdx:
 # substituting Re = |q|/nu into Eq. 5 (SHAKTI paper, Sommers et al. 2018)
 # gives a quadratic. Solved for Re (equivalent up to a change of variables to
 # solving for |q| directly -- verified to agree to floating-point precision,

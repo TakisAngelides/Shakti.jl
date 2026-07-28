@@ -7,10 +7,8 @@
 # colorbuffer()) rather than GLMakie -- no OpenGL/display needed, so this
 # works on headless HPC nodes as well as locally. LiveObserver.history[name]
 # is a single preallocated array of shape (field's own shape...,
-# length(tracked_times)) -- time is the last dimension -- unlike src_old's
-# Observer.history[field], which was a Vector{Array} (one array per saved
-# frame). Frames are selected here with selectdim(..., ndims(hist), idx)
-# instead of the old Dict/Vector indexing.
+# length(tracked_times)) -- time is the last dimension --. Frames are selected 
+# here with selectdim(..., ndims(hist), idx).
 #
 # tracked_times holds the actual simulation time-step index for each saved
 # frame, so titles below label frames by real time-step number rather than by
@@ -27,21 +25,23 @@ moulin locations on row `j` as red markers. Uses CairoMakie's software rasterize
 on headless HPC nodes as well as locally.
 """
 function make_mp4_mid(hist::AbstractArray, tracked_times, j, moulin_ij; filename, show_moulins::Bool = true)
-    ntimes = size(hist, ndims(hist))
+    ntimes = size(hist, ndims(hist)) # number of time steps saved in hist
     ymin   = minimum(hist)
     ymax   = maximum(hist)
-    x      = 1:size(hist, 1)
-    data   = Observable(selectdim(hist, ndims(hist), 1)[:, j])
+    x      = 1:size(hist, 1) # remember in history the data is saved as x, y, t
+    # Observable(...) wraps that vector in a Makie Observable so it's the animation's mutable data source — 
+    # later frames update data[] in place (does lines!(ax, x, data), which auto-updates when data changes).
+    data   = Observable(selectdim(hist, ndims(hist), 1)[:, j]) # from hist we take the configuration of the first index of the last dimension - (which is the time) - and slice spatially [:, j]
     fig    = Figure(size = (1000, 800))
     ax     = Axis(fig[1, 1]; xlabel = "i", ylabel = "Value", limits = (nothing, (ymin, ymax)))
     lines!(ax, x, data)
 
-    moulin_i = show_moulins ? [mi for (mi, mj) in moulin_ij if mj == j] : Int[]
-    if !isempty(moulin_i)
+    moulin_i = show_moulins ? [mi for (mi, mj) in moulin_ij if mj == j] : Int[] # going to put red dots at the x locations where the moulin was during the simulation or if we dont print the moulins we set this to an empty Int vector Int[]
+    if !isempty(moulin_i) # if we had moulins, i.e. somewhere a non-zero in the ieb field 
         moulin_vals = Observable(selectdim(hist, ndims(hist), 1)[moulin_i, j])
-        scatter!(ax, moulin_i, moulin_vals; color = :red, markersize = 8)
+        scatter!(ax, moulin_i, moulin_vals; color = :red, markersize = 8) # sets the red dot scatter point to signal in the plotting where each moulin was
         record(fig, filename, 1:ntimes; framerate = 20) do idx
-            data[] = selectdim(hist, ndims(hist), idx)[:, j]
+            data[] = selectdim(hist, ndims(hist), idx)[:, j] # auto-updates the fig since data was wrapped in the Makie Observable struct
             moulin_vals[] = selectdim(hist, ndims(hist), idx)[moulin_i, j]
             ax.title = "t_iter = $(tracked_times[idx])"
         end
@@ -102,8 +102,7 @@ make_mp4_2d(obs::LiveObserver, name::String, moulin_ij; filename, show_moulins::
 """
 $(TYPEDSIGNATURES)
 
-Extracts `(i,j)` moulin locations from `state.ieb`'s nonzero entries, so you don't have to
-hand-build `moulin_ij` yourself for [`make_mp4_mid`](@ref)/[`make_mp4_2d`](@ref).
+Extracts `(i,j)` moulin locations from `state.ieb`'s nonzero entries for [`make_mp4_mid`](@ref)/[`make_mp4_2d`](@ref).
 """
 function get_moulin_ij(state::State)
     idxs = findall(!iszero, Array(state.ieb))

@@ -3,7 +3,7 @@ $(TYPEDSIGNATURES)
 
 Every field of the subglacial hydrology solve: cell-centered quantities (hydraulic head, water
 and overburden pressure, effective pressure, gap height, melt rate and its three heat-source
-components, ...) and the x-/y-face quantities needed for the finite-volume flux/gradient stencils
+components, ...) and the x-/y-face quantities needed for the finite-difference flux/gradient stencils
 (`Nx+1 x Ny` and `Nx x Ny+1` respectively). Every field shares one array/element type `A`, so
 switching backend or floating-point precision (see the `Preferences`-backed `backend`/`floattype`
 constants in `Shakti.jl`) only ever touches [`Grid`](@ref)/`State` construction, not the kernels

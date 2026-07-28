@@ -5,35 +5,40 @@
 # State.mask is allocated with @fill(0, ...) in state.jl, so -- like valid_x/
 # valid_y below -- it actually ends up float-valued (0.0/1.0/2.0/3.0), not a
 # true Int array; @fill coerces to the backend's configured floattype
-# regardless of the literal fill value's type. That's fine for this file's
-# purposes: comparisons like `mask[i,j] != OTHER_BASIN` or `mask[i,j] ==
-# GROUNDED` still work correctly against the Int constants below (e.g.
-# `0.0 == 0` is `true`), since mask only ever takes these four small
-# integer-valued floats.
+# regardless of the literal fill value's type. The constants below are
+# therefore declared as Float64 literals too (not Int): comparisons like
+# `mask[i,j] != OTHER_BASIN` are Float-Float, which compiles to a plain
+# float comparison. Julia's Float-Int comparison isn't free even for small
+# compile-time constants -- it has to guard against precision loss for
+# large integers, which shows up as extra sitofp/fptosi round-trip
+# instructions -- so keeping these as floats avoids that cost in these
+# comparisons, which run in some of the hottest kernels in the solver
+# (linear_solver.jl, k_face_scheme.jl, gap_height.jl).
 
 """
 Mask value: dynamic hydrology solved here (Picard/Poisson elliptic solve + gap-height evolution).
 """
-const GROUNDED    = 0
+const GROUNDED = 0.0
 
 """
-Mask value: Dirichlet boundary, `pw = p_atm - rho_w*g*min(zb, 0)` (`zb` = bedrock elevation
+Mask value: Dirichlet boundary, `pw = p_atm - rho_sw*g*min(zb, 0)` (`zb` = bedrock elevation
 relative to sea level, positive up, so a marine bed at `zb < 0` gets the correct hydrostatic
-pressure at depth `-zb`).
+pressure at depth `-zb`; `rho_sw` is seawater density, since this is the ocean's own hydrostatic
+pressure rather than the subglacial drainage system's).
 """
-const OCEAN       = 1
+const OCEAN = 1.0
 
 """
 Mask value: Dirichlet boundary, `pw = p_atm` (`0.0` by default).
 """
-const LAND        = 2
+const LAND = 2.0
 
 """
 Mask value: not solved here; frozen row. Any `GROUNDED` neighbour treats the shared face as
 zero-flux (Neumann), and any face-based quantity (`dhdx`, `dpwdx`, `q_x`, ...) touching this cell
 is zeroed.
 """
-const OTHER_BASIN = 3
+const OTHER_BASIN = 3.0
 
 # =============================================================================
 # Face-validity bookkeeping

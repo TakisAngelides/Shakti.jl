@@ -44,8 +44,6 @@ apply_mask_to_sliding!
 AbstractMeltInput
 ConstantMeltInput
 SeasonalMeltInput
-initialize_ieb!
-compute_ieb!
 update_ieb!
 ```
 
@@ -89,7 +87,8 @@ SparseAssembledLinearSystem
 MatrixFreeLinearSystem
 CholeskyDirectSolver
 CGIterativeSolver
-solve_linear_system!
+solve_elliptic_linear_system!
+solve_parabolic_linear_system!
 ```
 
 ## Preconditioners
@@ -113,6 +112,12 @@ PicardSolver
 elliptic_solver!
 Picard_loop!
 Picard_iteration!
+```
+
+## Parabolic solver
+
+```@docs
+parabolic_solver!
 ```
 
 ## Simulation
@@ -163,6 +168,9 @@ compute_q_and_Re_xy!
 ## Gap height
 
 ```@docs
+AbstractOpenBySlidingScheme
+WithOpenBySliding
+NoOpenBySliding
 compute_beta!
 compute_b_x!
 compute_b_y!

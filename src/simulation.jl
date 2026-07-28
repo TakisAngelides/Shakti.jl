@@ -3,17 +3,24 @@ $(TYPEDSIGNATURES)
 
 How the hydraulic head is advanced each timestep -- multiple dispatch on the concrete subtype
 (see [`step_h!`](@ref) in `run.jl`) picks between [`EllipticHeadScheme`](@ref) (Picard iteration,
-used when `p.e_v == 0`) and [`ParabolicHeadScheme`](@ref) (not yet implemented).
+used when `p.e_v == 0`) and [`ParabolicHeadScheme`](@ref) (single backward-Euler solve, used when
+`p.e_v != 0`).
 """
 abstract type AbstractHeadScheme end
 
 """
 $(TYPEDSIGNATURES)
 
-Head scheme for `p.e_v != 0` (nonzero englacial storage void ratio) -- not yet implemented, see
-`run.jl`'s `step_h!`.
+Head scheme for `p.e_v != 0` (nonzero englacial storage void ratio, Sommers et al. 2018 Eq. 13's
+`∂(e_v(h-zb))/∂t` storage term): each timestep, a single backward-Euler linear solve (`ls`, see
+[`parabolic_solver!`](@ref)) updates `h` directly -- no Picard loop. Every nonlinear coefficient
+(`K`, `N`, `A_visc`, `b`, `mdot`, `beta`, `abs_ub`) is evaluated at the current (start-of-timestep)
+state rather than iterated to convergence, the same lagged-coefficient idiom
+`compute_b_implicit_kernel!` uses for `b`.
 """
-struct ParabolicHeadScheme <: AbstractHeadScheme end
+struct ParabolicHeadScheme{LS <: AbstractLinearSolver} <: AbstractHeadScheme
+    ls::LS
+end
 
 """
 $(TYPEDSIGNATURES)
@@ -56,13 +63,14 @@ and every "which scheme/law" choice (head, gap, sensible-heat, K-face, melt-inpu
 bundled together with the observer that records output. Build one with the keyword constructor
 below (not this positional one directly), then call [`run!`](@ref).
 """
-struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHeadScheme, GS <: AbstractGapScheme, SHS <: AbstractSensibleHeatScheme, O <: AbstractObserver, G <: Grid, S <: State, MI <: AbstractMeltInput, KFS <: AbstractKFaceScheme, SL <: AbstractSlidingLaw}
+struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHeadScheme, GS <: AbstractGapScheme, SHS <: AbstractSensibleHeatScheme, OSS <: AbstractOpenBySlidingScheme, O <: AbstractObserver, G <: Grid, S <: State, MI <: AbstractMeltInput, KFS <: AbstractKFaceScheme, SL <: AbstractSlidingLaw}
     tsteps::Int
     dt::F
     p::P
     hs::HS
     gs::GS
     shs::SHS
+    oss::OSS
     observer::O
     grid::G
     state::S
@@ -82,16 +90,19 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
 # Notes
 
 - Head scheme: [`EllipticHeadScheme`](@ref) if `p.e_v == 0` (requires `ps`, a
-  [`PicardSolver`](@ref)), else [`ParabolicHeadScheme`](@ref).
+  [`PicardSolver`](@ref)), else [`ParabolicHeadScheme`](@ref) (requires `ls`, an
+  [`AbstractLinearSolver`](@ref)).
 - `gap_scheme_choice`: `"explicit"` or `"implicit"` (see [`AbstractGapScheme`](@ref)).
 - Sensible-heat scheme: off automatically ([`NoSensibleHeat`](@ref)) if either `p.ct` or `p.cw` is
   zero, else [`WithSensibleHeat`](@ref).
+- Opening-by-sliding scheme: off automatically ([`NoOpenBySliding`](@ref)) if `p.br` is zero, else
+  [`WithOpenBySliding`](@ref).
 - `k_face_choice`: `"arithmetic"` or `"harmonic"` (see [`AbstractKFaceScheme`](@ref)).
 - Observer: [`NoObserver`](@ref) if `tracked_obs` is empty; otherwise `which_observer` must be
   `"IO"` (writes to `path` via `which_file_writer`, one of `"NetCDF"`/`"HDF5"`/`"JLD2"`/`"CSV"`,
   at `tracked_times`) or `"Live"` (keeps `tracked_times` in memory instead of writing to disk).
 """
-function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::Vector{String}, mi::AbstractMeltInput, sl::AbstractSlidingLaw; ps = nothing, which_observer = nothing, which_file_writer = nothing, tracked_times = nothing, path = nothing, k_face_choice = "arithmetic", verbose = false)
+function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::Vector{String}, mi::AbstractMeltInput, sl::AbstractSlidingLaw; ps = nothing, ls = nothing, which_observer = nothing, which_file_writer = nothing, tracked_times = nothing, path = nothing, k_face_choice = "arithmetic", verbose = false)
 
     # Check that all tracked observables are valid State fields
     for name in tracked_obs
@@ -103,7 +114,8 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
         ps === nothing && error("ps (a PicardSolver) must be provided when p.e_v == 0 (elliptic head scheme)")
         hs = EllipticHeadScheme(ps)
     else # parabolic head scheme
-        hs = ParabolicHeadScheme()
+        ls === nothing && error("ls (an AbstractLinearSolver) must be provided when p.e_v != 0 (parabolic head scheme)")
+        hs = ParabolicHeadScheme(ls)
     end
 
     # Gap scheme setup
@@ -118,6 +130,10 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
     # Sensible-heat scheme setup: off automatically if either factor in its
     # ct*cw prefactor (see compute_mdot!) is zero.
     shs = (iszero(p.ct) || iszero(p.cw)) ? NoSensibleHeat() : WithSensibleHeat()
+
+    # Opening-by-sliding scheme setup: off automatically if p.br (the sole
+    # factor in compute_beta!'s term, see compute_beta_kernel!) is zero.
+    oss = iszero(p.br) ? NoOpenBySliding() : WithOpenBySliding()
 
     # K-face averaging scheme setup
     if k_face_choice == "arithmetic"
@@ -163,6 +179,6 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
         error("Unknown which_observer: \"$which_observer\" (expected \"IO\" or \"Live\")")
     end
 
-    return Simulation(tsteps, dt, p, hs, gs, shs, observer, grid, state, mi, kfs, sl, verbose, Ref(zero(dt)))
+    return Simulation(tsteps, dt, p, hs, gs, shs, oss, observer, grid, state, mi, kfs, sl, verbose, Ref(zero(dt)))
 
 end

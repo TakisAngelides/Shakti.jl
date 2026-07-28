@@ -18,9 +18,7 @@
 # still needs reductions -- but that only has to happen once per solve (see
 # update_chebyshev_bounds!), not once per CG iteration.
 #
-# CAVEAT, confirmed 2026-07-24 on real A100 hardware (test/gpu_perf_check.jl,
-# test/gpu_breakdown.jl -- gitignored, kept on the cluster only, see
-# .gitignore): using Chebyshev as CG's *preconditioner* does NOT eliminate
+# Caveat: using Chebyshev as CG's preconditioner does not eliminate
 # CG's own per-iteration host syncs. Standard preconditioned CG still
 # computes its own alpha/beta from dot products every outer iteration
 # regardless of which preconditioner solves z = M^-1 r -- that's inherent to
@@ -29,62 +27,25 @@
 # internal ldiv! recurrence in isolation, not the overall CG+Chebyshev
 # iteration. Measured result: on MatrixFreeLinearSystem (the only
 # GPU-capable solver) at 64x64/128x128 on an A100, plain Jacobi beat
-# Chebyshev(degree=4) in wall time at BOTH sizes (12%/29% faster
+# Chebyshev(degree=4) in wall time at both sizes (12%/29% faster
 # respectively) -- Chebyshev pays the same per-iteration sync cost as Jacobi
 # (from CG's own dot products) plus extra matvec work for the degree-4
 # polynomial application, without cutting the number of syncs enough to
 # compensate. Genuine sync-avoidance on GPU would need replacing CG itself
 # with a dot-product-free outer solver (true Chebyshev semi-iteration AS the
-# solver, not just the preconditioner) -- a much bigger change, not
-# currently justified since Jacobi already wins. Per-CG-iteration cost was
+# solver, not just the preconditioner). Per-CG-iteration cost was
 # also found to be roughly flat with grid size (~229us at 64x64, ~191us at
 # 128x128), consistent with fixed per-iteration overhead (kernel launch +
 # host sync) dominating over device compute at these sizes on this hardware
-# -- but this could NOT be confirmed via a proper device-vs-host profile:
-# CUDA.@profile produces no report at all on this cluster (verified even for
-# a trivial matrix multiply), most likely a driver-level GPU
-# performance-counter access restriction HPC clusters commonly lock down for
-# shared/multi-tenant security -- not fixable from the Julia/user side.
+# -- but this could not be confirmed via a proper device-vs-host profile.
 #
 # Net effect: for CGIterativeSolver{<:SparseAssembledLinearSystem} (CPU-only),
-# AMGPreconditioner (below) is the better choice and is the default there
-# (test/amg_rerun.jl, test/precond_vs_channelization.jl). For
+# AMGPreconditioner (below) is the better choice and is the default there. For
 # MatrixFreeLinearSystem (the GPU-capable path, where AMGPreconditioner isn't
 # available -- AlgebraicMultigrid.jl has no GPU array support), plain Jacobi
 # (chebyshev_degree = nothing, the default there) should be preferred over
 # Chebyshev per the above, at least at the grid sizes tested.
 #
-# Checked against Krylov.jl's own GPU/performance docs (jso.dev/Krylov.jl):
-# array types already match its recommendation (ParallelStencil's
-# backend-native arrays -- CuArray under CUDA, MtlArray under Metal); its
-# sparse-GPU guidance (CuSparseMatrixCSR + KrylovOperator, GPU-accelerated
-# ILU via CUSPARSE) doesn't apply here since MatrixFreeLinearSystem
-# deliberately avoids ever materializing a sparse matrix on GPU, which is
-# also why Jacobi/Chebyshev (matvec-based, not factorization-based) are the
-# only preconditioners that fit this representation at all.
-#
-# Julia's plain SparseArrays sparse matvec (used by SparseAssembledLinearSystem
-# on CPU, including inside AMG's own CG iterations) is single-threaded, and
-# Krylov.jl's tips docs suggest MKLSparse.jl or ThreadedSparseCSR.jl to
-# parallelize it. Investigated 2026-07-24 (test/mklsparse_check.jl,
-# gitignored) and NOT adopted:
-# - MKLSparse.jl works (auto-overloads mul! for SparseMatrixCSC, zero code
-#   changes needed) but only gave a modest win on this cluster's smp nodes
-#   (AMD EPYC 7702): 27% faster matvec at 128x128, dropping to just 4% at
-#   512x512 -- consistent with Intel MKL's well-known CPU-vendor-detection
-#   penalty on non-Intel hardware (it can silently pick a less-optimized
-#   code path when it detects a non-Intel CPU). Combined with AMG already
-#   cutting CG iteration counts to single digits/low tens (see above), the
-#   real-world payoff is small, and smallest exactly at the larger grids
-#   that matter most for production runs.
-# - ThreadedSparseCSR.jl doesn't even load on Julia 1.12 (this project's
-#   version): it pulls in an old ArrayInterface.jl via Polyester.jl that's
-#   incompatible ("too many parameters for type AbstractTriangular"),
-#   unrelated to this cluster's hardware.
-# Worth revisiting if either the cluster's CPU hardware changes (Intel nodes
-# would make MKLSparse's case much stronger) or ThreadedSparseCSR.jl gets a
-# compatibility fix upstream.
-
 # Applies the diagonal-Jacobi-scaled operator D^-1*A. The same wrapper works
 # for both SparseAssembledLinearSystem's SparseMatrixCSC and
 # MatrixFreeLinearSystem's StencilOperator, since both already have a mul!
@@ -104,7 +65,7 @@ end
 
 function LinearAlgebra.mul!(y::AbstractVector, op::JacobiScaledOperator, p::AbstractVector)
     mul!(y, op.A, p)
-    y ./= op.d
+    y ./= op.d # Combined with the previous line this gives y = D^{-1} * A * p, i.e., left-multiplication by the inverse Jacobi diagonal.
     return y
 end
 
@@ -127,47 +88,47 @@ matrix from the CG alpha/beta recurrence (Saad, section 6.7 -- the same trick PE
 """
 function estimate_eigenvalue_bounds(op::JacobiScaledOperator, rhs::AbstractVector, nsteps::Int)
 
-    T = eltype(rhs)
+    T = eltype(rhs) # scalar type to match rhs (Float32/Float64), so all work below stays in that precision
 
     r  = copy(rhs) # r_0 = rhs - op*0 = rhs (x0 = 0)
-    p  = copy(r)
-    Ap = similar(r)
+    p  = copy(r)   # p_0 = r_0, the initial CG search direction
+    Ap = similar(r) # preallocated scratch for op*p each step
 
-    gamma = dot(r, r)
+    gamma = dot(r, r) # gamma_0 = r_0'r_0, CG's running residual-norm-squared
 
-    alphas = zeros(T, nsteps)
-    betas  = zeros(T, nsteps - 1)
+    alphas = zeros(T, nsteps)     # CG step sizes alpha_k, one per iteration
+    betas  = zeros(T, nsteps - 1) # CG direction-update coefficients beta_k, one fewer than alpha since the last iteration never updates p
 
     for k in 1:nsteps
-        mul!(Ap, op, p)
-        pAp = dot(p, Ap)
-        alphas[k] = gamma / pAp
-        if k < nsteps
-            r .-= alphas[k] .* Ap
-            gamma_next = dot(r, r)
-            betas[k] = gamma_next / gamma
-            p .= r .+ betas[k] .* p
-            gamma = gamma_next
+        mul!(Ap, op, p)       # Ap = op*p = D^-1*A*p, the one matvec this iteration needs
+        pAp = dot(p, Ap)      # p'*op*p, the denominator of the CG step size
+        alphas[k] = gamma / pAp # standard CG step size alpha_k = (r_k'r_k) / (p_k'*op*p_k)
+        if k < nsteps # skip the trailing residual/direction update on the last step -- alphas[nsteps] is all that's needed from it
+            r .-= alphas[k] .* Ap        # update residual: r_{k+1} = r_k - alpha_k*op*p_k
+            gamma_next = dot(r, r)       # gamma_{k+1} = r_{k+1}'r_{k+1}
+            betas[k] = gamma_next / gamma # CG direction coefficient beta_k = gamma_{k+1}/gamma_k
+            p .= r .+ betas[k] .* p      # new search direction: p_{k+1} = r_{k+1} + beta_k*p_k
+            gamma = gamma_next           # carry residual norm forward to next iteration
         end
     end
 
-    d = zeros(T, nsteps)
-    e = zeros(T, nsteps - 1)
-    d[1] = 1 / alphas[1]
+    d = zeros(T, nsteps)     # diagonal of the Lanczos tridiagonal matrix built from the CG recurrence
+    e = zeros(T, nsteps - 1) # off-diagonal (sub/super-diagonal, since it's symmetric) of that same matrix
+    d[1] = 1 / alphas[1] # Saad eq. 6.7.15: T's first diagonal entry is 1/alpha_1
     for k in 2:nsteps
-        d[k] = 1 / alphas[k] + betas[k-1] / alphas[k-1]
+        d[k] = 1 / alphas[k] + betas[k-1] / alphas[k-1] # remaining diagonal entries combine the current and previous CG coefficients
     end
     for k in 1:nsteps-1
-        e[k] = sqrt(betas[k]) / alphas[k]
+        e[k] = sqrt(betas[k]) / alphas[k] # off-diagonal entries from sqrt(beta_k)/alpha_k
     end
 
-    ritz = eigvals(SymTridiagonal(d, e))
+    ritz = eigvals(SymTridiagonal(d, e)) # small (nsteps x nsteps) dense eigenproblem on the host: its eigenvalues (Ritz values) approximate op's extreme eigenvalues
 
     # Small safety margin: the extreme Ritz values of a short Lanczos run
     # (especially the smallest) tend to still be inside the true spectrum's
     # extremes rather than exactly at them.
-    lambda_min = minimum(ritz) * T(0.9)
-    lambda_max = maximum(ritz) * T(1.1)
+    lambda_min = minimum(ritz) * T(0.9) # shrink the lower bound estimate by 10% so the true lambda_min isn't underestimated-past
+    lambda_max = maximum(ritz) * T(1.1) # grow the upper bound estimate by 10% so the true lambda_max isn't overestimated-past
 
     return lambda_min, lambda_max
 end
@@ -256,19 +217,19 @@ function update_chebyshev_bounds!(P::ChebyshevPreconditioner, rhs::AbstractVecto
     # reusing the previous (valid) solve's bounds is a good approximation
     # since consecutive Picard iterations' matrices are close to each other.
     lambda_min, lambda_max = try
-        estimate_eigenvalue_bounds(P.op, rhs, P.nsteps_estimate)
+        estimate_eigenvalue_bounds(P.op, rhs, P.nsteps_estimate) # re-run the short Lanczos estimate against this solve's current rhs
     catch e
-        e isa LinearAlgebra.LAPACKException || rethrow()
+        e isa LinearAlgebra.LAPACKException || rethrow() # only swallow the tridiagonal-eigensolve failure mode; anything else is a real bug, propagate it
         (NaN, NaN) # sentinel: fails the isfinite check below, taking the same fallback path as a bogus-but-finite estimate
     end
 
-    if isfinite(lambda_min) && isfinite(lambda_max) && lambda_min > 0 && lambda_max > lambda_min
-        P.lambda_min, P.lambda_max = lambda_min, lambda_max
+    if isfinite(lambda_min) && isfinite(lambda_max) && lambda_min > 0 && lambda_max > lambda_min # sanity-check the estimate: finite, positive, and a proper (non-empty) interval
+        P.lambda_min, P.lambda_max = lambda_min, lambda_max # estimate looks valid -- adopt it for this solve
     else
-        @warn "ChebyshevPreconditioner: eigenvalue bound estimate was invalid (lambda_min=$lambda_min, lambda_max=$lambda_max); reusing previous bounds for this solve" maxlog = 10
+        @warn "ChebyshevPreconditioner: eigenvalue bound estimate was invalid (lambda_min=$lambda_min, lambda_max=$lambda_max); reusing previous bounds for this solve" maxlog = 10 # estimate looks bogus -- leave P.lambda_min/lambda_max untouched, reusing whatever was already there (construction-time placeholder or last valid solve's bounds)
     end
 
-    return P
+    return P # mutated in place; returned for chaining convenience
 end
 
 # Chebyshev semi-iteration (Saad Algorithm 12.1) approximating
@@ -312,7 +273,7 @@ end
 #
 # Unlike Jacobi/Chebyshev, whose CG iteration counts grow with grid size
 # (Jacobi ~O(sqrt(N)), Chebyshev slower-growing but still not flat), AMG
-# gives near mesh-independent convergence -- measured (test/amg_rerun.jl) at
+# gives near mesh-independent convergence at
 # 5 CG iterations at 64x64 and 6 at 256x256, essentially flat despite 16x
 # more unknowns, vs Jacobi's 192->745 and Chebyshev's 58->350 over the same
 # grids. That makes AMG substantially faster in wall time once the grid is

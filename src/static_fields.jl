@@ -1,7 +1,7 @@
 # =============================================================================
 # Static / initial geometry fields
 # =============================================================================
-# Computed once (e.g. by initial-condition setup) rather than every Picard
+# Computed once (per time step if coupled to ice flow model) (e.g. by initial-condition setup) rather than every Picard
 # iteration: H/po/h derive from the *initial* b, zb, zs, pw and don't change
 # until a full time step has evolved b (see the gap-height section below).
 

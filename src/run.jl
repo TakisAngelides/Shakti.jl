@@ -67,8 +67,8 @@ $(TYPEDSIGNATURES)
 
 Returns `(converged, last_iter)` for `hs`'s Picard solve at the current timestep -- dispatched
 (rather than an `isa` check) so this stays correct if another `AbstractHeadScheme` is ever added:
-`EllipticHeadScheme` has a `PicardSolver` to report on, `ParabolicHeadScheme` (not yet
-implemented, see `step_h!` below) doesn't.
+`EllipticHeadScheme` has a `PicardSolver` to report on, `ParabolicHeadScheme` doesn't (it's a
+single backward-Euler solve per timestep, not an iterative one -- see `step_h!` below).
 """
 picard_status(hs::EllipticHeadScheme) = (hs.ps.converged, hs.ps.last_iter)
 picard_status(hs::ParabolicHeadScheme) = (missing, missing)
@@ -76,11 +76,12 @@ picard_status(hs::ParabolicHeadScheme) = (missing, missing)
 """
 $(TYPEDSIGNATURES)
 
-Advances `sim` by one timestep: solves for the new head ([`step_h!`](@ref)) then evolves the gap
-height ([`step_b!`](@ref)).
+Advances `sim` by one timestep: refreshes the melt input ([`update_ieb!`](@ref)), solves for the
+new head ([`step_h!`](@ref)), then evolves the gap height ([`step_b!`](@ref)).
 """
 function step!(sim::Simulation)
 
+    update_ieb!(sim.mi, sim.state, sim.total_time[]) # no-op for ConstantMeltInput; rescales state.ieb for e.g. SeasonalMeltInput -- done once per timestep, before step_h!, since ieb only feeds the head equation (step_b! never reads it)
     step_h!(sim.hs, sim)
     step_b!(sim)
 
@@ -89,21 +90,58 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Solves for the new hydraulic head under [`EllipticHeadScheme`](@ref): updates `sim.mi`'s melt
-input for the current time, then runs the Picard/elliptic solve.
+Solves for the new hydraulic head under [`EllipticHeadScheme`](@ref): runs the Picard/elliptic
+solve (`sim.mi`'s melt input for the current time was already refreshed by [`step!`](@ref)).
 """
 function step_h!(hs::EllipticHeadScheme, sim::Simulation)
-    update_ieb!(sim.mi, sim.state, sim.total_time[]) # no-op for ConstantMeltInput; rescales state.ieb for e.g. SeasonalMeltInput
-    elliptic_solver!(hs.ps, sim.state, sim.grid, sim.p, sim.shs, sim.kfs, sim.mi, sim.sl)
+    elliptic_solver!(hs.ps, sim.state, sim.grid, sim.p, sim.shs, sim.kfs, sim.sl)
 end
 
 """
 $(TYPEDSIGNATURES)
 
-Not yet implemented.
+Solves for the new hydraulic head under [`ParabolicHeadScheme`](@ref): a single backward-Euler
+linear solve ([`parabolic_solver!`](@ref)), no Picard loop.
 """
 function step_h!(hs::ParabolicHeadScheme, sim::Simulation)
-    error("Parabolic head scheme is not yet implemented.") # TODO
+    parabolic_solver!(hs.ls, sim.state, sim.grid, sim.p, sim.shs, sim.kfs, sim.sl, sim.dt)
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Evolves the gap height `sim.state.b` by one timestep, dispatching on `sim.gs`
+(`ImplicitGapScheme()`/`ExplicitGapScheme()`) to [`compute_b!(sim, sim.gs)`](@ref) below.
+
+# Notes
+
+Only evolves `b` where hydrology is actually being solved (`GROUNDED`). Cells with a
+Dirichlet-prescribed `pw` (`LAND`/`OCEAN`) or a frozen `h` (`OTHER_BASIN`) don't have a
+meaningfully-evolving `b` in this model, so their `b` is simply left untouched at whatever it was
+initialized to.
+"""
+compute_b!(sim::Simulation) = compute_b!(sim, sim.gs)
+
+"""
+$(TYPEDSIGNATURES)
+
+Implicit (backward-Euler) update of `sim.state.b`: implicit on the creep closure term only, the scheme used by default.
+"""
+function compute_b!(sim::Simulation, ::ImplicitGapScheme)
+    s, p = sim.state, sim.p
+    @parallel compute_b_implicit_kernel!(s.b, s.mask, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, sim.dt, p.b_min)
+    return sim
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Explicit (forward-Euler) update of `sim.state.b`: cheaper per step, but only stable for small enough `sim.dt`.
+"""
+function compute_b!(sim::Simulation, ::ExplicitGapScheme)
+    s, p = sim.state, sim.p
+    @parallel compute_b_explicit_kernel!(s.b, s.mask, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, sim.dt, p.b_min)
+    return sim
 end
 
 """
@@ -117,10 +155,10 @@ function step_b!(sim::Simulation)
 
     s, p = sim.state, sim.p
 
-    compute_b!(sim)       # updates b based on the new state variables (GROUNDED cells only)
+    compute_b!(sim)          # updates b based on the new state variables (GROUNDED cells only)
 
-    compute_beta!(s, p)   # opening-by-sliding parameter depends on the new b
-    compute_b_x!(s)       # water depth on x faces
-    compute_b_y!(s)       # water depth on y faces
+    compute_beta!(s, p, sim.oss) # opening-by-sliding parameter depends on the new b
+    compute_b_x!(s)          # water depth on x faces
+    compute_b_y!(s)          # water depth on y faces
 
 end

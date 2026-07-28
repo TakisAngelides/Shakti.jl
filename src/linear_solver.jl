@@ -10,15 +10,17 @@ Known hydraulic head at a Dirichlet (`OCEAN`/`LAND`) cell -- shared by that cell
 coupling to it in the matrix (see the symmetric-elimination note on [`update_SALS!`](@ref)/
 [`update_MFLS!`](@ref)).
 """
-@inline function dirichlet_head(m, zb_ij, p_atm, rho_w, ggrav)
+@inline function dirichlet_head(m, zb_ij, p_atm, rho_w, rho_sw, ggrav)
     if m == OCEAN
         # Hydrostatic ocean pressure at the bed: zb is elevation relative to sea
         # level (positive up), so a marine bed at zb < 0 sits at depth -zb below
-        # sea level. pw = p_atm + rho_w*g*(-zb) = p_atm - rho_w*g*zb.
+        # sea level. pw = p_atm + rho_sw*g*(-zb) = p_atm - rho_sw*g*zb, using
+        # rho_sw (seawater) rather than rho_w (subglacial water) since this is
+        # the ocean's own hydrostatic pressure, not the drainage system's.
         # min(zb, 0) clamps to p_atm if this OCEAN-masked cell's bed happens to
         # be above sea level, instead of producing a sub-atmospheric pressure.
-        pw_bc = p_atm - rho_w * ggrav * min(zb_ij, zero(zb_ij))
-        return pw_bc / (rho_w * ggrav) + zb_ij # from hydraulic head h = (pw / (rhow * g)) + zb
+        pw_bc = p_atm - rho_sw * ggrav * min(zb_ij, zero(zb_ij))
+        return pw_bc / (rho_w * ggrav) + zb_ij # h = (pw / (rho_w * g)) + zb -- head is always defined w.r.t. rho_w, the drainage system's own water density
     else # m == LAND: pw = p_atm -> h = p_atm/(rho_w*g) + zb
         return p_atm / (rho_w * ggrav) + zb_ij
     end
@@ -29,7 +31,7 @@ $(TYPEDSIGNATURES)
 
 How the linearized elliptic equation for `h` (one per Picard iteration) is solved -- multiple
 dispatch on the concrete subtype picks a direct ([`AbstractDirectSolver`](@ref)) or iterative
-([`AbstractIterativeSolver`](@ref)) method, via [`solve_linear_system!`](@ref).
+([`AbstractIterativeSolver`](@ref)) method, via [`solve_elliptic_linear_system!`](@ref).
 """
 abstract type AbstractLinearSolver end
 
@@ -92,7 +94,7 @@ struct MatrixFreeLinearSystem{F <: AbstractFloat, A <: AbstractMatrix{F}, V <: A
     aW::A # west-neighbor coupling
     aN::A # north-neighbor coupling
     aS::A # south-neighbor coupling
-    rhs::V # flat, so it can be handed to Krylov.jl directly like SparseAssembledLinearSystem's rhs
+    rhs::V # flat nx*ny rather than nx, ny, so it can be handed to Krylov.jl directly like SparseAssembledLinearSystem's rhs
 end
 
 """
@@ -122,13 +124,13 @@ end
 $(TYPEDSIGNATURES)
 
 Direct solve via sparse Cholesky factorization (`SparseArrays`/CHOLMOD) of the assembled
-[`SparseAssembledLinearSystem`](@ref) -- the fastest solver at every grid size benchmarked so far
-(see `test/benchmarks/`), but CPU-only. Refactorizes in place each solve, reusing the symbolic
+[`SparseAssembledLinearSystem`](@ref) -- the fastest solver at every grid size benchmarked so far,
+but CPU-only. Refactorizes in place each solve, reusing the symbolic
 factorization since the sparsity pattern never changes.
 """
 struct CholeskyDirectSolver{FACT, SALS <: SparseAssembledLinearSystem, V <: AbstractVector} <: AbstractDirectSolver
-    sals::SALS
-    fact::FACT
+    sals::SALS # holds sparse matrix non-zero values, rhs vector, and indices of where the non-zero values of the matrix are
+    fact::FACT # going to hold the decomposition factorization of cholesky
     h_vec::V # ldiv!'s preallocated output buffer (vectorized hydraulic head)
 end
 
@@ -148,7 +150,7 @@ function SparseAssembledLinearSystem(g::Grid{F}) where F
     for j in 1:g.ny
         @inbounds for i in 1:g.nx
 
-            row = i + (j - 1) * g.nx
+            row = i + (j - 1) * g.nx # this mapping from i, j to the linear index of the sparse matrix determines why we write row-1, row-g.nx, etc here below
 
             push!(I, row); push!(J, row); push!(V, one(F)) # diagonal - placeholder value 'one' to get a nonsingular factorization
             i > 1  && (push!(I, row); push!(J, row - 1);  push!(V, zero(F)))  # west
@@ -203,20 +205,15 @@ construction time (rather than deeper in the solve) under any other backend.
 """
 function CholeskyDirectSolver(g::Grid{F}) where F
 
-    # SparseArrays' sparse Cholesky/CHOLMOD has no GPU path at all, on any
-    # backend -- checking != "Threads" (rather than == "Metal") means this
-    # stays correct if a CUDA/AMDGPU backend is ever added, with nothing here
-    # to remember to update. Fail here, at construction time, rather than let
-    # a GPU-resident array reach it deeper in the solve (same "fail fast in
-    # the constructor" idiom as Simulation's FT/floattype mismatch check).
+    # Fail here, at construction time, rather than let a GPU-resident array reach it deeper in the solve
     backend != "Threads" && error("CholeskyDirectSolver is CPU-only (SparseArrays/CHOLMOD has no GPU path); choose an iterative solver under the $backend backend.")
 
     sals = SparseAssembledLinearSystem(g)
     # Symmetric(...) tells CHOLMOD to read only one triangle -- valid now that
     # sals.M is exactly symmetric (Dirichlet neighbours are eliminated
-    # symmetrically, see update_SALS_kernel!) and SPD (diffusion + strictly
+    # symmetrically, see update_SALS_kernel!) and symmetric positive-definite SPD (diffusion + strictly
     # positive diagonal reaction term from the Newton-linearized creep closure).
-    fact = cholesky(Symmetric(sals.M))
+    fact = cholesky(Symmetric(sals.M)) # CHOLMOD is SuiteSparse's sparse Cholesky factorization library, exposed in Julia through SparseArrays/LinearAlgebra's cholesky function. In linear_solver.jl, cholesky(Symmetric(sals.M)) calls into CHOLMOD to factorize the sparse SPD matrix from the assembled linear system
     h_vec = zeros(F, g.nx * g.ny)
 
     return CholeskyDirectSolver(sals, fact, h_vec)
@@ -226,7 +223,7 @@ end
 # mask is passed first so @parallel infers the (ix,iy) launch range from its
 # shape (nx,ny) -- nzval/rhs are flat length-(nx*ny) Vectors, and using one of
 # those as the first arg would infer a 1D launch instead.
-@parallel_indices (ix, iy) function update_SALS_kernel!(mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, zb, h, K, A_visc, N, b, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_i, ggrav, n, n_minus_1, kfs, mi)
+@parallel_indices (ix, iy) function update_SALS_kernel!(mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, zb, h, K, A_visc, N, b, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, kfs)
 
     nx, ny = size(mask, 1), size(mask, 2)
 
@@ -234,12 +231,12 @@ end
 
         row = ix + (iy - 1) * nx # linear index of 2D domain with column major order i.e. rows change faster than columns
 
-        m = mask[ix, iy] # mask specifies if a cell is grounded ice, land, ocean, or other basin
+        m = mask[ix, iy] # mask specifies if a cell is grounded ice, ocean, land, or other basin
 
         if m == OCEAN || m == LAND # Dirichlet BC
 
-            nzval[idxP[ix, iy]] = 1
-            rhs[row] = dirichlet_head(m, zb[ix, iy], p_atm, rho_w, ggrav)
+            nzval[idxP[ix, iy]] = 1 # set the diagonal value of that row to 1 and the rhs to the value of h we want that row - which represents an i, j grid point - to have
+            rhs[row] = dirichlet_head(m, zb[ix, iy], p_atm, rho_w, rho_sw, ggrav)
 
         elseif m == OTHER_BASIN # Dirichlet BC
 
@@ -247,7 +244,7 @@ end
             # flux/melt - in compute_dhdx!, compute_dhdy!, compute_dpwdx!, compute_dpwdy! -
             # computation touching this cell from a GROUNDED neighbour is zeroed, so this frozen value never leaks in.
             nzval[idxP[ix, iy]] = 1
-            rhs[row] = h[ix, iy]
+            rhs[row] = h[ix, iy] # frozen as the initial value it was set at
 
         else
             # m == GROUNDED: dynamic hydrology.
@@ -272,7 +269,7 @@ end
             # branch). An OCEAN/LAND neighbour's head is already known, so
             # rather than coupling to it through a matrix entry that its own
             # row (a bare identity row, see above) would never reciprocate --
-            # which is what breaks symmetry -- its contribution is folded
+            # which is what breaks symmetry -- its contribution is folded (added)
             # straight into rhs instead, matching the symmetric elimination
             # of Dirichlet dofs (fold known value into the coupled rows' rhs,
             # zero both the row and the column for that dof).
@@ -280,19 +277,19 @@ end
             dirichlet_rhs = zero(eltype(rhs))
             if ix < nx
                 mE = mask[ix+1, iy]
-                (mE == OCEAN || mE == LAND) ? (dirichlet_rhs += aE * dirichlet_head(mE, zb[ix+1, iy], p_atm, rho_w, ggrav)) : (nzval[idxE[ix, iy]] -= aE)
+                (mE == OCEAN || mE == LAND) ? (dirichlet_rhs += aE * dirichlet_head(mE, zb[ix+1, iy], p_atm, rho_w, rho_sw, ggrav)) : (nzval[idxE[ix, iy]] -= aE) # so again first case here is adding the known value to the rhs and the second case is adding a non-diagonal element to the row
             end
             if ix > 1
                 mW = mask[ix-1, iy]
-                (mW == OCEAN || mW == LAND) ? (dirichlet_rhs += aW * dirichlet_head(mW, zb[ix-1, iy], p_atm, rho_w, ggrav)) : (nzval[idxW[ix, iy]] -= aW)
+                (mW == OCEAN || mW == LAND) ? (dirichlet_rhs += aW * dirichlet_head(mW, zb[ix-1, iy], p_atm, rho_w, rho_sw, ggrav)) : (nzval[idxW[ix, iy]] -= aW)
             end
             if iy < ny
                 mN = mask[ix, iy+1]
-                (mN == OCEAN || mN == LAND) ? (dirichlet_rhs += aN * dirichlet_head(mN, zb[ix, iy+1], p_atm, rho_w, ggrav)) : (nzval[idxN[ix, iy]] -= aN)
+                (mN == OCEAN || mN == LAND) ? (dirichlet_rhs += aN * dirichlet_head(mN, zb[ix, iy+1], p_atm, rho_w, rho_sw, ggrav)) : (nzval[idxN[ix, iy]] -= aN)
             end
             if iy > 1
                 mS = mask[ix, iy-1]
-                (mS == OCEAN || mS == LAND) ? (dirichlet_rhs += aS * dirichlet_head(mS, zb[ix, iy-1], p_atm, rho_w, ggrav)) : (nzval[idxS[ix, iy]] -= aS)
+                (mS == OCEAN || mS == LAND) ? (dirichlet_rhs += aS * dirichlet_head(mS, zb[ix, iy-1], p_atm, rho_w, rho_sw, ggrav)) : (nzval[idxS[ix, iy]] -= aS)
             end
 
             # Update the rhs vector
@@ -300,7 +297,7 @@ end
                         beta[ix, iy] * abs_ub[ix, iy] +
                         A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy] * b[ix, iy] +
                         A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * (n * rho_w * ggrav * h[ix, iy]) * b[ix, iy] + # term from Newton linearization of the creep closing term
-                        compute_ieb!(mi, ieb, ix, iy) +
+                        ieb[ix, iy] +
                         dirichlet_rhs
         end
 
@@ -318,7 +315,7 @@ get a Dirichlet row, `OTHER_BASIN` cells get a frozen (`h` held at its current v
 stays exactly symmetric: a `GROUNDED` cell's Dirichlet neighbours are eliminated by folding their
 known head into `rhs` rather than left as a one-sided matrix coupling.
 """
-function update_SALS!(sals::SparseAssembledLinearSystem, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, mi::AbstractMeltInput)
+function update_SALS!(sals::SparseAssembledLinearSystem, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme)
 
     # Unpack the solver's preallocated matrix/rhs/index-map workspace (see CholeskyDirectSolver's docstring)
     rhs = sals.rhs
@@ -329,7 +326,104 @@ function update_SALS!(sals::SparseAssembledLinearSystem, s::State, g::Grid, p::M
     fill!(nzval, 0)
     fill!(rhs, 0)
 
-    @parallel update_SALS_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.zb, s.h, s.K, s.A_visc, s.N, s.b, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_i, p.g, p.n, p.n_minus_1_exp, kfs, mi)
+    @parallel update_SALS_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.zb, s.h, s.K, s.A_visc, s.N, s.b, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, kfs)
+
+    return
+
+end
+
+# Sibling of update_SALS_kernel! for the parabolic head scheme (p.e_v != 0,
+# see ParabolicHeadScheme in simulation.jl): backward-Euler discretization of
+# Sommers et al. 2018 Eq. 13's ∂(e_v(h-zb))/∂t storage term -- zb is static,
+# so this is just e_v*(h-h_old)/dt, giving the GROUNDED row an extra e_v/dt
+# on the diagonal and e_v/dt*h_old (h before this call overwrites it) on the
+# rhs. Unlike update_SALS_kernel!, there's no Newton linearization of the
+# creep-closure term: K/N/A_visc/b/mdot/beta/abs_ub are all evaluated at the
+# current (start-of-timestep) state rather than an updated iterate -- this is
+# a single implicit solve per real timestep, not a Picard loop, the same
+# lagged-coefficient idiom compute_b_implicit_kernel! uses for b.
+@parallel_indices (ix, iy) function update_SALS_parabolic_kernel!(mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, zb, h, K, A_visc, N, b, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n_minus_1, kfs, e_v, dt)
+
+    nx, ny = size(mask, 1), size(mask, 2)
+
+    if ix <= nx && iy <= ny
+
+        row = ix + (iy - 1) * nx
+
+        m = mask[ix, iy]
+
+        if m == OCEAN || m == LAND # Dirichlet BC
+
+            nzval[idxP[ix, iy]] = 1
+            rhs[row] = dirichlet_head(m, zb[ix, iy], p_atm, rho_w, rho_sw, ggrav)
+
+        elseif m == OTHER_BASIN # Dirichlet BC
+
+            nzval[idxP[ix, iy]] = 1
+            rhs[row] = h[ix, iy]
+
+        else
+            # m == GROUNDED: dynamic hydrology.
+
+            aE = (ix < nx) ? boundary_K_face(kfs, K, mask, ix, iy, ix+1, iy) / dx2 : zero(dx2)
+            aW = (ix > 1)  ? boundary_K_face(kfs, K, mask, ix, iy, ix-1, iy) / dx2 : zero(dx2)
+            aN = (iy < ny) ? boundary_K_face(kfs, K, mask, ix, iy, ix, iy+1) / dy2 : zero(dy2)
+            aS = (iy > 1)  ? boundary_K_face(kfs, K, mask, ix, iy, ix, iy-1) / dy2 : zero(dy2)
+
+            aP = (aE + aW + aN + aS) + e_v / dt # diffusion + backward-Euler englacial storage reaction term (no Newton term here, contrast update_SALS_kernel!'s aP)
+
+            nzval[idxP[ix, iy]] += aP
+            dirichlet_rhs = zero(eltype(rhs))
+            if ix < nx
+                mE = mask[ix+1, iy]
+                (mE == OCEAN || mE == LAND) ? (dirichlet_rhs += aE * dirichlet_head(mE, zb[ix+1, iy], p_atm, rho_w, rho_sw, ggrav)) : (nzval[idxE[ix, iy]] -= aE)
+            end
+            if ix > 1
+                mW = mask[ix-1, iy]
+                (mW == OCEAN || mW == LAND) ? (dirichlet_rhs += aW * dirichlet_head(mW, zb[ix-1, iy], p_atm, rho_w, rho_sw, ggrav)) : (nzval[idxW[ix, iy]] -= aW)
+            end
+            if iy < ny
+                mN = mask[ix, iy+1]
+                (mN == OCEAN || mN == LAND) ? (dirichlet_rhs += aN * dirichlet_head(mN, zb[ix, iy+1], p_atm, rho_w, rho_sw, ggrav)) : (nzval[idxN[ix, iy]] -= aN)
+            end
+            if iy > 1
+                mS = mask[ix, iy-1]
+                (mS == OCEAN || mS == LAND) ? (dirichlet_rhs += aS * dirichlet_head(mS, zb[ix, iy-1], p_atm, rho_w, rho_sw, ggrav)) : (nzval[idxS[ix, iy]] -= aS)
+            end
+
+            # rhs: source terms lagged at the current state (no Newton correction) plus the e_v/dt*h_old storage term
+            rhs[row] = mdot[ix, iy] * (1 / rho_w - 1 / rho_i) -
+                        beta[ix, iy] * abs_ub[ix, iy] +
+                        A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy] * b[ix, iy] +
+                        ieb[ix, iy] +
+                        (e_v / dt) * h[ix, iy] +
+                        dirichlet_rhs
+        end
+
+    end
+
+    return
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Rebuilds `sals.M`/`sals.rhs` in place for the parabolic head scheme ([`update_SALS_parabolic_kernel!`](@ref)) --
+the `p.e_v != 0` counterpart of [`update_SALS!`](@ref): same diffusion stencil and Dirichlet/frozen
+rows, but a backward-Euler englacial storage reaction term (`p.e_v/dt`) instead of the
+Newton-linearized creep-closure term, and every nonlinear coefficient lagged at the current state
+rather than iterated to convergence.
+"""
+function update_SALS_parabolic!(sals::SparseAssembledLinearSystem, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, dt)
+
+    rhs = sals.rhs
+    nzval = sals.M.nzval
+    idxP, idxE, idxW, idxN, idxS = sals.idxP, sals.idxE, sals.idxW, sals.idxN, sals.idxS
+
+    fill!(nzval, 0)
+    fill!(rhs, 0)
+
+    @parallel update_SALS_parabolic_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.zb, s.h, s.K, s.A_visc, s.N, s.b, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n_minus_1_exp, kfs, p.e_v, dt)
 
     return
 
@@ -341,7 +435,7 @@ end
 # stored as the raw positive face conductances -- stencil_matvec_kernel!
 # below applies the minus sign when it uses them, matching the sign
 # convention update_SALS_kernel! bakes directly into nzval.
-@parallel_indices (ix, iy) function update_MFLS_kernel!(mask, aP, aE, aW, aN, aS, rhs, zb, h, K, A_visc, N, b, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_i, ggrav, n, n_minus_1, kfs, mi)
+@parallel_indices (ix, iy) function update_MFLS_kernel!(mask, aP, aE, aW, aN, aS, rhs, zb, h, K, A_visc, N, b, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, kfs)
 
     nx, ny = size(mask, 1), size(mask, 2)
 
@@ -354,7 +448,7 @@ end
         if m == OCEAN || m == LAND # Dirichlet BC
 
             aP[ix, iy] = 1
-            rhs[row] = dirichlet_head(m, zb[ix, iy], p_atm, rho_w, ggrav)
+            rhs[row] = dirichlet_head(m, zb[ix, iy], p_atm, rho_w, rho_sw, ggrav)
 
         elseif m == OTHER_BASIN # Dirichlet BC
 
@@ -378,26 +472,26 @@ end
             dirichlet_rhs = zero(eltype(rhs))
             if ix < nx
                 mE = mask[ix+1, iy]
-                (mE == OCEAN || mE == LAND) ? (dirichlet_rhs += aE_ij * dirichlet_head(mE, zb[ix+1, iy], p_atm, rho_w, ggrav)) : (aE[ix, iy] = aE_ij)
+                (mE == OCEAN || mE == LAND) ? (dirichlet_rhs += aE_ij * dirichlet_head(mE, zb[ix+1, iy], p_atm, rho_w, rho_sw, ggrav)) : (aE[ix, iy] = aE_ij)
             end
             if ix > 1
                 mW = mask[ix-1, iy]
-                (mW == OCEAN || mW == LAND) ? (dirichlet_rhs += aW_ij * dirichlet_head(mW, zb[ix-1, iy], p_atm, rho_w, ggrav)) : (aW[ix, iy] = aW_ij)
+                (mW == OCEAN || mW == LAND) ? (dirichlet_rhs += aW_ij * dirichlet_head(mW, zb[ix-1, iy], p_atm, rho_w, rho_sw, ggrav)) : (aW[ix, iy] = aW_ij)
             end
             if iy < ny
                 mN = mask[ix, iy+1]
-                (mN == OCEAN || mN == LAND) ? (dirichlet_rhs += aN_ij * dirichlet_head(mN, zb[ix, iy+1], p_atm, rho_w, ggrav)) : (aN[ix, iy] = aN_ij)
+                (mN == OCEAN || mN == LAND) ? (dirichlet_rhs += aN_ij * dirichlet_head(mN, zb[ix, iy+1], p_atm, rho_w, rho_sw, ggrav)) : (aN[ix, iy] = aN_ij)
             end
             if iy > 1
                 mS = mask[ix, iy-1]
-                (mS == OCEAN || mS == LAND) ? (dirichlet_rhs += aS_ij * dirichlet_head(mS, zb[ix, iy-1], p_atm, rho_w, ggrav)) : (aS[ix, iy] = aS_ij)
+                (mS == OCEAN || mS == LAND) ? (dirichlet_rhs += aS_ij * dirichlet_head(mS, zb[ix, iy-1], p_atm, rho_w, rho_sw, ggrav)) : (aS[ix, iy] = aS_ij)
             end
 
             rhs[row] = mdot[ix, iy] * (1 / rho_w - 1 / rho_i) -
                         beta[ix, iy] * abs_ub[ix, iy] +
                         A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy] * b[ix, iy] +
                         A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * (n * rho_w * ggrav * h[ix, iy]) * b[ix, iy] +
-                        compute_ieb!(mi, ieb, ix, iy) +
+                        ieb[ix, iy] +
                         dirichlet_rhs
         end
 
@@ -413,7 +507,7 @@ Rebuilds `mfls.aP`/`aE`/`aW`/`aN`/`aS`/`rhs` in place from the current `s`/`p` -
 [`MatrixFreeLinearSystem`](@ref) counterpart of [`update_SALS!`](@ref) (same per-cell logic, no
 sparse matrix to address into).
 """
-function update_MFLS!(mfls::MatrixFreeLinearSystem, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, mi::AbstractMeltInput)
+function update_MFLS!(mfls::MatrixFreeLinearSystem, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme)
 
     fill!(mfls.aP, 0)
     fill!(mfls.aE, 0)
@@ -422,7 +516,94 @@ function update_MFLS!(mfls::MatrixFreeLinearSystem, s::State, g::Grid, p::ModelP
     fill!(mfls.aS, 0)
     fill!(mfls.rhs, 0)
 
-    @parallel update_MFLS_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.zb, s.h, s.K, s.A_visc, s.N, s.b, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_i, p.g, p.n, p.n_minus_1_exp, kfs, mi)
+    @parallel update_MFLS_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.zb, s.h, s.K, s.A_visc, s.N, s.b, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, kfs)
+
+    return
+
+end
+
+# Sibling of update_MFLS_kernel! for the parabolic head scheme -- the
+# matrix-free counterpart of update_SALS_parabolic_kernel! (same per-cell
+# logic, no sparse matrix to address into). See update_SALS_parabolic_kernel!
+# for the storage-term/lagged-coefficient reasoning.
+@parallel_indices (ix, iy) function update_MFLS_parabolic_kernel!(mask, aP, aE, aW, aN, aS, rhs, zb, h, K, A_visc, N, b, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n_minus_1, kfs, e_v, dt)
+
+    nx, ny = size(mask, 1), size(mask, 2)
+
+    if ix <= nx && iy <= ny
+
+        row = ix + (iy - 1) * nx
+
+        m = mask[ix, iy]
+
+        if m == OCEAN || m == LAND # Dirichlet BC
+
+            aP[ix, iy] = 1
+            rhs[row] = dirichlet_head(m, zb[ix, iy], p_atm, rho_w, rho_sw, ggrav)
+
+        elseif m == OTHER_BASIN # Dirichlet BC
+
+            aP[ix, iy] = 1
+            rhs[row] = h[ix, iy]
+
+        else
+            # m == GROUNDED: dynamic hydrology. Same face logic as update_MFLS_kernel!.
+
+            aE_ij = (ix < nx) ? boundary_K_face(kfs, K, mask, ix, iy, ix+1, iy) / dx2 : zero(dx2)
+            aW_ij = (ix > 1)  ? boundary_K_face(kfs, K, mask, ix, iy, ix-1, iy) / dx2 : zero(dx2)
+            aN_ij = (iy < ny) ? boundary_K_face(kfs, K, mask, ix, iy, ix, iy+1) / dy2 : zero(dy2)
+            aS_ij = (iy > 1)  ? boundary_K_face(kfs, K, mask, ix, iy, ix, iy-1) / dy2 : zero(dy2)
+
+            aP[ix, iy] = (aE_ij + aW_ij + aN_ij + aS_ij) + e_v / dt # diffusion + backward-Euler englacial storage reaction term (no Newton term here, contrast update_MFLS_kernel!'s aP)
+
+            dirichlet_rhs = zero(eltype(rhs))
+            if ix < nx
+                mE = mask[ix+1, iy]
+                (mE == OCEAN || mE == LAND) ? (dirichlet_rhs += aE_ij * dirichlet_head(mE, zb[ix+1, iy], p_atm, rho_w, rho_sw, ggrav)) : (aE[ix, iy] = aE_ij)
+            end
+            if ix > 1
+                mW = mask[ix-1, iy]
+                (mW == OCEAN || mW == LAND) ? (dirichlet_rhs += aW_ij * dirichlet_head(mW, zb[ix-1, iy], p_atm, rho_w, rho_sw, ggrav)) : (aW[ix, iy] = aW_ij)
+            end
+            if iy < ny
+                mN = mask[ix, iy+1]
+                (mN == OCEAN || mN == LAND) ? (dirichlet_rhs += aN_ij * dirichlet_head(mN, zb[ix, iy+1], p_atm, rho_w, rho_sw, ggrav)) : (aN[ix, iy] = aN_ij)
+            end
+            if iy > 1
+                mS = mask[ix, iy-1]
+                (mS == OCEAN || mS == LAND) ? (dirichlet_rhs += aS_ij * dirichlet_head(mS, zb[ix, iy-1], p_atm, rho_w, rho_sw, ggrav)) : (aS[ix, iy] = aS_ij)
+            end
+
+            rhs[row] = mdot[ix, iy] * (1 / rho_w - 1 / rho_i) -
+                        beta[ix, iy] * abs_ub[ix, iy] +
+                        A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy] * b[ix, iy] +
+                        ieb[ix, iy] +
+                        (e_v / dt) * h[ix, iy] +
+                        dirichlet_rhs
+        end
+
+    end
+
+    return
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Rebuilds `mfls.aP`/`aE`/`aW`/`aN`/`aS`/`rhs` in place for the parabolic head scheme
+([`update_MFLS_parabolic_kernel!`](@ref)) -- the [`MatrixFreeLinearSystem`](@ref) counterpart of
+[`update_SALS_parabolic!`](@ref).
+"""
+function update_MFLS_parabolic!(mfls::MatrixFreeLinearSystem, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, dt)
+
+    fill!(mfls.aP, 0)
+    fill!(mfls.aE, 0)
+    fill!(mfls.aW, 0)
+    fill!(mfls.aN, 0)
+    fill!(mfls.aS, 0)
+    fill!(mfls.rhs, 0)
+
+    @parallel update_MFLS_parabolic_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.zb, s.h, s.K, s.A_visc, s.N, s.b, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n_minus_1_exp, kfs, p.e_v, dt)
 
     return
 
@@ -438,6 +619,7 @@ end
 
     if ix <= nx && iy <= ny
 
+        # remember the a's are matrix column entries for a given row so for a given row of the flat vector y, we have row (of matrix) times column (which is the flat x column vector) and this is what is represented here below
         yij = aP[ix, iy] * x[ix, iy]
         ix < nx && (yij -= aE[ix, iy] * x[ix+1, iy])
         ix > 1  && (yij -= aW[ix, iy] * x[ix-1, iy])
@@ -474,6 +656,7 @@ Builds a [`StencilOperator`](@ref) view of `mfls`'s current coefficients.
 """
 StencilOperator(mfls::MatrixFreeLinearSystem) = StencilOperator(mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, size(mfls.aP, 1), size(mfls.aP, 2))
 
+# These four functions below are required by the cg! from Krylov.jl 
 Base.eltype(::StencilOperator{F}) where F = F
 Base.size(op::StencilOperator) = (op.nx * op.ny, op.nx * op.ny)
 Base.size(op::StencilOperator, i::Int) = size(op)[i]
@@ -523,15 +706,35 @@ Solves the linearized elliptic equation for `h`, storing the result in `s.h` -- 
 [`CholeskyDirectSolver`](@ref) method: rebuilds the system ([`update_SALS!`](@ref)),
 refactorizes in place, and solves via `ldiv!`.
 """
-function solve_linear_system!(ls::CholeskyDirectSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, mi::AbstractMeltInput)
+function solve_elliptic_linear_system!(ls::CholeskyDirectSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme)
 
-    update_SALS!(ls.sals, s, g, p, kfs, mi) # prepare the new linear system sparse matrix M and rhs
+    update_SALS!(ls.sals, s, g, p, kfs) # prepare the new linear system sparse matrix M and rhs
 
     cholesky!(ls.fact, Symmetric(ls.sals.M)) # refactorizes in-place, reusing ls.fact's symbolic factorization since the sparsity pattern never changes across Picard iterations/timesteps
 
     ldiv!(ls.h_vec, ls.fact, ls.sals.rhs) # solve for the new h based on the new Cholesky factorization of the sparse M matrix we have computed above
 
     s.h .= reshape(ls.h_vec, g.nx, g.ny) # update h
+
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Solves the backward-Euler parabolic equation for `h` (`p.e_v != 0`), storing the result in `s.h`
+-- the [`CholeskyDirectSolver`](@ref) method: rebuilds the system
+([`update_SALS_parabolic!`](@ref)), refactorizes in place, and solves via `ldiv!`. Called once per
+real timestep (no Picard loop), see [`parabolic_solver!`](@ref).
+"""
+function solve_parabolic_linear_system!(ls::CholeskyDirectSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, dt)
+
+    update_SALS_parabolic!(ls.sals, s, g, p, kfs, dt)
+
+    cholesky!(ls.fact, Symmetric(ls.sals.M))
+
+    ldiv!(ls.h_vec, ls.fact, ls.sals.rhs)
+
+    s.h .= reshape(ls.h_vec, g.nx, g.ny)
 
 end
 
@@ -551,12 +754,11 @@ head each solve.
 `precond` picks the preconditioner: `nothing` for plain Jacobi, or an `AMGPreconditioner`/
 `ChebyshevPreconditioner` (see `preconditioner.jl`) for a much faster-converging accelerated
 preconditioner -- AMG is the default for `SparseAssembledLinearSystem` (near mesh-independent CG
-iteration counts; measured to consistently beat both plain Jacobi and Chebyshev, see
-`test/benchmarks/`) but is CPU/`SparseMatrixCSC`-only, so `MatrixFreeLinearSystem` defaults to
-plain Jacobi with Chebyshev available as a GPU-capable accelerated option instead.
+iteration counts; measured to consistently beat both plain Jacobi and Chebyshev) but is CPU/`SparseMatrixCSC`-only, 
+so `MatrixFreeLinearSystem` defaults to plain Jacobi with Chebyshev available as a GPU-capable accelerated option instead.
 """
 struct CGIterativeSolver{LSy <: AbstractLinearSystem, WS, V <: AbstractVector, P} <: AbstractIterativeSolver
-    lsy::LSy
+    lsy::LSy # linear system can be SALS or MFLS (sparse assembled matrix or matrix free linear system)
     ws::WS # workspace
     precond_diag::V # Jacobi (diagonal) preconditioner, refreshed every solve -- same array type as lsy's rhs (Vector for SALS, backend-native for MatrixFreeLinearSystem)
     precond::P # `nothing` -> plain Jacobi (Diagonal(precond_diag)); ChebyshevPreconditioner/AMGPreconditioner -> see preconditioner.jl
@@ -565,9 +767,9 @@ end
 # Representation is chosen at construction time by passing the AbstractLinearSystem
 # subtype itself, e.g. CGIterativeSolver(g, SparseAssembledLinearSystem) or
 # CGIterativeSolver(g, MatrixFreeLinearSystem) -- same struct either way,
-# dispatch on LSy in solve_linear_system! picks the right solve path.
+# dispatch on LSy in solve_elliptic_linear_system! picks the right solve path.
 #
-# CG (rather than GMRES/BiCGSTAB) is valid here because the assembled operator
+# CG is valid here because the assembled operator
 # is symmetric positive definite: diffusion with reciprocal face fluxes (see
 # compute_K_face) plus a strictly positive diagonal reaction term from the
 # Newton-linearized creep closure, and Dirichlet (OCEAN/LAND) neighbours are
@@ -576,8 +778,7 @@ end
 #
 # amg = true (default) opts into AMGPreconditioner -- near mesh-independent
 # CG iteration counts, at the cost of a hierarchy-rebuild every solve; see
-# preconditioner.jl. Measured (test/amg_rerun.jl, test/precond_vs_channelization.jl)
-# to consistently beat both plain Jacobi and ChebyshevPreconditioner, from a
+# preconditioner.jl. Measured to consistently beat both plain Jacobi and ChebyshevPreconditioner, from a
 # near-initial-condition state (5-7 CG iterations vs Jacobi's 192-745) all
 # the way through peak seasonal channelization (24 iterations vs Jacobi's
 # 199 and Chebyshev's 71, at K max/min ratio ~14000) -- hence the default.
@@ -666,20 +867,41 @@ Solves the linearized elliptic equation for `h`, storing the result in `s.h` -- 
 [`CGIterativeSolver`](@ref) over [`SparseAssembledLinearSystem`](@ref) method: rebuilds the
 system, refreshes the preconditioner, and runs `cg!` warm-started from the current `s.h`.
 """
-function solve_linear_system!(ls::CGIterativeSolver{<:SparseAssembledLinearSystem}, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, mi::AbstractMeltInput)
+function solve_elliptic_linear_system!(ls::CGIterativeSolver{<:SparseAssembledLinearSystem}, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme)
 
-    update_SALS!(ls.lsy, s, g, p, kfs, mi) # prepare the new linear system sparse matrix M and rhs
+    update_SALS!(ls.lsy, s, g, p, kfs) # prepare the new linear system sparse matrix M and rhs
     update_diag_precond!(ls.precond_diag, ls.lsy)
-    M = _cg_precond!(ls)
+    precond_matrix = _cg_precond!(ls)
 
     # vec(s.h) as x0 warm-starts from the previous head instead of 0: cheap (Krylov just
     # copies it into its own Δx buffer) and correctness-neutral (Krylov converges to the
     # same solution regardless of x0), but the residual it starts from is usually much
     # smaller once h is already close to converged (late Picard iterations, or consecutive
     # time steps), so it typically needs fewer Krylov iterations.
-    cg!(ls.ws, ls.lsy.M, ls.lsy.rhs, vec(s.h); M = M, ldiv = true) # solves in place, storing the result in the preallocated workspace ls.ws
+    cg!(ls.ws, ls.lsy.M, ls.lsy.rhs, vec(s.h); M = precond_matrix, ldiv = true) # solves in place, storing the result in the preallocated workspace ls.ws
 
     s.h .= reshape(ls.ws.x, g.nx, g.ny) # update h
+
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Solves the backward-Euler parabolic equation for `h` (`p.e_v != 0`), storing the result in `s.h`
+-- the [`CGIterativeSolver`](@ref) over [`SparseAssembledLinearSystem`](@ref) method: rebuilds the
+system ([`update_SALS_parabolic!`](@ref)), refreshes the preconditioner, and runs `cg!` warm-started
+from the current `s.h`. Called once per real timestep (no Picard loop), see
+[`parabolic_solver!`](@ref).
+"""
+function solve_parabolic_linear_system!(ls::CGIterativeSolver{<:SparseAssembledLinearSystem}, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, dt)
+
+    update_SALS_parabolic!(ls.lsy, s, g, p, kfs, dt)
+    update_diag_precond!(ls.precond_diag, ls.lsy)
+    precond_matrix = _cg_precond!(ls)
+
+    cg!(ls.ws, ls.lsy.M, ls.lsy.rhs, vec(s.h); M = precond_matrix, ldiv = true)
+
+    s.h .= reshape(ls.ws.x, g.nx, g.ny)
 
 end
 
@@ -690,14 +912,34 @@ Solves the linearized elliptic equation for `h`, storing the result in `s.h` -- 
 [`CGIterativeSolver`](@ref) over [`MatrixFreeLinearSystem`](@ref) method, using
 [`StencilOperator`](@ref) as `cg!`'s matvec.
 """
-function solve_linear_system!(ls::CGIterativeSolver{<:MatrixFreeLinearSystem}, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, mi::AbstractMeltInput)
+function solve_elliptic_linear_system!(ls::CGIterativeSolver{<:MatrixFreeLinearSystem}, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme)
 
-    update_MFLS!(ls.lsy, s, g, p, kfs, mi)
+    update_MFLS!(ls.lsy, s, g, p, kfs)
     update_diag_precond!(ls.precond_diag, ls.lsy)
-    M = _cg_precond!(ls)
+    precond_matrix = _cg_precond!(ls)
 
-    cg!(ls.ws, StencilOperator(ls.lsy), ls.lsy.rhs, vec(s.h); M = M, ldiv = true)
+    cg!(ls.ws, StencilOperator(ls.lsy), ls.lsy.rhs, vec(s.h); M = precond_matrix, ldiv = true)
 
     s.h .= reshape(ls.ws.x, g.nx, g.ny) # update h
+
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Solves the backward-Euler parabolic equation for `h` (`p.e_v != 0`), storing the result in `s.h`
+-- the [`CGIterativeSolver`](@ref) over [`MatrixFreeLinearSystem`](@ref) method, using
+[`StencilOperator`](@ref) as `cg!`'s matvec. Called once per real timestep (no Picard loop), see
+[`parabolic_solver!`](@ref).
+"""
+function solve_parabolic_linear_system!(ls::CGIterativeSolver{<:MatrixFreeLinearSystem}, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, dt)
+
+    update_MFLS_parabolic!(ls.lsy, s, g, p, kfs, dt)
+    update_diag_precond!(ls.precond_diag, ls.lsy)
+    precond_matrix = _cg_precond!(ls)
+
+    cg!(ls.ws, StencilOperator(ls.lsy), ls.lsy.rhs, vec(s.h); M = precond_matrix, ldiv = true)
+
+    s.h .= reshape(ls.ws.x, g.nx, g.ny)
 
 end

@@ -2,7 +2,7 @@
 # Simulation's physics (full State, not just the observer's tracked_obs
 # subset, since that's often a small slice picked for output/analysis, plus
 # how far the time loop got) so a run killed at any tstep -- node failure,
-# walltime limit, anything -- can pick back up instead of restarting from
+# walltime limit, etc -- can pick back up instead of restarting from
 # t=0. See run.jl for how tsteps/checkpoint_every/restart_path tie together,
 # and observer.jl's resume!/reopenfile! for resuming the tracked-output file
 # itself alongside the physics state.
@@ -25,15 +25,15 @@ alongside the physics state.
 """
 function save_checkpoint(path::String, sim::Simulation, t::Int)
     state = sim.state
-    tmp_path = path * ".tmp"
+    tmp_path = path * ".tmp" # this works because jld2 recognizes its file not by the string extension but by a header inside the file, for other file types this might break
     JLD2.jldopen(tmp_path, "w") do file
         file["t"] = t
         file["total_time"] = sim.total_time[]
-        for name in fieldnames(typeof(state))
+        for name in fieldnames(typeof(state)) # for every field name in the State struct save it to file
             file[String(name)] = Array(getfield(state, name))
         end
     end
-    mv(tmp_path, path; force = true)
+    mv(tmp_path, path; force = true) # we only update the file at path once we have finished writing to tmp_path so that there is no corruption possibility of the file at path
     return nothing
 end
 
@@ -43,11 +43,6 @@ $(TYPEDSIGNATURES)
 Restores `sim.state` and `sim.total_time[]` in place from a checkpoint written by
 [`save_checkpoint`](@ref), and returns the timestep it was saved at, so [`run!`](@ref) knows
 where to resume the loop.
-
-# Notes
-
-Generic over `State`'s fieldnames rather than a hardcoded field list, so it stays correct if
-`State` ever gains/loses fields.
 """
 function load_checkpoint!(sim::Simulation, path::String)
     state = sim.state

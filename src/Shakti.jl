@@ -1,7 +1,7 @@
 """
 A Julia solver for the SHAKTI subglacial hydrology model (Sommers, Rajaram & Morlighem, 2018,
 https://gmd.copernicus.org/articles/11/2955/2018/): a continuum model of hydraulic head, effective
-pressure, water flux, and drainage-system geometry (gap height) beneath an ice sheet, that
+pressure, water flux, and drainage-system geometry (gap height) beneath a glacier or ice sheet, that
 transitions smoothly between laminar (distributed) and turbulent (channelized) flow regimes
 rather than treating them as separate model components.
 
@@ -71,14 +71,16 @@ include("k_face_scheme.jl")
 include("preconditioner.jl")
 include("linear_solver.jl")
 include("observer.jl")
+include("sliding_law.jl")
 include("melt_rate.jl")
 include("elliptic_solver.jl")
+include("parabolic_solver.jl")
+include("gap_height.jl")
 include("simulation.jl")
 include("static_fields.jl")
 include("pressure.jl")
 include("field_gradients.jl")
 include("water_flux.jl")
-include("gap_height.jl")
 include("initial_conditions.jl")
 include("checkpoint.jl")
 include("run.jl")
@@ -99,7 +101,7 @@ export GROUNDED, OCEAN, LAND, OTHER_BASIN
 export compute_face_masks!, apply_mask_to_sliding!
 
 # melt_input.jl
-export AbstractMeltInput, ConstantMeltInput, SeasonalMeltInput, initialize_ieb!, compute_ieb!, update_ieb!
+export AbstractMeltInput, ConstantMeltInput, SeasonalMeltInput, update_ieb!
 
 # k_face_scheme.jl
 export AbstractKFaceScheme, Arithmetic, Harmonic, compute_K_face
@@ -112,7 +114,7 @@ export AbstractKFaceScheme, Arithmetic, Harmonic, compute_K_face
 export AbstractLinearSolver, AbstractDirectSolver, AbstractIterativeSolver
 export AbstractLinearSystem, SparseAssembledLinearSystem, MatrixFreeLinearSystem
 export CholeskyDirectSolver, CGIterativeSolver
-export solve_linear_system!
+export solve_elliptic_linear_system!, solve_parabolic_linear_system!
 
 # preconditioner.jl
 export ChebyshevPreconditioner
@@ -126,16 +128,25 @@ export AbstractObserver, NoObserver, IOObserver, LiveObserver
 export get_observable
 export prepare!, observe!, openfile!, write2file!, finalize!, resume!, reopenfile!
 
+# sliding_law.jl
+export AbstractSlidingLaw, RegularizedCoulombSlidingLaw, PrescribedSlidingLaw, LinearSlidingLaw, initialize_taub!
+export compute_taub_x!, compute_taub_y!, compute_taub_xy!
+
 # melt_rate.jl
 export AbstractSensibleHeatScheme, WithSensibleHeat, NoSensibleHeat
-export AbstractSlidingLaw, RegularizedCoulombSlidingLaw, PrescribedSlidingLaw, LinearSlidingLaw, initialize_taub!
-export compute_taub_x!, compute_taub_y!, compute_taub_xy!, compute_shear!, compute_potential!, compute_sensible!, compute_mdot!
+export compute_shear!, compute_potential!, compute_sensible!, compute_mdot!
 
 # elliptic_solver.jl
 export AbstractHeadRelaxation, NoHeadRelaxation, UnderHeadRelaxation
 export relax_h!
 export PicardSolver
 export elliptic_solver!, Picard_loop!, Picard_iteration!
+
+# parabolic_solver.jl
+export parabolic_solver!
+
+# gap_height.jl
+export AbstractOpenBySlidingScheme, WithOpenBySliding, NoOpenBySliding
 
 # simulation.jl
 export AbstractHeadScheme, ParabolicHeadScheme, EllipticHeadScheme

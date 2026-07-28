@@ -27,6 +27,7 @@ $(TYPEDSIGNATURES)
 
 Face conductance between cells `(i1,j1)` and `(i2,j2)`, `(K[i1,j1] + K[i2,j2]) / 2` under
 [`Arithmetic`](@ref) or `2*K[i1,j1]*K[i2,j2] / (K[i1,j1] + K[i2,j2] + eps)` under [`Harmonic`](@ref).
+Here @inline can help the compiler optimize its code and reduce the cost of function calls.
 """
 @inline compute_K_face(::Arithmetic, K, i1, j1, i2, j2) = (K[i1, j1] + K[i2, j2]) / 2
 @inline compute_K_face(::Harmonic, K, i1, j1, i2, j2) = (2 * K[i1, j1] * K[i2, j2]) / (K[i1, j1] + K[i2, j2] + eps(eltype(K)))
@@ -53,7 +54,7 @@ of what kind of cell the neighbour is.
     if m2 == OTHER_BASIN
         return zero(eltype(K))
     elseif m2 == OCEAN || m2 == LAND
-        return K[i1, j1]
+        return K[i1, j1] # if the neighbour is land or ocean, there is no meaningful conductivity value K there so we just use the center value at i1, j1 for that cell face
     else
         return compute_K_face(kfs, K, i1, j1, i2, j2)
     end

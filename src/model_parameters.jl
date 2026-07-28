@@ -7,7 +7,8 @@ Glen's-flow-law-style powers -- see the module-level note below the constructor 
 one with the keyword constructor below rather than this positional one directly.
 """
 struct ModelParameters{F <: AbstractFloat, NE1, NE2, NE3}
-    rho_w::F   # density of water
+    rho_w::F   # density of (subglacial/fresh) water
+    rho_sw::F  # density of ocean (sea) water, used only for the OCEAN Dirichlet BC's hydrostatic pressure
     rho_i::F   # density of ice
     g::F       # gravitational acceleration
     nu::F      # kinematic viscosity of water
@@ -38,16 +39,17 @@ value to `F` and precomputing the canonical Glen's-flow-law exponents.
 `0.001` puts the Reynolds range reached during channelization (`~1e3`-`1e4`) right in the flux
 law's steepest, hardest-to-converge transitional band (`omega*Re ~ O(1)-O(10)`), while `1e-4`
 pushes the same range into the flatter, near-linear part of the curve where Picard iteration
-actually converges (see `test/reproduce_section_3_3.jl`).
+actually converges.
 """
 function ModelParameters(;
     F::Type{<:AbstractFloat} = floattype,
     rho_w = 1000.0,
+    rho_sw = 1027.0,
     rho_i = 910.0,
     g = 9.81,
     nu = 1.787e-6,
     n = 3.0,
-    omega = 1e-4, # Table 2 (Sommers et al. 2018) states 0.001, but that puts the Re range reached during channelization (~1e3-1e4) right in the flux law's steepest, hardest-to-converge transitional band (omega*Re ~ O(1)-O(10)); 1e-4 pushes the same Re range into the flatter, near-linear part of the curve where Picard actually converges (see test/reproduce_section_3_3.jl)
+    omega = 1e-4, # Table 2 (Sommers et al. 2018) states 0.001, but that puts the Re range reached during channelization (~1e3-1e4) right in the flux law's steepest, hardest-to-converge transitional band (omega*Re ~ O(1)-O(10)); 1e-4 pushes the same Re range into the flatter, near-linear part of the curve where Picard actually converges
     L = 334e3,
     br = 0.05,
     lr = 2.0,
@@ -63,7 +65,7 @@ function ModelParameters(;
     inv_n_exp = canonical_exponent(1 / n_F)
 
     return ModelParameters(
-        F(rho_w), F(rho_i), F(g), F(nu), n_F, F(omega), F(L), F(br), F(lr), F(ct), F(cw), F(p_atm), F(b_min), F(e_v),
+        F(rho_w), F(rho_sw), F(rho_i), F(g), F(nu), n_F, F(omega), F(L), F(br), F(lr), F(ct), F(cw), F(p_atm), F(b_min), F(e_v),
         n_exp, n_minus_1_exp, inv_n_exp
     )
 
