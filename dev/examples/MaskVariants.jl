@@ -15,7 +15,7 @@ const NX, NY = 65, 65 # odd, so there's a genuine center cell -- an even NY woul
 const LX, LY = 1000.0, 1000.0
 grid = Grid(NX, NY, LX, LY)
 
-im, jm = ceil(Int, NX / 2), ceil(Int, NY / 2) # the true center cell (NX, NY odd), a moulin-like melt-input location shared by all three masks
+im, jm = ceil(Int, NX / 2), ceil(Int, NY / 2); # the true center cell (NX, NY odd), a moulin-like melt-input location shared by all three masks
 
 # ## Simple
 # A plain rectangle: ocean outlet on the right ([`OCEAN`](@ref)), inert (zero-flux,
@@ -92,7 +92,7 @@ fig
 # The mask alone only sets up the domain -- to see what it actually does to the drainage system,
 # each variant is run under the same synthetic slab geometry and melt input (a point-source
 # moulin at the shared location above) for `tsteps = 24*24` hourly steps (`dt = 3600` s, 24 days),
-# Shakti's usual settings for a short exploratory run (see `test/options_explorer.jl`).
+# Shakti's usual settings for a short exploratory run.
 
 const DT, TSTEPS = 3600.0, 24 * 24
 
@@ -121,7 +121,7 @@ function run_to_steady_state(mask)
     ieb[footprint] .= 3.0 / (count(footprint) * grid.dx * grid.dy) # 3 m^3/s total moulin input
 
     state = State(grid)
-    set_initial_conditions!(state, grid, p, mi, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
+    set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
 
     ls = CholeskyDirectSolver(grid)
     ps = PicardSolver(500, 1e-6, ls, grid)
@@ -131,7 +131,7 @@ function run_to_steady_state(mask)
     return state
 end
 
-final_states = map(run_to_steady_state, masks)
+final_states = map(run_to_steady_state, masks);
 
 # Gap height `b` at the end of the run: the moulin carves out a channel that threads through
 # (`simple`), around (`barrier`), or is entirely reshaped by (`semicircle`) each mask's geometry.

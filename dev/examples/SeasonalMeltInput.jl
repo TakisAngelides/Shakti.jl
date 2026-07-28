@@ -43,7 +43,7 @@ mask = fill(GROUNDED, NX, NY)
 mask[1, :]   .= LAND
 mask[end, :] .= OTHER_BASIN
 mask[:, 1]   .= OTHER_BASIN
-mask[:, end] .= OTHER_BASIN
+mask[:, end] .= OTHER_BASIN;
 
 # ## Physical parameters and initial gap height
 # Zero englacial storage (`e_v = 0`, required by [`EllipticHeadScheme`](@ref), and the paper's
@@ -65,7 +65,7 @@ taub_x = zeros(NX + 1, NY) # unused: RegularizedCoulombSlidingLaw recomputes tau
 taub_y = zeros(NX, NY + 1)
 
 rng = Random.MersenneTwister(1)
-b = fill(0.01, NX, NY) .* (1 .+ 0.01 .* randn(rng, NX, NY))
+b = fill(0.01, NX, NY) .* (1 .+ 0.01 .* randn(rng, NX, NY));
 
 # ## Spin-up
 # A short spin-up under a steady 1 m/yr distributed melt input, reaching a reasonable starting
@@ -76,7 +76,7 @@ mi_spinup = ConstantMeltInput()
 ieb_spinup = fill(1.0 / SECONDS_PER_YEAR, NX, NY) # 1 m/yr -> m/s
 
 state = State(grid)
-set_initial_conditions!(state, grid, p, mi_spinup, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb_spinup, taub_x, taub_y)
+set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb_spinup, taub_x, taub_y)
 
 ls = CholeskyDirectSolver(grid)
 ps = PicardSolver(500, 1e-6, ls, grid; alpha = 0.1) # under-relaxed: the paper's own Fig. 10 shows this Picard/dt combination oscillates once channelization onsets
@@ -86,12 +86,10 @@ run!(sim_spinup)
 
 # ## Seasonal cycle
 # Switch to [`SeasonalMeltInput`](@ref)'s cosine-shaped melt season, and run for one year at the
-# paper's own hourly timestep -- `PicardSolver`'s under-relaxation (`alpha = 0.1` above) keeps this
-# stable, but a coarser `dt` still lets oscillations creep in around channelization onset (paper's
-# Fig. 10), which is what a coarser timestep here previously looked like in the resulting plots.
+# paper's own hourly timestep.
 
 mi_seasonal = SeasonalMeltInput()
-initialize_ieb!(mi_seasonal, state, ieb_spinup) # harmless placeholder value, overwritten on the first step below
+state.ieb .= ieb_spinup # harmless placeholder value, overwritten on the first step below
 
 dt = 3600.0
 tsteps = round(Int, SECONDS_PER_YEAR / dt)
