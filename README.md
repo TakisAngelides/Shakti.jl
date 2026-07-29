@@ -40,40 +40,37 @@ set_preferences!("Shakti", "backend" => "CUDA", "floattype" => "Float32"; force 
 ```julia
 using Shakti
 
-# 1. Build a grid: nx*ny cells over a domain of size lx*ly (meters).
 grid = Grid(nx, ny, lx, ly)
 
-# 2. Physical constants, melt input, and the basal sliding law.
-p  = ModelParameters()               # see its docstring for every keyword/default
-mi = ConstantMeltInput()             # or SeasonalMeltInput(...) for a seasonal cycle
-sl = RegularizedCoulombSlidingLaw(C) # or LinearSlidingLaw(grid, C) / PrescribedSlidingLaw()
+p  = ModelParameters()
+mi = ConstantMeltInput()
+sl = RegularizedCoulombSlidingLaw(C)
 
-# 3. Build the state and populate it from your input data: mask (GROUNDED/OCEAN/LAND/
-#    OTHER_BASIN, see src/mask.jl), bed/surface elevation, ice thickness via gap height,
-#    Glen's-law rate factor, geothermal flux, and basal sliding velocity.
 state = State(grid)
 set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
 
-# 4. Choose a linear solver for the Picard/elliptic head solve...
-ls = CholeskyDirectSolver(grid)               # fastest at every grid size benchmarked so far, CPU-only
-# ls = CGIterativeSolver(grid, MatrixFreeLinearSystem) # GPU-capable alternative
+ls = CholeskyDirectSolver(grid)
 ps = PicardSolver(500, 1e-6, ls, grid)
 
-# 5. ...and wrap everything in a Simulation. (If p.e_v != 0 instead, pass `ls = ...` here in place
-#    of `ps` -- ParabolicHeadScheme's single backward-Euler solve needs no Picard loop.)
 sim = Simulation(grid, state, tsteps, dt, p, "implicit", ["h", "N", "b", "mdot"], mi, sl;
                   ps = ps, which_observer = "IO", which_file_writer = "NetCDF",
                   tracked_times = 0:tsteps, path = "output.nc")
 
-# 6. Run. state.h/state.N/state.b/... hold the solution at every timestep in between,
-#    and the tracked fields above are written to output.nc as the run progresses.
 run!(sim)
 ```
 
+`state.h`/`state.N`/`state.b`/... hold the solution at every timestep in between, and the tracked
+fields above are written to `output.nc` as the run progresses.
+
+> **Every option shown above -- and every one it doesn't (other sliding laws, melt inputs, linear
+> solvers, k-face/gap schemes, observers, backends, ...) -- is spelled out in one place: the
+> [All options](https://TakisAngelides.github.io/Shakti.jl/dev/examples/AllOptions/) example.**
+> Start there to see the full range of what Shakti can do.
+
 See the [online documentation](https://TakisAngelides.github.io/Shakti.jl/dev/) for the full API
 reference and a gallery of complete, runnable examples (seasonal melt input, mask geometries, the
-parabolic head scheme, a full options reference, and a real-data reproduction of Sommers and others
-(2023)'s Helheim Glacier winter base state), and `test/runtests.jl` for the test suite's own setups.
+parabolic head scheme, and a real-data reproduction of Sommers and others (2023)'s Helheim Glacier
+winter base state), and `test/runtests.jl` for the test suite's own setups.
 
 ## Package structure
 
