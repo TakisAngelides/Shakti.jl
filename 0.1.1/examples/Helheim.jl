@@ -166,7 +166,7 @@ mi = ConstantMeltInput()
 sl = LinearSlidingLaw(grid, FRIC)
 
 state = State(grid)
-set_initial_conditions!(state, grid, p, mi, sl, mask, A, zb, zs, gap, G, ub_x, ub_y, ieb, taub_x, taub_y)
+set_initial_conditions!(state, grid, p, sl, mask, A, zb, zs, gap, G, ub_x, ub_y, ieb, taub_x, taub_y);
 
 # ## Running to the winter base state
 # Sommers and others (2023) reach their "winter base state" (zero external meltwater input --
@@ -186,10 +186,10 @@ println("Ran $tsteps steps (dt=$dt s, $(tsteps * dt / 86400) days)")
 
 # ## Results
 # Reproduction of Fig. 2: (a) water pressure as a fraction of overburden, (b) gap height, (c)
-# Reynolds number (with a second colorbar for the equivalent water flux `q = Re*nu`), (d)
-# effective pressure, (e) transmissivity (`K = b^3*g / (12*nu*(1+omega*Re))`, Eq. 6 -- not itself
-# a tracked field), (f) basal melt rate. Colors are pixel-sampled directly from the published
-# PDF's own colorbars, since no built-in Makie/ColorSchemes.jl map matched closely enough.
+# Reynolds number, (d) effective pressure, (e) transmissivity (`K = b^3*g / (12*nu*(1+omega*Re))`),
+# (f) basal melt rate. Colors and colorbar limits are matched to the published Fig. 2: panels
+# (a)-(d) use a sequential dark-blue-to-pink map, while (e) and (f) -- both spanning many orders
+# of magnitude either side of a "typical" value -- use a diverging blue-white-red map instead.
 
 const HELHEIM_CMAP = cgrad([
     "#051c59", "#0d345f", "#114461", "#185361", "#236160", "#366956",
@@ -205,7 +205,7 @@ const HELHEIM_DIVERGING_CMAP = cgrad([
 hist = sim.observer.history
 final(name) = view(hist[name], :, :, 1)
 b, N, pw, po, Re, mdot = final("b"), final("N"), final("pw"), final("po"), final("Re"), final("mdot")
-K = b .^ 3 .* p.g ./ (12 .* p.nu .* (1 .+ p.omega .* Re)) # Eq. 6, not itself tracked
+K = b .^ 3 .* p.g ./ (12 .* p.nu .* (1 .+ p.omega .* Re))
 
 pw_frac = pw ./ po
 mdot_myr = max.(mdot ./ p.rho_w .* SECONDS_PER_YEAR, 1e-6) # kg/m^2/s -> m/yr w.e.; floor avoids log10 of the handful of refreezing (mdot<0) GROUNDED cells
@@ -216,21 +216,22 @@ mask_nan(field) = ifelse.(grounded, field, NaN)
 
 fig = Figure(size = (1600, 900))
 
-function panel!(pos, title, field; colorrange, colorscale = identity, colormap = HELHEIM_CMAP, cb_label = "")
+function panel!(pos, title, field; colorrange, colorscale = identity, colormap = HELHEIM_CMAP, cb_label = "", cb_ticks = Makie.automatic)
     ax = Axis(fig[pos...]; title = title, xlabel = "x (km)", ylabel = "y (km)", aspect = DataAspect())
     hm = heatmap!(ax, xc_km, yc_km, mask_nan(field), colormap = colormap, colorscale = colorscale, colorrange = colorrange, nan_color = :transparent)
-    Colorbar(fig[pos[1], pos[2]+1], hm, label = cb_label)
+    Colorbar(fig[pos[1], pos[2]+1], hm, label = cb_label, ticks = cb_ticks)
     return ax, hm
 end
 
 panel!((1, 1), "a) Basal Water Pressure\n(pw / pi)", pw_frac; colorrange = (0, 1))
 panel!((1, 3), "b) Gap Height (m)", b; colorrange = (1e-3, 1e-1), colorscale = log10)
 
-panel!((1, 5), "c) Reynolds Number", Re; colorrange = (1, 1e4), colorscale = log10)
-Colorbar(fig[1, 7]; colormap = HELHEIM_CMAP, scale = log10, limits = (1 * p.nu, 1e4 * p.nu), label = "Water Flux (m² s⁻¹)")
+panel!((1, 5), "c) Reynolds Number", Re; colorrange = (1, 1e4), colorscale = log10, cb_label = "Reynolds Number")
 
 panel!((2, 1), "d) Effective Pressure (MPa)", N ./ 1e6; colorrange = (0, 3))
-panel!((2, 3), "e) Transmissivity (m² s⁻¹)", K; colorrange = (1e-4, 1e4), colorscale = log10)
+# 8-decade colorrange: Makie's automatic log ticks pick an odd 2.5-decade spacing here (unlike the
+# narrower ranges above) -- explicit ticks give the same clean 2-decade spacing as the published Fig. 2e.
+panel!((2, 3), "e) Transmissivity (m² s⁻¹)", K; colorrange = (1e-4, 1e4), colorscale = log10, colormap = HELHEIM_DIVERGING_CMAP, cb_ticks = [1e-4, 1e-2, 1e0, 1e2, 1e4])
 panel!((2, 5), "f) Basal Melt Rate (m yr⁻¹)", mdot_myr; colorrange = (1e-2, 1e1), colorscale = log10, colormap = HELHEIM_DIVERGING_CMAP)
 
 fig

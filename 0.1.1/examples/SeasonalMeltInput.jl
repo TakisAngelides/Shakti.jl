@@ -43,13 +43,18 @@ mask = fill(GROUNDED, NX, NY)
 mask[1, :]   .= LAND
 mask[end, :] .= OTHER_BASIN
 mask[:, 1]   .= OTHER_BASIN
-mask[:, end] .= OTHER_BASIN
+mask[:, end] .= OTHER_BASIN;
 
 # ## Physical parameters and initial gap height
 # Zero englacial storage (`e_v = 0`, required by [`EllipticHeadScheme`](@ref), and the paper's
 # own choice too). Initial gap height 0.01 m plus 1% noise, to seed channelization instabilities.
+# `omega = 1e-4` (also [`ModelParameters`](@ref)'s own default, deliberately differing from Table
+# 2's `0.001` -- see its docstring) keeps the Reynolds numbers reached during channelization out of
+# the flux law's steepest, hardest-to-converge transitional band, which is what keeps the Picard
+# solve (and hence this time series) stable instead of oscillating; set explicitly here since it's
+# what actually makes this example's plots clean, not just an incidental default.
 
-p = ModelParameters(e_v = 0.0, b_min = 1e-3)
+p = ModelParameters(e_v = 0.0, b_min = 1e-3, omega = 1e-4)
 
 A_visc = fill(5e-25, NX, NY)
 G      = fill(0.05, NX, NY)
@@ -60,7 +65,7 @@ taub_x = zeros(NX + 1, NY) # unused: RegularizedCoulombSlidingLaw recomputes tau
 taub_y = zeros(NX, NY + 1)
 
 rng = Random.MersenneTwister(1)
-b = fill(0.01, NX, NY) .* (1 .+ 0.01 .* randn(rng, NX, NY))
+b = fill(0.01, NX, NY) .* (1 .+ 0.01 .* randn(rng, NX, NY));
 
 # ## Spin-up
 # A short spin-up under a steady 1 m/yr distributed melt input, reaching a reasonable starting
@@ -71,7 +76,7 @@ mi_spinup = ConstantMeltInput()
 ieb_spinup = fill(1.0 / SECONDS_PER_YEAR, NX, NY) # 1 m/yr -> m/s
 
 state = State(grid)
-set_initial_conditions!(state, grid, p, mi_spinup, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb_spinup, taub_x, taub_y)
+set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb_spinup, taub_x, taub_y)
 
 ls = CholeskyDirectSolver(grid)
 ps = PicardSolver(500, 1e-6, ls, grid; alpha = 0.1) # under-relaxed: the paper's own Fig. 10 shows this Picard/dt combination oscillates once channelization onsets
@@ -80,13 +85,13 @@ sim_spinup = Simulation(grid, state, 20, floattype(3600.0), p, "implicit", Strin
 run!(sim_spinup)
 
 # ## Seasonal cycle
-# Switch to [`SeasonalMeltInput`](@ref)'s cosine-shaped melt season, and run for one year at a
-# 6-hour timestep (coarser than the paper's hourly `dt`, kept here for a fast-running example).
+# Switch to [`SeasonalMeltInput`](@ref)'s cosine-shaped melt season, and run for one year at the
+# paper's own hourly timestep.
 
 mi_seasonal = SeasonalMeltInput()
-initialize_ieb!(mi_seasonal, state, ieb_spinup) # harmless placeholder value, overwritten on the first step below
+state.ieb .= ieb_spinup # harmless placeholder value, overwritten on the first step below
 
-dt = 6 * 3600.0
+dt = 3600.0
 tsteps = round(Int, SECONDS_PER_YEAR / dt)
 tracked_times = 0:tsteps
 
@@ -101,7 +106,7 @@ run!(sim)
 
 hist = sim.observer.history
 days = (0:tsteps) .* (dt / 86400)
-b_hist, h_hist = hist["b"], hist["h"]
+b_hist, h_hist, N_hist = hist["b"], hist["h"], hist["N"]
 
 fig_ts = Figure(size = (650, 500))
 ax_b = Axis(fig_ts[1, 1], title = "Gap height (m)", xlabel = "Day of year")
@@ -116,18 +121,24 @@ lines!(ax_h, days, [maximum(view(h_hist, :, :, i)) for i in axes(h_hist, 3)], la
 axislegend(ax_h)
 fig_ts
 
-# The spatial gap-height and head fields at the end of the run (back to the winter baseline,
-# day 365): the channel the melt season carved out along the outflow direction has mostly closed
-# again by the time the cycle completes.
+# ## Spatial snapshots
+# Gap height, head, and effective pressure at representative days across the year: the channel
+# the melt season carves out along the outflow direction (`x=0`) opens as the season peaks
+# (days ~180-250) and closes back down to the winter baseline by day 365.
 
 grounded = mask .== GROUNDED
 mask_nan(field) = ifelse.(grounded, field, NaN)
 
-fig_final = Figure(size = (900, 350))
-ax1 = Axis(fig_final[1, 1], title = "Gap height (m), day 365", xlabel = "x (m)", ylabel = "y (m)", aspect = DataAspect())
-hm1 = heatmap!(ax1, grid.x, grid.y, mask_nan(view(b_hist, :, :, tsteps + 1)), colormap = :inferno, nan_color = :transparent)
-Colorbar(fig_final[1, 2], hm1)
-ax2 = Axis(fig_final[1, 3], title = "Hydraulic head (m), day 365", xlabel = "x (m)", ylabel = "y (m)", aspect = DataAspect())
-hm2 = heatmap!(ax2, grid.x, grid.y, mask_nan(view(h_hist, :, :, tsteps + 1)), colormap = :dense, nan_color = :transparent)
-Colorbar(fig_final[1, 4], hm2)
-fig_final
+snapshot_days = (1, 150, 180, 200, 220, 250, 280, 365)
+snapshot_idx = [clamp(round(Int, d * 86400 / dt), 0, tsteps) + 1 for d in snapshot_days]
+
+fig_snap = Figure(size = (240 * length(snapshot_days), 650))
+for (col, (d, idx)) in enumerate(zip(snapshot_days, snapshot_idx))
+    ax1 = Axis(fig_snap[1, col], title = "Day $d\ngap height (m)", aspect = DataAspect())
+    heatmap!(ax1, grid.x, grid.y, mask_nan(view(b_hist, :, :, idx)), colormap = :inferno, nan_color = :transparent)
+    ax2 = Axis(fig_snap[2, col], title = "head (m)", aspect = DataAspect())
+    heatmap!(ax2, grid.x, grid.y, mask_nan(view(h_hist, :, :, idx)), colormap = :dense, nan_color = :transparent)
+    ax3 = Axis(fig_snap[3, col], title = "eff. pressure (Pa)", aspect = DataAspect())
+    heatmap!(ax3, grid.x, grid.y, mask_nan(view(N_hist, :, :, idx)), colormap = :viridis, nan_color = :transparent)
+end
+fig_snap
