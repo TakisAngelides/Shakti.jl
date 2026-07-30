@@ -14,7 +14,7 @@ compute_pw!(s::State, p::ModelParameters) = (@parallel compute_pw_kernel!(s.pw, 
 
 @parallel_indices (ix, iy) function compute_N_kernel!(N, po, pw, mask)
     if ix <= size(N, 1) && iy <= size(N, 2)
-        is_grounded = mask[ix, iy] == GROUNDED # float comparison, not Bool -- see mask.jl's header note
+        is_grounded = mask[ix, iy] == GROUNDED # Float64 == Float64 (not Int), matching mask.jl's own rationale for keeping mask float-valued
         N[ix, iy] = is_grounded * (po[ix, iy] - pw[ix, iy])
     end
     return
