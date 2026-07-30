@@ -6,7 +6,7 @@
 
 A Julia solver for the SHAKTI subglacial hydrology model ([Sommers, Rajaram & Morlighem,
 2018](https://gmd.copernicus.org/articles/11/2955/2018/)): a continuum model of hydraulic head, effective
-pressure, water flux, and drainage-system geometry (gap height) beneath an ice sheet, that
+pressure, water flux, and drainage-system geometry (gap height) beneath a glacier, that
 transitions smoothly between laminar (distributed) and turbulent (channelized) flow regimes
 rather than treating them as separate model components.
 
@@ -63,9 +63,9 @@ run!(sim)
 fields above are written to `output.nc` as the run progresses.
 
 > **Every option shown above -- and every one it doesn't (other sliding laws, melt inputs, linear
-> solvers, k-face/gap schemes, observers, backends, ...) -- is spelled out in one place: the
+> solvers, k-face/gap schemes, observers, backends, ...) -- is mentioned in the
 > [All options](https://TakisAngelides.github.io/Shakti.jl/dev/examples/AllOptions/) example.**
-> Start there to see the full range of what Shakti can do.
+> The reader is advised to start there to see the full range of what Shakti can do.
 
 See the [online documentation](https://TakisAngelides.github.io/Shakti.jl/dev/) for the full API
 reference and a gallery of complete, runnable examples (seasonal melt input, mask geometries, the
