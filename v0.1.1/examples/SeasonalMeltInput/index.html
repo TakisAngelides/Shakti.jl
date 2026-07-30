@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Seasonal melt input · Shakti.jl</title><meta name="title" content="Seasonal melt input · Shakti.jl"/><meta property="og:title" content="Seasonal melt input · Shakti.jl"/><meta property="twitter:title" content="Seasonal melt input · Shakti.jl"/><meta name="description" content="Documentation for Shakti.jl."/><meta property="og:description" content="Documentation for Shakti.jl."/><meta property="twitter:description" content="Documentation for Shakti.jl."/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../../">Shakti.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Shakti.jl</a></li><li><span class="tocitem">Examples</span><ul><li class="is-active"><a class="tocitem" href>Seasonal melt input</a><ul class="internal"><li><a class="tocitem" href="#Geometry"><span>Geometry</span></a></li><li><a class="tocitem" href="#Mask-and-boundary-conditions"><span>Mask and boundary conditions</span></a></li><li><a class="tocitem" href="#Physical-parameters-and-initial-gap-height"><span>Physical parameters and initial gap height</span></a></li><li><a class="tocitem" href="#Spin-up"><span>Spin-up</span></a></li><li><a class="tocitem" href="#Seasonal-cycle"><span>Seasonal cycle</span></a></li><li><a class="tocitem" href="#Results"><span>Results</span></a></li><li><a class="tocitem" href="#Spatial-snapshots"><span>Spatial snapshots</span></a></li></ul></li><li><a class="tocitem" href="../MaskVariants/">Mask variants</a></li><li><a class="tocitem" href="../ParabolicScheme/">Parabolic head scheme</a></li><li><a class="tocitem" href="../AllOptions/">All options</a></li><li><a class="tocitem" href="../Helheim/">Helheim Glacier</a></li></ul></li><li><a class="tocitem" href="../../API/">API</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Examples</a></li><li class="is-active"><a href>Seasonal melt input</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Seasonal melt input</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/TakisAngelides/Shakti.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/TakisAngelides/Shakti.jl/blob/main/docs/src/examples/SeasonalMeltInput.jl" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="SeasonalMeltInput"><a class="docs-heading-anchor" href="#SeasonalMeltInput">Seasonal melt input</a><a id="SeasonalMeltInput-1"></a><a class="docs-heading-anchor-permalink" href="#SeasonalMeltInput" title="Permalink"></a></h1><p>A small, fast-running version of Sect. 3.3 of Sommers, Rajaram &amp; Morlighem (2018) (https://doi.org/10.5194/gmd-11-2955-2018), &quot;Seasonal variation and distributed meltwater input&quot;: a synthetic slab geometry, spun up under a steady winter melt rate, then driven for one year by <a href="#SeasonalMeltInput"><code>SeasonalMeltInput</code></a>&#39;s cosine-shaped melt-season cycle – showing how gap height and hydraulic head respond as the system channelizes and relaxes with the seasons.</p><pre><code class="language-julia hljs">using Shakti
+using CairoMakie
+using Random
+using Statistics</code></pre><h2 id="Geometry"><a class="docs-heading-anchor" href="#Geometry">Geometry</a><a id="Geometry-1"></a><a class="docs-heading-anchor-permalink" href="#Geometry" title="Permalink"></a></h2><p>A small synthetic domain: flat bed, ice surface parabolic in <code>x</code> (thin near the outflow at <code>x=0</code>, thickening upglacier), uniform in <code>y</code> – the same synthetic setup the paper uses for this experiment (Table 2), just at a coarser grid/timestep so this example runs quickly.</p><pre><code class="language-julia hljs">const NX, NY = 16, 16
+const LX, LY = 4000.0, 8000.0 # 4 km x 8 km, matching the paper&#39;s domain
+grid = Grid(NX, NY, LX, LY)
+
+zb = zeros(NX, NY)
+H0, H1 = 550.0, 700.0 # ice thickness at x=0 / x=Lx (m), the paper&#39;s endpoints
+Hx = sqrt.(H0^2 .+ (H1^2 - H0^2) .* (grid.x ./ LX)) # zb=0, so surface elevation == thickness
+zs = repeat(Hx, 1, NY)
+
+fig_geom = let
+    fig = Figure(size = (450, 350))
+    ax = Axis(fig[1, 1], title = &quot;Ice surface elevation (m)&quot;, xlabel = &quot;x (m)&quot;, ylabel = &quot;y (m)&quot;)
+    hm = heatmap!(ax, grid.x, grid.y, zs)
+    Colorbar(fig[1, 2], hm)
+    fig
+end
+fig_geom</code></pre><img src="761f9e47.png" alt="Example block output"/><h2 id="Mask-and-boundary-conditions"><a class="docs-heading-anchor" href="#Mask-and-boundary-conditions">Mask and boundary conditions</a><a id="Mask-and-boundary-conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Mask-and-boundary-conditions" title="Permalink"></a></h2><p>Outflow at <code>x=0</code> (<a href="../../API/#Shakti.LAND"><code>LAND</code></a>: Dirichlet head = 0, i.e. atmospheric pressure); the other three edges are zero-flux (<a href="../../API/#Shakti.OTHER_BASIN"><code>OTHER_BASIN</code></a>).</p><pre><code class="language-julia hljs">mask = fill(GROUNDED, NX, NY)
+mask[1, :]   .= LAND
+mask[end, :] .= OTHER_BASIN
+mask[:, 1]   .= OTHER_BASIN
+mask[:, end] .= OTHER_BASIN;</code></pre><h2 id="Physical-parameters-and-initial-gap-height"><a class="docs-heading-anchor" href="#Physical-parameters-and-initial-gap-height">Physical parameters and initial gap height</a><a id="Physical-parameters-and-initial-gap-height-1"></a><a class="docs-heading-anchor-permalink" href="#Physical-parameters-and-initial-gap-height" title="Permalink"></a></h2><p>Zero englacial storage (<code>e_v = 0</code>, required by <a href="../../API/#Shakti.EllipticHeadScheme"><code>EllipticHeadScheme</code></a>, and the paper&#39;s own choice too). Initial gap height 0.01 m plus 1% noise, to seed channelization instabilities. <code>omega = 1e-4</code> (also <a href="../../API/#Shakti.ModelParameters"><code>ModelParameters</code></a>&#39;s own default, deliberately differing from Table 2&#39;s <code>0.001</code> – see its docstring) keeps the Reynolds numbers reached during channelization out of the flux law&#39;s steepest, hardest-to-converge transitional band, which is what keeps the Picard solve (and hence this time series) stable instead of oscillating; set explicitly here since it&#39;s what actually makes this example&#39;s plots clean, not just an incidental default.</p><pre><code class="language-julia hljs">p = ModelParameters(e_v = 0.0, b_min = 1e-3, omega = 1e-4)
+
+A_visc = fill(5e-25, NX, NY)
+G      = fill(0.05, NX, NY)
+ub_x   = fill(1e-6, NX + 1, NY)
+ub_y   = zeros(NX, NY + 1)
+sl     = RegularizedCoulombSlidingLaw(0.25)
+taub_x = zeros(NX + 1, NY) # unused: RegularizedCoulombSlidingLaw recomputes taub from N/ub every Picard iteration
+taub_y = zeros(NX, NY + 1)
+
+rng = Random.MersenneTwister(1)
+b = fill(0.01, NX, NY) .* (1 .+ 0.01 .* randn(rng, NX, NY));</code></pre><h2 id="Spin-up"><a class="docs-heading-anchor" href="#Spin-up">Spin-up</a><a id="Spin-up-1"></a><a class="docs-heading-anchor-permalink" href="#Spin-up" title="Permalink"></a></h2><p>A short spin-up under a steady 1 m/yr distributed melt input, reaching a reasonable starting state before switching on the seasonal cycle.</p><pre><code class="language-julia hljs">const SECONDS_PER_YEAR = 365 * 86400.0
+mi_spinup = ConstantMeltInput()
+ieb_spinup = fill(1.0 / SECONDS_PER_YEAR, NX, NY) # 1 m/yr -&gt; m/s
+
+state = State(grid)
+set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb_spinup, taub_x, taub_y)
+
+ls = CholeskyDirectSolver(grid)
+ps = PicardSolver(500, 1e-6, ls, grid; alpha = 0.1) # under-relaxed: the paper&#39;s own Fig. 10 shows this Picard/dt combination oscillates once channelization onsets
+
+sim_spinup = Simulation(grid, state, 20, floattype(3600.0), p, &quot;implicit&quot;, String[], mi_spinup, sl; ps = ps)
+run!(sim_spinup)</code></pre><h2 id="Seasonal-cycle"><a class="docs-heading-anchor" href="#Seasonal-cycle">Seasonal cycle</a><a id="Seasonal-cycle-1"></a><a class="docs-heading-anchor-permalink" href="#Seasonal-cycle" title="Permalink"></a></h2><p>Switch to <a href="#SeasonalMeltInput"><code>SeasonalMeltInput</code></a>&#39;s cosine-shaped melt season, and run for one year at the paper&#39;s own hourly timestep.</p><pre><code class="language-julia hljs">mi_seasonal = SeasonalMeltInput()
+state.ieb .= ieb_spinup # harmless placeholder value, overwritten on the first step below
+
+dt = 3600.0
+tsteps = round(Int, SECONDS_PER_YEAR / dt)
+tracked_times = 0:tsteps
+
+sim = Simulation(grid, state, tsteps, floattype(dt), p, &quot;implicit&quot;, [&quot;h&quot;, &quot;b&quot;, &quot;N&quot;], mi_seasonal, sl;
+                 ps = ps, which_observer = &quot;Live&quot;, tracked_times = tracked_times)
+run!(sim)</code></pre><h2 id="Results"><a class="docs-heading-anchor" href="#Results">Results</a><a id="Results-1"></a><a class="docs-heading-anchor-permalink" href="#Results" title="Permalink"></a></h2><p>Domain min/mean/max gap height and head over the year: both stay low through winter, rise as the melt season (roughly days 146-255, <code>t_start=0.4</code> to <code>t_start+period=0.7</code> of the year) drives the system toward a more channelized, higher-flux state, then relax back down.</p><pre><code class="language-julia hljs">hist = sim.observer.history
+days = (0:tsteps) .* (dt / 86400)
+b_hist, h_hist, N_hist = hist[&quot;b&quot;], hist[&quot;h&quot;], hist[&quot;N&quot;]
+
+fig_ts = Figure(size = (650, 500))
+ax_b = Axis(fig_ts[1, 1], title = &quot;Gap height (m)&quot;, xlabel = &quot;Day of year&quot;)
+lines!(ax_b, days, [minimum(view(b_hist, :, :, i)) for i in axes(b_hist, 3)], label = &quot;min&quot;)
+lines!(ax_b, days, [mean(view(b_hist, :, :, i)) for i in axes(b_hist, 3)], label = &quot;mean&quot;)
+lines!(ax_b, days, [maximum(view(b_hist, :, :, i)) for i in axes(b_hist, 3)], label = &quot;max&quot;)
+axislegend(ax_b)
+ax_h = Axis(fig_ts[2, 1], title = &quot;Hydraulic head (m)&quot;, xlabel = &quot;Day of year&quot;)
+lines!(ax_h, days, [minimum(view(h_hist, :, :, i)) for i in axes(h_hist, 3)], label = &quot;min&quot;)
+lines!(ax_h, days, [mean(view(h_hist, :, :, i)) for i in axes(h_hist, 3)], label = &quot;mean&quot;)
+lines!(ax_h, days, [maximum(view(h_hist, :, :, i)) for i in axes(h_hist, 3)], label = &quot;max&quot;)
+axislegend(ax_h)
+fig_ts</code></pre><img src="b074ab50.png" alt="Example block output"/><h2 id="Spatial-snapshots"><a class="docs-heading-anchor" href="#Spatial-snapshots">Spatial snapshots</a><a id="Spatial-snapshots-1"></a><a class="docs-heading-anchor-permalink" href="#Spatial-snapshots" title="Permalink"></a></h2><p>Gap height, head, and effective pressure at representative days across the year: the channel the melt season carves out along the outflow direction (<code>x=0</code>) opens as the season peaks (days ~180-250) and closes back down to the winter baseline by day 365.</p><pre><code class="language-julia hljs">grounded = mask .== GROUNDED
+mask_nan(field) = ifelse.(grounded, field, NaN)
+
+snapshot_days = (1, 150, 180, 200, 220, 250, 280, 365)
+snapshot_idx = [clamp(round(Int, d * 86400 / dt), 0, tsteps) + 1 for d in snapshot_days]
+
+fig_snap = Figure(size = (240 * length(snapshot_days), 650))
+for (col, (d, idx)) in enumerate(zip(snapshot_days, snapshot_idx))
+    ax1 = Axis(fig_snap[1, col], title = &quot;Day $d\ngap height (m)&quot;, aspect = DataAspect())
+    heatmap!(ax1, grid.x, grid.y, mask_nan(view(b_hist, :, :, idx)), colormap = :inferno, nan_color = :transparent)
+    ax2 = Axis(fig_snap[2, col], title = &quot;head (m)&quot;, aspect = DataAspect())
+    heatmap!(ax2, grid.x, grid.y, mask_nan(view(h_hist, :, :, idx)), colormap = :dense, nan_color = :transparent)
+    ax3 = Axis(fig_snap[3, col], title = &quot;eff. pressure (Pa)&quot;, aspect = DataAspect())
+    heatmap!(ax3, grid.x, grid.y, mask_nan(view(N_hist, :, :, idx)), colormap = :viridis, nan_color = :transparent)
+end
+fig_snap</code></pre><img src="bd6b0903.png" alt="Example block output"/></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../../">« Shakti.jl</a><a class="docs-footer-nextpage" href="../MaskVariants/">Mask variants »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Thursday 30 July 2026 16:02">Thursday 30 July 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
