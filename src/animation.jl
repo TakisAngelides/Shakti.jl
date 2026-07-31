@@ -57,16 +57,20 @@ end
 $(TYPEDSIGNATURES)
 
 Renders an animated `.mp4` heatmap of a tracked field's full 2D time history `hist`, the 2D
-counterpart of [`make_mp4_mid`](@ref) above (same arguments otherwise).
+counterpart of [`make_mp4_mid`](@ref) above (same arguments otherwise). `framerate` controls
+playback speed only -- every frame in `hist` is still rendered, none are dropped. `title`, if
+given, is set once and left static instead of the default per-frame `"t_iter = ..."` label.
+`colormap` is passed straight through to `heatmap!`, e.g. `:inferno` for a black-background/
+yellow-high look matching a `nan_color = :transparent` snapshot heatmap using the same colormap.
 """
-function make_mp4_2d(hist::AbstractArray, tracked_times, moulin_ij; filename, show_moulins::Bool = true)
+function make_mp4_2d(hist::AbstractArray, tracked_times, moulin_ij; filename, show_moulins::Bool = true, framerate::Int = 20, title::Union{Nothing, String} = nothing, colormap = :viridis)
     ntimes = size(hist, ndims(hist))
     vmin   = minimum(hist)
     vmax   = maximum(hist)
     fig    = Figure(size = (1000, 800))
     ax     = Axis(fig[1, 1])
     data   = Observable(selectdim(hist, ndims(hist), 1))
-    hm     = heatmap!(ax, data; colorrange = (vmin, vmax))
+    hm     = heatmap!(ax, data; colorrange = (vmin, vmax), colormap = colormap)
     Colorbar(fig[1, 2], hm)
 
     if show_moulins
@@ -75,9 +79,11 @@ function make_mp4_2d(hist::AbstractArray, tracked_times, moulin_ij; filename, sh
         scatter!(ax, mx, my; color = :red, markersize = 8)
     end
 
-    record(fig, filename, 1:ntimes; framerate = 20) do idx
+    title !== nothing && (ax.title = title)
+
+    record(fig, filename, 1:ntimes; framerate = framerate) do idx
         data[] = selectdim(hist, ndims(hist), idx)
-        ax.title = "t_iter = $(tracked_times[idx])"
+        title === nothing && (ax.title = "t_iter = $(tracked_times[idx])")
     end
 end
 
