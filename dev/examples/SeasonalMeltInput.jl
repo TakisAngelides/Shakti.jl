@@ -159,5 +159,5 @@ fig_snap
 # ```@raw html
 # <video autoplay loop muted playsinline style="width:100%"><source src="../seasonal_128/gap_height.mp4" type="video/mp4"></video>
 # ```
-# (`../`, one level more than the images above: `@raw html` bypasses Documenter's link
-# rewriting, so it needs the real `prettyurls`-nested path by hand.)
+# `../`, one level more than the images above: `@raw html` bypasses Documenter's link #src
+# rewriting, so it needs the real `prettyurls`-nested path by hand. #src
