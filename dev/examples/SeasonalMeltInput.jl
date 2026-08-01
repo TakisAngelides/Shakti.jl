@@ -142,3 +142,20 @@ for (col, (d, idx)) in enumerate(zip(snapshot_days, snapshot_idx))
     heatmap!(ax3, grid.x, grid.y, mask_nan(view(N_hist, :, :, idx)), colormap = :viridis, nan_color = :transparent)
 end
 fig_snap
+
+# ## Higher resolution (128×128)
+# The same experiment at production resolution (`NX = NY = 128`), gap height only, generated on
+# `albedo0` by `test/channelization_seasonal/run_channelization.jl` + `plot_channelization.jl`
+# (cluster-only tooling, see that folder's README) -- a year of hourly steps at this grid size is
+# too heavy to re-run on every docs build, so what follows is static, pre-rendered output copied
+# straight into the page; nothing below this point is executed as part of the build.
+#
+# ![Domain min/mean/max gap height over the year at 128×128](seasonal_128/timeseries.png)
+#
+# ![Spatial gap-height snapshots at 128×128](seasonal_128/snapshots.png)
+#
+# Gap height over the melt season (trimmed to the active channelization window):
+#
+# ```@raw html
+# <video autoplay loop muted playsinline style="width:100%"><source src="seasonal_128/gap_height.mp4" type="video/mp4"></video>
+# ```
