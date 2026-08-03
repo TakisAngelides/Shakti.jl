@@ -3,6 +3,7 @@ $(TYPEDSIGNATURES)
 
 How `taub` (basal shear stress, feeding [`compute_mdot!`](@ref)'s frictional-heating term) is
 obtained -- multiple dispatch on the concrete subtype ([`RegularizedCoulombSlidingLaw`](@ref),
+[`RegularizedCoulombFieldSlidingLaw`](@ref), [`RegularizedCoulombV0SlidingLaw`](@ref),
 [`LinearSlidingLaw`](@ref), [`PrescribedSlidingLaw`](@ref)), decided once per `Simulation` (same
 idiom as [`AbstractSensibleHeatScheme`](@ref), `melt_rate.jl`).
 
@@ -400,6 +401,153 @@ Fused version of `compute_taub_x!` + `compute_taub_y!` under [`RegularizedCoulom
 one `@parallel` launch instead of two.
 """
 compute_taub_xy!(s::State, p::ModelParameters, sl::RegularizedCoulombFieldSlidingLaw) = (@parallel compute_taub_xy_field_kernel!(s.taub_x, s.taub_y, s.N, s.ub_x, s.ub_y, s.abs_ub, s.lambda, sl.Cx, sl.Cy, p.n_exp, p.inv_n_exp); s)
+
+"""
+$(TYPEDSIGNATURES)
+
+Regularized-Coulomb sliding law using Kazmierczak et al. (2024)/Joughin et al. (2019)'s Eq. 1
+literally: `taub = C*N*(||vb||/(||vb||+v0))^(1/m) * vb/||vb||`, with `v0` a fixed constant velocity
+threshold (their Appendix A: `v0 = 300 m/a = 9.51e-6 m/s`), NOT [`RegularizedCoulombSlidingLaw`](@ref)/
+[`RegularizedCoulombFieldSlidingLaw`](@ref)'s `N^n*lambda` velocity scale (Shakti's own, inherited
+from the original SHAKTI/Sommers et al. 2018 cavity-opening physics -- see those types' docstrings).
+Use this one when the goal is reproducing the paper's own regularization, not Shakti's native one.
+
+# Notes
+
+`v0` must be in the same units as `ub_x`/`ub_y`/`abs_ub` (Shakti's internal m/s, not the paper's
+m/a -- convert before constructing). `inv_n` (`1/m`) is read from `p.inv_n_exp` same as the other
+two laws; unlike them, `p.n_exp` itself is unused here since there's no `N^n` term in this law's
+denominator.
+"""
+struct RegularizedCoulombV0SlidingLaw{A <: AbstractArray, F <: AbstractFloat} <: AbstractSlidingLaw
+    Cx::A # C staggered onto x-faces (Nx+1, Ny)
+    Cy::A # C staggered onto y-faces (Nx, Ny+1)
+    v0::F # constant velocity threshold, same units as ub_x/ub_y (m/s)
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Builds a [`RegularizedCoulombV0SlidingLaw`](@ref) on grid `g` from a friction coefficient `C` given
+at cell centers (an `(nx, ny)` array, e.g. an inverted per-cell field) or as a uniform scalar, and a
+constant velocity threshold `v0` (m/s). Staggers `C` onto faces once here rather than in the
+per-iteration hot path, same as [`RegularizedCoulombFieldSlidingLaw(::Grid, C)`](@ref).
+"""
+function RegularizedCoulombV0SlidingLaw(g::Grid, C, v0)
+    nx, ny = g.nx, g.ny
+    F = eltype(g.x)
+    C_cc = C isa AbstractArray ? F.(C) : fill(F(C), nx, ny) # promote a scalar to a uniform field so the staggering below is one code path either way
+
+    Cx = zeros(F, nx + 1, ny)
+    Cx[1, :]    .= C_cc[1, :]
+    Cx[nx+1, :] .= C_cc[nx, :]
+    Cx[2:nx, :] .= (C_cc[1:nx-1, :] .+ C_cc[2:nx, :]) ./ 2
+
+    Cy = zeros(F, nx, ny + 1)
+    Cy[:, 1]    .= C_cc[:, 1]
+    Cy[:, ny+1] .= C_cc[:, ny]
+    Cy[:, 2:ny] .= (C_cc[:, 1:ny-1] .+ C_cc[:, 2:ny]) ./ 2
+
+    return RegularizedCoulombV0SlidingLaw(Data.Array(Cx), Data.Array(Cy), F(v0))
+end
+
+initialize_taub!(::RegularizedCoulombV0SlidingLaw, state::State, taub_x::AbstractArray, taub_y::AbstractArray) = state # recomputed every Picard iteration, same as the other two regularized-Coulomb laws
+
+@parallel_indices (ix, iy) function compute_taub_x_v0_kernel!(taub_x, N, ub_x, abs_ub, Cx, v0, inv_n)
+    nx1 = size(taub_x, 1) # nx + 1
+    if ix <= nx1 && iy <= size(taub_x, 2)
+        if ix == 1
+            Nf = N[1, iy]
+            abs_v = abs_ub[1, iy]
+            taub_x[ix, iy] = abs_v > 0 ? Nf * Cx[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_x[1, iy] / abs_v) : zero(Nf)
+        elseif ix == nx1
+            Nf = N[nx1-1, iy]
+            abs_v = abs_ub[nx1-1, iy]
+            taub_x[ix, iy] = abs_v > 0 ? Nf * Cx[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_x[nx1, iy] / abs_v) : zero(Nf)
+        else
+            Nf = (N[ix, iy] + N[ix-1, iy]) / 2
+            abs_v = (abs_ub[ix, iy] + abs_ub[ix-1, iy]) / 2
+            taub_x[ix, iy] = abs_v > 0 ? Nf * Cx[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_x[ix, iy] / abs_v) : zero(Nf)
+        end
+    end
+    return
+end
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.taub_x` under [`RegularizedCoulombV0SlidingLaw`](@ref) from the current `s.N`/`s.ub_x`.
+"""
+compute_taub_x!(s::State, p::ModelParameters, sl::RegularizedCoulombV0SlidingLaw) = (@parallel compute_taub_x_v0_kernel!(s.taub_x, s.N, s.ub_x, s.abs_ub, sl.Cx, sl.v0, p.inv_n_exp); s)
+
+@parallel_indices (ix, iy) function compute_taub_y_v0_kernel!(taub_y, N, ub_y, abs_ub, Cy, v0, inv_n)
+    ny1 = size(taub_y, 2) # ny + 1
+    if ix <= size(taub_y, 1) && iy <= ny1
+        if iy == 1
+            Nf = N[ix, 1]
+            abs_v = abs_ub[ix, 1]
+            taub_y[ix, iy] = abs_v > 0 ? Nf * Cy[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_y[ix, 1] / abs_v) : zero(Nf)
+        elseif iy == ny1
+            Nf = N[ix, ny1-1]
+            abs_v = abs_ub[ix, ny1-1]
+            taub_y[ix, iy] = abs_v > 0 ? Nf * Cy[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_y[ix, ny1] / abs_v) : zero(Nf)
+        else
+            Nf = (N[ix, iy] + N[ix, iy-1]) / 2
+            abs_v = (abs_ub[ix, iy] + abs_ub[ix, iy-1]) / 2
+            taub_y[ix, iy] = abs_v > 0 ? Nf * Cy[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_y[ix, iy] / abs_v) : zero(Nf)
+        end
+    end
+    return
+end
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.taub_y` under [`RegularizedCoulombV0SlidingLaw`](@ref), the y-face counterpart of the
+`compute_taub_x!` method above.
+"""
+compute_taub_y!(s::State, p::ModelParameters, sl::RegularizedCoulombV0SlidingLaw) = (@parallel compute_taub_y_v0_kernel!(s.taub_y, s.N, s.ub_y, s.abs_ub, sl.Cy, sl.v0, p.inv_n_exp); s)
+
+@parallel_indices (ix, iy) function compute_taub_xy_v0_kernel!(taub_x, taub_y, N, ub_x, ub_y, abs_ub, Cx, Cy, v0, inv_n)
+    nx1 = size(taub_x, 1) # nx + 1
+    if ix <= nx1 && iy <= size(taub_x, 2)
+        if ix == 1
+            Nf = N[1, iy]
+            abs_v = abs_ub[1, iy]
+            taub_x[ix, iy] = abs_v > 0 ? Nf * Cx[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_x[1, iy] / abs_v) : zero(Nf)
+        elseif ix == nx1
+            Nf = N[nx1-1, iy]
+            abs_v = abs_ub[nx1-1, iy]
+            taub_x[ix, iy] = abs_v > 0 ? Nf * Cx[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_x[nx1, iy] / abs_v) : zero(Nf)
+        else
+            Nf = (N[ix, iy] + N[ix-1, iy]) / 2
+            abs_v = (abs_ub[ix, iy] + abs_ub[ix-1, iy]) / 2
+            taub_x[ix, iy] = abs_v > 0 ? Nf * Cx[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_x[ix, iy] / abs_v) : zero(Nf)
+        end
+    end
+    ny1 = size(taub_y, 2) # ny + 1
+    if ix <= size(taub_y, 1) && iy <= ny1
+        if iy == 1
+            Nf = N[ix, 1]
+            abs_v = abs_ub[ix, 1]
+            taub_y[ix, iy] = abs_v > 0 ? Nf * Cy[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_y[ix, 1] / abs_v) : zero(Nf)
+        elseif iy == ny1
+            Nf = N[ix, ny1-1]
+            abs_v = abs_ub[ix, ny1-1]
+            taub_y[ix, iy] = abs_v > 0 ? Nf * Cy[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_y[ix, ny1] / abs_v) : zero(Nf)
+        else
+            Nf = (N[ix, iy] + N[ix, iy-1]) / 2
+            abs_v = (abs_ub[ix, iy] + abs_ub[ix, iy-1]) / 2
+            taub_y[ix, iy] = abs_v > 0 ? Nf * Cy[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_y[ix, iy] / abs_v) : zero(Nf)
+        end
+    end
+    return
+end
+"""
+$(TYPEDSIGNATURES)
+
+Fused version of `compute_taub_x!` + `compute_taub_y!` under [`RegularizedCoulombV0SlidingLaw`](@ref):
+one `@parallel` launch instead of two.
+"""
+compute_taub_xy!(s::State, p::ModelParameters, sl::RegularizedCoulombV0SlidingLaw) = (@parallel compute_taub_xy_v0_kernel!(s.taub_x, s.taub_y, s.N, s.ub_x, s.ub_y, s.abs_ub, sl.Cx, sl.Cy, sl.v0, p.inv_n_exp); s)
 
 # taub = C^2*N*u_b (LinearSlidingLaw, see its struct docstring above): N
 # staggered onto the face with the same boundary-duplicate/interior-average
