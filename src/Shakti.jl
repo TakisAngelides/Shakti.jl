@@ -129,7 +129,7 @@ export get_observable
 export prepare!, observe!, openfile!, write2file!, finalize!, resume!, reopenfile!
 
 # sliding_law.jl
-export AbstractSlidingLaw, RegularizedCoulombSlidingLaw, PrescribedSlidingLaw, LinearSlidingLaw, initialize_taub!
+export AbstractSlidingLaw, RegularizedCoulombSlidingLaw, RegularizedCoulombFieldSlidingLaw, PrescribedSlidingLaw, LinearSlidingLaw, initialize_taub!
 export compute_taub_x!, compute_taub_y!, compute_taub_xy!
 
 # melt_rate.jl
