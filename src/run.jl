@@ -129,7 +129,7 @@ Implicit (backward-Euler) update of `sim.state.b`: implicit on the creep closure
 """
 function compute_b!(sim::Simulation, ::ImplicitGapScheme)
     s, p = sim.state, sim.p
-    @parallel compute_b_implicit_kernel!(s.b, s.mask, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, sim.dt, p.b_min)
+    @parallel compute_b_implicit_kernel!(s.b, s.mask, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, sim.dt, p.b_min, p.b_max)
     return sim
 end
 
@@ -140,7 +140,7 @@ Explicit (forward-Euler) update of `sim.state.b`: cheaper per step, but only sta
 """
 function compute_b!(sim::Simulation, ::ExplicitGapScheme)
     s, p = sim.state, sim.p
-    @parallel compute_b_explicit_kernel!(s.b, s.mask, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, sim.dt, p.b_min)
+    @parallel compute_b_explicit_kernel!(s.b, s.mask, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, sim.dt, p.b_min, p.b_max)
     return sim
 end
 

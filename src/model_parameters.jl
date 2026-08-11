@@ -21,6 +21,7 @@ struct ModelParameters{F <: AbstractFloat, NE1, NE2, NE3}
     cw::F      # heat capacity of water
     p_atm::F   # atmospheric pressure, used as the Dirichlet reference for LAND/OCEAN BCs
     b_min::F   # minimum water thickness
+    b_max::F   # maximum water thickness (Inf by default, i.e. no cap -- see docstring below)
     e_v::F     # englacial storage void ratio
     n_exp::NE1         # canonical_exponent(n), see the fast-exponentiation note below
     n_minus_1_exp::NE2 # canonical_exponent(n - 1)
@@ -40,6 +41,16 @@ value to `F` and precomputing the canonical Glen's-flow-law exponents.
 law's steepest, hardest-to-converge transitional band (`omega*Re ~ O(1)-O(10)`), while `1e-4`
 pushes the same range into the flatter, near-linear part of the curve where Picard iteration
 actually converges.
+
+`b_max` defaults to `Inf` (no cap), unlike `b_min` -- capping gap height guards against a real,
+recognized SHAKTI failure mode (a local `b -> K -> q -> mdot -> b` positive feedback that blows up
+where `N` approaches zero, since creep closure -- which depends on `N` -- vanishes there too;
+confirmed independently in Otemma runs and by SHAKTI-in-ISSM's own author, who reports the same
+behavior "eating its way" up a glacier from the terminus and recommends capping `b` to contain it
+to the affected cell(s)). Left off by default rather than silently changed for every existing
+example/test, since ISSM's own SHAKTI default (`b_max = 1.0` m) is a modeling choice, not a
+numerical-stability constant like `b_min` -- opt in explicitly (`ModelParameters(b_max = 1.0)`)
+where the risk applies.
 """
 function ModelParameters(;
     F::Type{<:AbstractFloat} = floattype,
@@ -57,6 +68,7 @@ function ModelParameters(;
     cw = 4.22e3,
     p_atm = 0.0,
     b_min = 0.0,
+    b_max = Inf,
     e_v = 0.0)
 
     n_F = F(n)
@@ -65,7 +77,7 @@ function ModelParameters(;
     inv_n_exp = canonical_exponent(1 / n_F)
 
     return ModelParameters(
-        F(rho_w), F(rho_sw), F(rho_i), F(g), F(nu), n_F, F(omega), F(L), F(br), F(lr), F(ct), F(cw), F(p_atm), F(b_min), F(e_v),
+        F(rho_w), F(rho_sw), F(rho_i), F(g), F(nu), n_F, F(omega), F(L), F(br), F(lr), F(ct), F(cw), F(p_atm), F(b_min), F(b_max), F(e_v),
         n_exp, n_minus_1_exp, inv_n_exp
     )
 

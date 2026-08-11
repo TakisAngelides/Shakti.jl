@@ -114,20 +114,22 @@ interior faces average their two neighbours).
 """
 compute_b_y!(s::State) = (@parallel compute_b_y_kernel!(s.b_y, s.b); s)
 
-@parallel_indices (ix, iy) function compute_b_implicit_kernel!(b, mask, mdot, beta, abs_ub, A_visc, N, rho_i, n_minus_1, dt, b_min)
+@parallel_indices (ix, iy) function compute_b_implicit_kernel!(b, mask, mdot, beta, abs_ub, A_visc, N, rho_i, n_minus_1, dt, b_min, b_max)
     if ix <= size(b, 1) && iy <= size(b, 2) && mask[ix, iy] == GROUNDED # we only evolve the water thickness if the cell has grounded ice
-        b[ix, iy] = max(b_min, # limit the minimum value of b to b_min for numerical stability
+        b[ix, iy] = clamp( # b_min/b_max bound the water thickness for numerical stability -- b_max specifically guards against a runaway b->K->q->mdot->b feedback (creep closure, which depends on N, vanishes as N->0, so nothing bounds b from above there without this; see ModelParameters' own docstring)
             (b[ix, iy] + dt * (mdot[ix, iy] / rho_i + beta[ix, iy] * abs_ub[ix, iy])) /
-            (1 + dt * A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy]))
+            (1 + dt * A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy]),
+            b_min, b_max)
     end
     return
 end
 
-@parallel_indices (ix, iy) function compute_b_explicit_kernel!(b, mask, mdot, beta, abs_ub, A_visc, N, rho_i, n_minus_1, dt, b_min)
+@parallel_indices (ix, iy) function compute_b_explicit_kernel!(b, mask, mdot, beta, abs_ub, A_visc, N, rho_i, n_minus_1, dt, b_min, b_max)
     if ix <= size(b, 1) && iy <= size(b, 2) && mask[ix, iy] == GROUNDED
-        b[ix, iy] = max(b_min,
+        b[ix, iy] = clamp(
             b[ix, iy] + dt * (mdot[ix, iy] / rho_i + beta[ix, iy] * abs_ub[ix, iy] -
-                A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy] * b[ix, iy]))
+                A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy] * b[ix, iy]),
+            b_min, b_max)
     end
     return
 end
