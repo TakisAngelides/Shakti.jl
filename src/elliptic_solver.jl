@@ -154,14 +154,13 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
 
         if iter % ps.check_every == 0 || iter == ps.iters
             # The convergence check uses the maximum difference between h and h_prev normalized by the maximum value of h to compare to the tolerance and stop the Picard loop if reached
-            # Both maximum(abs, delta_h) and norm(h, Inf) (== maximum(abs, h)) computed in one fused reduction pass instead of two separate ones -- halves the GPU->CPU syncs per check.
-            # note: mapreduce(f, op, A, B), zips A and B elementwise instead of requiring one array
-            delta_h_max, h_max = mapreduce(
-                (dh, hh) -> (abs(dh), abs(hh)), # the map function
-                (a, b) -> (max(a[1], b[1]), max(a[2], b[2])), # the reduction operation, a and b are each a tuple produced by the map step, we are comparing two dh values together a[1], b[1] and two h values together a[2], b[2] to get the max from each one
-                ps.delta_h, s.h; # two arrays to zip and do the map reduction on
-                init = (zero(eltype(s.h)), zero(eltype(s.h))) # start the accumulator for both slots
-            )
+            # Two separate single-array mapreduce calls, NOT one fused two-array mapreduce(f, op, A, B) as this used to be: mapreduce over a SINGLE array is Julia's genuinely non-allocating
+            # streaming reduction, but the two-array form silently falls back to map+collect(zip(...)) internally, materializing a full temporary array of (delta_h, h) tuples every single
+            # call -- confirmed via Profile.Allocs to allocate ~1.3MB/call at a ~200x400 grid, pure waste since check_every=1's own comment already establishes there's no GPU sync to
+            # amortize on the Threads backend. NOT the cause of a separate, much larger long-run memory leak also found on this workload (traced instead to a Julia SparseArrays/CHOLMOD
+            # ldiv! bug, JuliaSparse/SparseArrays.jl#726, unrelated to this call) -- this fix reduces allocation/GC pressure, nothing more.
+            delta_h_max = mapreduce(abs, max, ps.delta_h; init = zero(eltype(s.h)))
+            h_max = mapreduce(abs, max, s.h; init = zero(eltype(s.h)))
             if delta_h_max / (h_max + eps(eltype(s.h))) < ps.tol
                 ps.converged = true
                 ps.last_iter = iter
