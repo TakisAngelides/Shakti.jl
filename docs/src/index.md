@@ -23,7 +23,7 @@ example.
 
 ## Examples
 
-Five complete, runnable examples:
+Five complete, runnable examples, plus one static real-data writeup:
 
 - [Seasonal melt input](@ref SeasonalMeltInput) -- a synthetic slab reproducing (a small, fast
   version of) the original SHAKTI paper's seasonal-cycle experiment.
@@ -38,6 +38,9 @@ Five complete, runnable examples:
 - [Helheim Glacier](@ref Helheim) -- real data: rasterizing an unstructured ISSM mesh onto a
   regular grid and solving for the winter subglacial hydrology of a real Greenland outlet
   glacier.
+- [Drang Drung Glacier](@ref DrangDrung) -- the same real-data pipeline applied to a small
+  Himalayan alpine glacier; a static writeup with a figure from a real run rather than a
+  live example (the finest-resolution run takes too long for a doc build).
 
 ## Package structure
 
