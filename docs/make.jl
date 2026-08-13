@@ -18,6 +18,7 @@ example_pages = [
     "examples/ParabolicScheme.md",
     "examples/AllOptions.md",
     "examples/Helheim.md",
+    "examples/DrangDrung.md",
 ]
 
 PAGES = [

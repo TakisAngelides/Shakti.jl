@@ -25,3 +25,5 @@ Thumbs.db
 
 # Literate.jl output: regenerated from docs/src/examples/*.jl by docs/make.jl on every build.
 /docs/src/examples/*.md
+# DrangDrung.md is hand-written (no live @example execution, see its own header), not Literate output.
+!/docs/src/examples/DrangDrung.md
