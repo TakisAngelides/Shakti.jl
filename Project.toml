@@ -1,6 +1,6 @@
 name = "Shakti"
 uuid = "d638fb90-b6c0-422d-b96d-ad6c4615b4d0"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["Takis Angelides"]
 
 [deps]
