@@ -131,7 +131,7 @@ factorization since the sparsity pattern never changes.
 struct CholeskyDirectSolver{FACT, SALS <: SparseAssembledLinearSystem, V <: AbstractVector} <: AbstractDirectSolver
     sals::SALS # holds sparse matrix non-zero values, rhs vector, and indices of where the non-zero values of the matrix are
     fact::FACT # going to hold the decomposition factorization of cholesky
-    h_vec::V # ldiv!'s preallocated output buffer (vectorized hydraulic head)
+    h_vec::V # buffer the `\`-solve result is copied into (vectorized hydraulic head) before reshaping into s.h
 end
 
 """
@@ -704,7 +704,7 @@ $(TYPEDSIGNATURES)
 
 Solves the linearized elliptic equation for `h`, storing the result in `s.h` -- the
 [`CholeskyDirectSolver`](@ref) method: rebuilds the system ([`update_SALS!`](@ref)),
-refactorizes in place, and solves via `ldiv!`.
+refactorizes in place, and solves via `\\` (see the module note on why not `ldiv!`).
 """
 function solve_elliptic_linear_system!(ls::CholeskyDirectSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme)
 
@@ -712,7 +712,13 @@ function solve_elliptic_linear_system!(ls::CholeskyDirectSolver, s::State, g::Gr
 
     cholesky!(ls.fact, Symmetric(ls.sals.M)) # refactorizes in-place, reusing ls.fact's symbolic factorization since the sparsity pattern never changes across Picard iterations/timesteps
 
-    ldiv!(ls.h_vec, ls.fact, ls.sals.rhs) # solve for the new h based on the new Cholesky factorization of the sparse M matrix we have computed above
+    # NOT ldiv!(ls.h_vec, ls.fact, ls.sals.rhs): CHOLMOD's in-place ldiv! leaks native (non-GC-tracked)
+    # memory on every call, regardless of whether the output buffer is reused or fresh -- confirmed
+    # directly (JuliaSparse/SparseArrays.jl#726, unfixed as of Julia 1.12.7: RSS climbs ~56KB/call,
+    # unrecoverable via GC.gc(), identical rate whether ls.h_vec is reused or a fresh vector is
+    # passed each time). `\` avoids the leaky path entirely (confirmed flat RSS over 20k calls), at
+    # the cost of one small ordinary (GC'd) Vector allocation per solve instead of an unbounded leak.
+    ls.h_vec .= ls.fact \ ls.sals.rhs
 
     s.h .= reshape(ls.h_vec, g.nx, g.ny) # update h
 
@@ -723,8 +729,9 @@ $(TYPEDSIGNATURES)
 
 Solves the backward-Euler parabolic equation for `h` (`p.e_v != 0`), storing the result in `s.h`
 -- the [`CholeskyDirectSolver`](@ref) method: rebuilds the system
-([`update_SALS_parabolic!`](@ref)), refactorizes in place, and solves via `ldiv!`. Called once per
-real timestep (no Picard loop), see [`parabolic_solver!`](@ref).
+([`update_SALS_parabolic!`](@ref)), refactorizes in place, and solves via `\\` (see
+[`solve_elliptic_linear_system!`](@ref)'s note on why not `ldiv!`). Called once per real timestep
+(no Picard loop), see [`parabolic_solver!`](@ref).
 """
 function solve_parabolic_linear_system!(ls::CholeskyDirectSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, dt)
 
@@ -732,7 +739,7 @@ function solve_parabolic_linear_system!(ls::CholeskyDirectSolver, s::State, g::G
 
     cholesky!(ls.fact, Symmetric(ls.sals.M))
 
-    ldiv!(ls.h_vec, ls.fact, ls.sals.rhs)
+    ls.h_vec .= ls.fact \ ls.sals.rhs
 
     s.h .= reshape(ls.h_vec, g.nx, g.ny)
 
