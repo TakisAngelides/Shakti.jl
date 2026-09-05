@@ -66,6 +66,7 @@ include("model_parameters.jl")
 include("grid.jl")
 include("state.jl")
 include("mask.jl")
+include("cell_n_clamping.jl") # must precede elliptic_solver.jl/parabolic_solver.jl/pressure.jl, which reference AbstractCellNClamping in their own signatures
 include("melt_input.jl")
 include("k_face_scheme.jl")
 include("preconditioner.jl")
@@ -76,6 +77,7 @@ include("melt_rate.jl")
 include("elliptic_solver.jl")
 include("parabolic_solver.jl")
 include("gap_height.jl")
+include("cell_gap_clamping.jl")
 include("simulation.jl")
 include("static_fields.jl")
 include("pressure.jl")
@@ -151,6 +153,8 @@ export AbstractOpenBySlidingScheme, WithOpenBySliding, NoOpenBySliding
 # simulation.jl
 export AbstractHeadScheme, ParabolicHeadScheme, EllipticHeadScheme
 export AbstractGapScheme, ExplicitGapScheme, ImplicitGapScheme
+export AbstractCellGapClamping, NoCellGapClamping, CellGapClamping, apply_cell_gap_clamping!
+export AbstractCellNClamping, NoCellNClamping, CellNClamping, apply_cell_n_clamping!
 export Simulation
 
 # static_fields.jl

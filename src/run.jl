@@ -109,7 +109,7 @@ Solves for the new hydraulic head under [`EllipticHeadScheme`](@ref): runs the P
 solve (`sim.mi`'s melt input for the current time was already refreshed by [`step!`](@ref)).
 """
 function step_h!(hs::EllipticHeadScheme, sim::Simulation)
-    elliptic_solver!(hs.ps, sim.state, sim.grid, sim.p, sim.shs, sim.kfs, sim.sl)
+    elliptic_solver!(hs.ps, sim.state, sim.grid, sim.p, sim.shs, sim.kfs, sim.sl; cnc = sim.cnc)
 end
 
 """
@@ -119,7 +119,7 @@ Solves for the new hydraulic head under [`ParabolicHeadScheme`](@ref): a single 
 linear solve ([`parabolic_solver!`](@ref)), no Picard loop.
 """
 function step_h!(hs::ParabolicHeadScheme, sim::Simulation)
-    parabolic_solver!(hs.ls, sim.state, sim.grid, sim.p, sim.shs, sim.kfs, sim.sl, sim.dt)
+    parabolic_solver!(hs.ls, sim.state, sim.grid, sim.p, sim.shs, sim.kfs, sim.sl, sim.dt; cnc = sim.cnc)
 end
 
 """
@@ -171,6 +171,7 @@ function step_b!(sim::Simulation)
     s, p = sim.state, sim.p
 
     compute_b!(sim)          # updates b based on the new state variables (GROUNDED cells only)
+    apply_cell_gap_clamping!(s, sim.cgc) # optional per-cell b_min/b_max override on top of p's global clamp -- no-op under the default NoCellGapClamping()
 
     compute_beta!(s, p, sim.oss) # opening-by-sliding parameter depends on the new b
     compute_b_x!(s)          # water depth on x faces

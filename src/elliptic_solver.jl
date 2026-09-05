@@ -124,8 +124,8 @@ transmissivity on a grid cell face given the two cell center values, with choice
 The `sl` sliding law determines which sliding law to use to calculate the basal shear stress tau_b. The choices can be
 regularized Coulomb law, linear law, or prescribed by the user.
 """
-function elliptic_solver!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, shs::AbstractSensibleHeatScheme, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw)
-    Picard_loop!(ps, state, grid, p, shs, kfs, sl)
+function elliptic_solver!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, shs::AbstractSensibleHeatScheme, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping())
+    Picard_loop!(ps, state, grid, p, shs, kfs, sl; cnc)
 end
 
 """
@@ -135,7 +135,7 @@ Repeatedly calls [`Picard_iteration!`](@ref) (up to `ps.iters` times), checking 
 `ps.check_every` iterations via a relative max-norm on the head update
 (`max|delta_h| / (max|h| + eps) < ps.tol`), and sets `ps.converged`/`ps.last_iter` accordingly.
 """
-function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, shs::AbstractSensibleHeatScheme, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw)
+function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, shs::AbstractSensibleHeatScheme, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping())
 
     s = state
 
@@ -148,7 +148,7 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
         # Store previous head for convergence check
         @. ps.h_prev = s.h
 
-        Picard_iteration!(ps.ls, ps.hr, state, grid, p, shs, kfs, sl, ps.h_prev) # run one linear solve to update h and the relevant fields
+        Picard_iteration!(ps.ls, ps.hr, state, grid, p, shs, kfs, sl, ps.h_prev; cnc) # run one linear solve to update h and the relevant fields
 
         @. ps.delta_h = s.h - ps.h_prev
 
@@ -184,7 +184,7 @@ optionally relaxes it ([`relax_h!`](@ref)), then refreshes every field that depe
 water depth `b` is left untouched within one Picard loop until we step out of it and update `b` following
 Eq. 2 of https://gmd.copernicus.org/articles/11/2955/2018/.
 """
-function Picard_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation, s::State, g::Grid, p::ModelParameters, shs::AbstractSensibleHeatScheme, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, h_prev)
+function Picard_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation, s::State, g::Grid, p::ModelParameters, shs::AbstractSensibleHeatScheme, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, h_prev; cnc::AbstractCellNClamping = NoCellNClamping())
 
     solve_elliptic_linear_system!(ls, s, g, p, kfs) # update the h field
     relax_h!(hr, s, h_prev) # update the h field again according to the relaxation parameter, damp the raw Picard update before anything downstream of h is recomputed, so the next iteration's coefficients are consistent with the relaxed h
@@ -194,7 +194,7 @@ function Picard_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation,
 
     compute_pw!(s, p) # update water pressure
     compute_dpwdxy!(s, g) # update the water pressure gradient in both x and y in one kernel, feeds compute_sensible!'s sensible-heat term (via compute_mdot! below)
-    compute_N!(s) # update effective pressure (ice overburden pressure - pw)
+    compute_N!(s, p, cnc) # update effective pressure (ice overburden pressure - pw)
 
     compute_q_and_Re_xy!(s, p) # update water flux qx, qy and Reynold's number on faces so Re_x, Re_y all in one kernel to reduce kernel - the Reynold's number is calculated based on the solution of the quadratic equation that defines it (Eq. 5 and 7 combined from https://gmd.copernicus.org/articles/11/2955/2018/)
     compute_Re!(s) # update the Reynold's number based on the Re_x and Re_y doing an average over the four faces of a grid cell

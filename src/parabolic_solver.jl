@@ -13,7 +13,7 @@ Picard loop, then refreshes every field that depends on the new `h` (`pw`, `N`, 
 same reasoning as [`elliptic_solver!`](@ref): this file is included before `simulation.jl`, so
 `ParabolicHeadScheme{LS}` can use a proper `LS <: AbstractLinearSolver` bound.
 """
-function parabolic_solver!(ls::AbstractLinearSolver, state::State, grid::Grid, p::ModelParameters, shs::AbstractSensibleHeatScheme, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, dt)
+function parabolic_solver!(ls::AbstractLinearSolver, state::State, grid::Grid, p::ModelParameters, shs::AbstractSensibleHeatScheme, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, dt; cnc::AbstractCellNClamping = NoCellNClamping())
 
     s, g = state, grid
 
@@ -24,7 +24,7 @@ function parabolic_solver!(ls::AbstractLinearSolver, state::State, grid::Grid, p
 
     compute_pw!(s, p)
     compute_dpwdxy!(s, g)
-    compute_N!(s)
+    compute_N!(s, p, cnc)
 
     compute_q_and_Re_xy!(s, p)
     compute_Re!(s)

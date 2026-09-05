@@ -22,6 +22,8 @@ struct ModelParameters{F <: AbstractFloat, NE1, NE2, NE3}
     p_atm::F   # atmospheric pressure, used as the Dirichlet reference for LAND/OCEAN BCs
     b_min::F   # minimum water thickness
     b_max::F   # maximum water thickness (Inf by default, i.e. no cap -- see docstring below)
+    N_min::F   # minimum effective pressure (-Inf by default, i.e. no floor -- see docstring below)
+    N_max::F   # maximum effective pressure (Inf by default, i.e. no cap -- see docstring below)
     e_v::F     # englacial storage void ratio
     n_exp::NE1         # canonical_exponent(n), see the fast-exponentiation note below
     n_minus_1_exp::NE2 # canonical_exponent(n - 1)
@@ -51,6 +53,16 @@ to the affected cell(s)). Left off by default rather than silently changed for e
 example/test, since ISSM's own SHAKTI default (`b_max = 1.0` m) is a modeling choice, not a
 numerical-stability constant like `b_min` -- opt in explicitly (`ModelParameters(b_max = 1.0)`)
 where the risk applies.
+
+`N_min`/`N_max` similarly default to `-Inf`/`Inf` (no floor/cap) -- `N < 0` (water pressure
+exceeding ice overburden) is physically invalid under grounded ice, but is a real, observed outcome
+of the elliptic solve at cells sitting on a steep local bed/thickness gradient the grid can't
+resolve (confirmed on Thwaites: cells far from the grounding line, not just near it), where it
+destabilizes both the sliding law's `taub` and the gap-height closure term (`N`'s sign flips the
+creep-closure denominator, `gap_height.jl`'s `compute_b_implicit_kernel!`, from closing to opening).
+Left off by default for the same reason as `b_max` -- a modeling choice (does clamping `N` mask a
+real resolution problem, or is it a reasonable numerical safeguard, is worth deciding per
+application) -- opt in explicitly (e.g. `ModelParameters(N_min = 0.0)`) where the risk applies.
 """
 function ModelParameters(;
     F::Type{<:AbstractFloat} = floattype,
@@ -69,6 +81,8 @@ function ModelParameters(;
     p_atm = 0.0,
     b_min = 0.0,
     b_max = Inf,
+    N_min = -Inf,
+    N_max = Inf,
     e_v = 0.0)
 
     n_F = F(n)
@@ -77,7 +91,7 @@ function ModelParameters(;
     inv_n_exp = canonical_exponent(1 / n_F)
 
     return ModelParameters(
-        F(rho_w), F(rho_sw), F(rho_i), F(g), F(nu), n_F, F(omega), F(L), F(br), F(lr), F(ct), F(cw), F(p_atm), F(b_min), F(b_max), F(e_v),
+        F(rho_w), F(rho_sw), F(rho_i), F(g), F(nu), n_F, F(omega), F(L), F(br), F(lr), F(ct), F(cw), F(p_atm), F(b_min), F(b_max), F(N_min), F(N_max), F(e_v),
         n_exp, n_minus_1_exp, inv_n_exp
     )
 

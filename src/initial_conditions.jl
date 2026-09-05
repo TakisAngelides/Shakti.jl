@@ -91,7 +91,7 @@ function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, sl::Abst
                       p.p_atm, s.pw))
     compute_dpwdx!(s, g) # water pressure gradient in x and y, feeds compute_sensible!'s sensible-heat term (via compute_mdot! below)
     compute_dpwdy!(s, g)
-    compute_N!(s) # Effective pressure
+    compute_N!(s, p) # Effective pressure
 
     compute_h!(s, p) # Hydraulic head h = pw/(rho_w * g) + zb
 
