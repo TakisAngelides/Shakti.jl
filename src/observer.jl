@@ -290,6 +290,7 @@ function write2file!(fr::NetCDFFileWriter, observer::IOObserver, state::State, i
         field = Array(get_observable(state, name))
         NetCDF.putvar(nc, name, field; start = [1, 1, idx], count = [size(field, 1), size(field, 2), 1])
     end
+    NetCDF.sync(nc) # putvar only buffers in the NetCDF C library; without an explicit sync, a run's output stays invisible to any other process reading the same path until the writer closes the file (i.e. until the whole run finishes) -- defeating the point of writing to disk at every tracked step for mid-run inspection
     return nothing
 end
 
