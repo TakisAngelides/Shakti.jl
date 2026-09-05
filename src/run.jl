@@ -49,9 +49,24 @@ function run!(sim::Simulation; checkpoint_every::Union{Nothing, Int} = nothing, 
         if sim.verbose
             converged, last_iter = picard_status(sim.hs)
             println("$t / $(sim.tsteps) completed in $(round(step_time; digits = 4))s. Picard converged: $converged in $last_iter iterations")
+            s = sim.state
+            Narr = Array(s.N)
             if converged === false
-                s = sim.state
-                println("  diagnostics: N=$(extrema(Array(s.N))) Re=$(extrema(Array(s.Re))) b=$(extrema(Array(s.b))) h=$(extrema(Array(s.h)))")
+                println("  diagnostics: N=$(extrema(Narr)) Re=$(extrema(Array(s.Re))) b=$(extrema(Array(s.b))) h=$(extrema(Array(s.h)))")
+            end
+            # N < 0 (water pressure exceeding ice overburden) is physically invalid under grounded
+            # ice but isn't caught by Picard's own convergence check, so it can persist silently
+            # even in a "converged" step -- report where/why it happens (not just that it does),
+            # since it's the leading indicator of near-flotation cells destabilizing the solve.
+            nmin, nmin_idx = findmin(Narr)
+            if nmin < 0
+                # Array(field)[idx] would copy the WHOLE domain just to read one scalar (this branch
+                # fires on most steps once any cell goes sub-flotation, so that copy isn't free);
+                # Array(field[ix:ix, iy:iy])[1] copies a single-element slice instead -- still
+                # GPU-safe (no bare scalar getindex on a device array), just without the waste.
+                ix, iy = Tuple(nmin_idx)
+                at(field) = Array(field[ix:ix, iy:iy])[1]
+                println("  N<0: min=$(round(nmin, sigdigits = 4)) Pa at $(Tuple(nmin_idx)) -- zb=$(round(at(s.zb), sigdigits = 4)) H=$(round(at(s.H), sigdigits = 4)) po=$(round(at(s.po), sigdigits = 4)) pw=$(round(at(s.pw), sigdigits = 4))")
             end
             flush(stdout) # println alone doesn't reach the log file promptly under sbatch: stdout is fully block-buffered (not line-buffered) once it's redirected to a file rather than a terminal
         end
