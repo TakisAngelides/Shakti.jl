@@ -74,7 +74,7 @@ function ModelParameters(;
     n = 3.0,
     omega = 1e-4, # Table 2 (Sommers et al. 2018) states 0.001, but that puts the Re range reached during channelization (~1e3-1e4) right in the flux law's steepest, hardest-to-converge transitional band (omega*Re ~ O(1)-O(10)); 1e-4 pushes the same Re range into the flatter, near-linear part of the curve where Picard actually converges
     L = 334e3,
-    br = 0.05,
+    br = 0.1, # low/zero br (weak bed-bump opening) starves the Picard iteration and can fail to converge (observed on Thwaites: br=0 hit the 500-iteration cap every step); PicardSolver(...; alpha=0.5) (UnderHeadRelaxation) restored fast convergence there while leaving the converged N field essentially unchanged from the (non-converged) unrelaxed run -- prefer it over floor/cap hacks (N_min, b_min) which change the answer by clamping the very cells that were unstable
     lr = 2.0,
     ct = 7.5e-8,
     cw = 4.22e3,
