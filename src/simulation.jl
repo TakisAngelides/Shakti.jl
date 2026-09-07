@@ -80,7 +80,7 @@ struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHea
     verbose::Bool
     total_time::Base.RefValue{F} # elapsed simulation time in seconds; a Ref so run!/step_h! can update it in place despite Simulation itself being immutable (same reason PicardSolver -- nested under hs -- is a mutable struct)
     cgc::CGC # per-cell gap-clamping override, see cell_gap_clamping.jl; NoCellGapClamping() (a no-op) by default
-    cnc::CNC # per-cell N-clamping override, see cell_n_clamping.jl; NoCellNClamping() (a no-op) by default
+    cnc::CNC # per-cell N-clamping override, see cell_N__clamping.jl; NoCellNClamping() (a no-op) by default
 end
 
 """
@@ -103,14 +103,14 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
 - `cell_gap_clamping`: [`NoCellGapClamping`](@ref) (default, no-op) or a [`CellGapClamping`](@ref)
   overriding specific cells' `b_min`/`b_max` on top of `p`'s global values (see
   `cell_gap_clamping.jl`).
-- `cell_n_clamping`: [`NoCellNClamping`](@ref) (default, no-op) or a [`CellNClamping`](@ref)
+- `cell_N__clamping`: [`NoCellNClamping`](@ref) (default, no-op) or a [`CellNClamping`](@ref)
   overriding specific cells' `N_min`/`N_max` on top of `p`'s global values (see
-  `cell_n_clamping.jl`).
+  `cell_N__clamping.jl`).
 - Observer: [`NoObserver`](@ref) if `tracked_obs` is empty; otherwise `which_observer` must be
   `"IO"` (writes to `path` via `which_file_writer`, one of `"NetCDF"`/`"HDF5"`/`"JLD2"`/`"CSV"`,
   at `tracked_times`) or `"Live"` (keeps `tracked_times` in memory instead of writing to disk).
 """
-function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::Vector{String}, mi::AbstractMeltInput, sl::AbstractSlidingLaw; ps = nothing, ls = nothing, which_observer = nothing, which_file_writer = nothing, tracked_times = nothing, path = nothing, k_face_choice = "arithmetic", verbose = false, cell_gap_clamping::AbstractCellGapClamping = NoCellGapClamping(), cell_n_clamping::AbstractCellNClamping = NoCellNClamping())
+function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::Vector{String}, mi::AbstractMeltInput, sl::AbstractSlidingLaw; ps = nothing, ls = nothing, which_observer = nothing, which_file_writer = nothing, tracked_times = nothing, path = nothing, k_face_choice = "arithmetic", verbose = false, cell_gap_clamping::AbstractCellGapClamping = NoCellGapClamping(), cell_N__clamping::AbstractCellNClamping = NoCellNClamping())
 
     # Check that all tracked observables are valid State fields
     for name in tracked_obs
@@ -187,6 +187,6 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
         error("Unknown which_observer: \"$which_observer\" (expected \"IO\" or \"Live\")")
     end
 
-    return Simulation(tsteps, dt, p, hs, gs, shs, oss, observer, grid, state, mi, kfs, sl, verbose, Ref(zero(dt)), cell_gap_clamping, cell_n_clamping)
+    return Simulation(tsteps, dt, p, hs, gs, shs, oss, observer, grid, state, mi, kfs, sl, verbose, Ref(zero(dt)), cell_gap_clamping, cell_N__clamping)
 
 end

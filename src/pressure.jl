@@ -31,10 +31,10 @@ work out to from their Dirichlet/frozen boundary conditions (e.g. `OCEAN`'s hydr
 against `po = 0`), which is a real number but not effective pressure. `N_min`/`N_max` default to
 `-Inf`/`Inf` (no-op clamp, see [`ModelParameters`](@ref)'s docstring). `cnc` (default
 [`NoCellNClamping`](@ref)) additionally applies a per-cell override on top, see
-[`apply_cell_n_clamping!`](@ref).
+[`apply_cell_N__clamping!`](@ref).
 """
 function compute_N!(s::State, p::ModelParameters, cnc::AbstractCellNClamping = NoCellNClamping())
     @parallel compute_N_kernel!(s.N, s.po, s.pw, s.mask, p.N_min, p.N_max)
-    apply_cell_n_clamping!(s, cnc)
+    apply_cell_N__clamping!(s, cnc)
     return s
 end

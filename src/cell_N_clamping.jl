@@ -4,7 +4,7 @@ $(TYPEDSIGNATURES)
 Optional per-cell override of `ModelParameters`' global `N_min`/`N_max` effective-pressure clamp --
 multiple dispatch on the concrete subtype picks [`NoCellNClamping`](@ref) (no-op, default) or
 [`CellNClamping`](@ref) (clamps specific `(i, j)` cells to their own `(nmin, nmax)`, applied via
-[`apply_cell_n_clamping!`](@ref) every time [`compute_N!`](@ref) runs).
+[`apply_cell_N_clamping!`](@ref) every time [`compute_N!`](@ref) runs).
 
 Mirrors [`AbstractCellGapClamping`](@ref)'s design, but N (unlike b) is a derived quantity
 recomputed from scratch every Picard iteration (not a persisted state variable), so this has to be
@@ -20,7 +20,7 @@ abstract type AbstractCellNClamping end
 """
 $(TYPEDSIGNATURES)
 
-No per-cell override: [`apply_cell_n_clamping!`](@ref) is a no-op. [`Simulation`](@ref)'s default.
+No per-cell override: [`apply_cell_N_clamping!`](@ref) is a no-op. [`Simulation`](@ref)'s default.
 """
 struct NoCellNClamping <: AbstractCellNClamping end
 
@@ -42,14 +42,14 @@ $(TYPEDSIGNATURES)
 Applies `cnc`'s per-cell overrides to `s.N`, called every time [`compute_N!`](@ref) runs -- a no-op
 under [`NoCellNClamping`](@ref).
 """
-apply_cell_n_clamping!(s::State, ::NoCellNClamping) = s
+apply_cell_N_clamping!(s::State, ::NoCellNClamping) = s
 
 # Host round-trip rather than scalar getindex!/setindex! directly on s.N, same reasoning as
 # apply_cell_gap_clamping! (cell_gap_clamping.jl): GPUArrays.jl disallows element-by-element
 # indexing on GPU-resident arrays by default, and `bounds` is expected to be a short, user-curated
 # list of known-problem cells, not a per-cell field -- called every Picard iteration, but still
 # negligible against a whole elliptic solve.
-function apply_cell_n_clamping!(s::State, cnc::CellNClamping)
+function apply_cell_N_clamping!(s::State, cnc::CellNClamping)
     N = Array(s.N)
     for ((i, j), (nmin, nmax)) in cnc.bounds
         N[i, j] = clamp(N[i, j], nmin, nmax)
