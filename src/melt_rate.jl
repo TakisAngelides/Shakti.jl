@@ -103,7 +103,7 @@ compute_sensible!(s::State) = (@parallel compute_sensible_kernel!(s.sensible, s.
 # since each is itself a separate kernel launch; still writes shear/potential/
 # sensible (not just mdot) so those fields aren't left stale for anything that
 # reads them after a Picard iteration.
-@parallel_indices (ix, iy) function compute_mdot_kernel!(mdot, shear, potential, sensible, G, ub_x, taub_x, ub_y, taub_y, q_x, dhdx, q_y, dhdy, dpwdx, dpwdy, Linv, rho_w, ggrav, ct, cw)
+@parallel_indices (ix, iy) function compute_mdot_kernel!(mdot, shear, potential, sensible, G, q_T, ub_x, taub_x, ub_y, taub_y, q_x, dhdx, q_y, dhdy, dpwdx, dpwdy, Linv, rho_w, ggrav, ct, cw)
     if ix <= size(mdot, 1) && iy <= size(mdot, 2)
         sh   = abs((ub_x[ix+1, iy]*taub_x[ix+1, iy] + ub_x[ix, iy]*taub_x[ix, iy]) / 2 +
                    (ub_y[ix, iy+1]*taub_y[ix, iy+1] + ub_y[ix, iy]*taub_y[ix, iy]) / 2)
@@ -116,12 +116,12 @@ compute_sensible!(s::State) = (@parallel compute_sensible_kernel!(s.sensible, s.
         potential[ix, iy] = pot
         sensible[ix, iy]  = sens
 
-        mdot[ix, iy] = Linv * (G[ix, iy] + sh + rho_w*ggrav*pot + ct*cw*rho_w*sens)
+        mdot[ix, iy] = Linv * (G[ix, iy] - q_T[ix, iy] + sh + rho_w*ggrav*pot + ct*cw*rho_w*sens)
     end
     return
 end
 
-@parallel_indices (ix, iy) function compute_mdot_kernel!(mdot, shear, potential, G, ub_x, taub_x, ub_y, taub_y, q_x, dhdx, q_y, dhdy, Linv, rho_w, ggrav)
+@parallel_indices (ix, iy) function compute_mdot_kernel!(mdot, shear, potential, G, q_T, ub_x, taub_x, ub_y, taub_y, q_x, dhdx, q_y, dhdy, Linv, rho_w, ggrav)
     if ix <= size(mdot, 1) && iy <= size(mdot, 2)
         sh  = abs((ub_x[ix+1, iy]*taub_x[ix+1, iy] + ub_x[ix, iy]*taub_x[ix, iy]) / 2 +
                   (ub_y[ix, iy+1]*taub_y[ix, iy+1] + ub_y[ix, iy]*taub_y[ix, iy]) / 2)
@@ -131,7 +131,7 @@ end
         shear[ix, iy]     = sh
         potential[ix, iy] = pot
 
-        mdot[ix, iy] = Linv * (G[ix, iy] + sh + rho_w*ggrav*pot)
+        mdot[ix, iy] = Linv * (G[ix, iy] - q_T[ix, iy] + sh + rho_w*ggrav*pot)
     end
     return
 end
@@ -139,11 +139,12 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Updates `s.mdot` (subglacial melt rate) = geothermal flux + frictional (sliding) heating +
-potential energy released by water flowing downgradient + sensible heat exchanged as water moves
-to regions of different pressure melting point, all divided by the latent heat of fusion `p.L`.
-Also refreshes `s.shear`/`s.potential`/`s.sensible` as a side effect (needed by
-[`compute_shear!`](@ref) etc. for standalone/diagnostic use), computed via its own fused kernel
+Updates `s.mdot` (subglacial melt rate) = geothermal flux `s.G` minus conductive heat flux escaping
+into cold ice above the bed `s.q_T` (zero by default -- see [`State`](@ref)), plus frictional
+(sliding) heating, plus potential energy released by water flowing downgradient, plus sensible heat
+exchanged as water moves to regions of different pressure melting point, all divided by the latent
+heat of fusion `p.L`. Also refreshes `s.shear`/`s.potential`/`s.sensible` as a side effect (needed
+by [`compute_shear!`](@ref) etc. for standalone/diagnostic use), computed via its own fused kernel
 rather than by calling those three functions (one launch instead of four).
 
 Dispatches on `sim.shs` (decided once in `Simulation`'s constructor from `p.ct`/`p.cw`, see
@@ -152,7 +153,7 @@ Dispatches on `sim.shs` (decided once in `Simulation`'s constructor from `p.ct`/
 zero `ct*cw` prefactor.
 """
 function compute_mdot!(s::State, p::ModelParameters, ::WithSensibleHeat)
-    @parallel compute_mdot_kernel!(s.mdot, s.shear, s.potential, s.sensible, s.G, s.ub_x, s.taub_x, s.ub_y, s.taub_y, s.q_x, s.dhdx, s.q_y, s.dhdy, s.dpwdx, s.dpwdy, 1/p.L, p.rho_w, p.g, p.ct, p.cw)
+    @parallel compute_mdot_kernel!(s.mdot, s.shear, s.potential, s.sensible, s.G, s.q_T, s.ub_x, s.taub_x, s.ub_y, s.taub_y, s.q_x, s.dhdx, s.q_y, s.dhdy, s.dpwdx, s.dpwdy, 1/p.L, p.rho_w, p.g, p.ct, p.cw)
     return s
 end
 
@@ -163,6 +164,6 @@ $(TYPEDSIGNATURES)
 above.
 """
 function compute_mdot!(s::State, p::ModelParameters, ::NoSensibleHeat)
-    @parallel compute_mdot_kernel!(s.mdot, s.shear, s.potential, s.G, s.ub_x, s.taub_x, s.ub_y, s.taub_y, s.q_x, s.dhdx, s.q_y, s.dhdy, 1/p.L, p.rho_w, p.g)
+    @parallel compute_mdot_kernel!(s.mdot, s.shear, s.potential, s.G, s.q_T, s.ub_x, s.taub_x, s.ub_y, s.taub_y, s.q_x, s.dhdx, s.q_y, s.dhdy, 1/p.L, p.rho_w, p.g)
     return s
 end

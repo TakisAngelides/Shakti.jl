@@ -26,6 +26,9 @@ struct State{A <: AbstractArray}
     Re::A         # Reynolds number
     K::A          # hydraulic conductivity
     G::A          # geothermal heat flux
+    q_T::A        # conductive heat flux escaping into cold ice above the bed (e.g. Yelmo's
+                  # Q_ice_b), subtracted from mdot's numerator in compute_mdot!. Zero by default
+                  # (no effect on mdot), so it is opt-in per run/dataset.
     zb::A         # bedrock elevation
     zs::A         # ice surface elevation
     H::A          # ice thickness
@@ -99,6 +102,7 @@ function State(g::Grid)
     Re        = initialize_center_field(g)
     K         = initialize_center_field(g)
     G         = initialize_center_field(g)
+    q_T       = initialize_center_field(g)
     zb        = initialize_center_field(g)
     zs        = initialize_center_field(g)
     H         = initialize_center_field(g)
@@ -129,7 +133,7 @@ function State(g::Grid)
     valid_y = @fill(1.0, g.nx, g.ny+1) # float 1.0 = valid; recomputed in compute_face_masks!
 
     return State(
-        h, pw, po, b, beta, abs_ub, mdot, shear, potential, sensible, Re, K, G, zb, zs, H, ieb, lambda, A_visc, N, mask,
+        h, pw, po, b, beta, abs_ub, mdot, shear, potential, sensible, Re, K, G, q_T, zb, zs, H, ieb, lambda, A_visc, N, mask,
         dhdx, q_x, Re_x, b_x, ub_x, taub_x, dpwdx, valid_x,
         dhdy, q_y, Re_y, b_y, ub_y, taub_y, dpwdy, valid_y,
     )
