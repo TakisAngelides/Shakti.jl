@@ -21,7 +21,7 @@ subtype ([`WithOpenBySliding`](@ref)/[`NoOpenBySliding`](@ref)), decided ONCE in
 constructor (from `p.br`, see `simulation.jl`) rather than every call, so turning it off skips
 `compute_beta_kernel!`'s kernel launch entirely instead of launching it to compute a term that's
 mathematically always zero when `p.br == 0` -- same "dispatch on a type decided once outside the
-hot loop" idiom as [`AbstractSensibleHeatScheme`](@ref) (`melt_rate.jl`).
+hot loop" idiom as [`MeltTerms`](@ref) (`melt_rate.jl`).
 """
 abstract type AbstractOpenBySlidingScheme end
 

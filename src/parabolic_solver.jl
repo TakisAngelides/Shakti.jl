@@ -9,11 +9,11 @@ Picard loop, then refreshes every field that depends on the new `h` (`pw`, `N`, 
 
 # Notes
 
-`state`/`grid`/`p`/`shs` are taken as separate arguments rather than a bundled `sim::Simulation`,
+`state`/`grid`/`p`/`mt` are taken as separate arguments rather than a bundled `sim::Simulation`,
 same reasoning as [`elliptic_solver!`](@ref): this file is included before `simulation.jl`, so
 `ParabolicHeadScheme{LS}` can use a proper `LS <: AbstractLinearSolver` bound.
 """
-function parabolic_solver!(ls::AbstractLinearSolver, state::State, grid::Grid, p::ModelParameters, shs::AbstractSensibleHeatScheme, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, dt; cnc::AbstractCellNClamping = NoCellNClamping())
+function parabolic_solver!(ls::AbstractLinearSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, dt; cnc::AbstractCellNClamping = NoCellNClamping())
 
     s, g = state, grid
 
@@ -31,7 +31,7 @@ function parabolic_solver!(ls::AbstractLinearSolver, state::State, grid::Grid, p
 
     compute_taub_xy!(s, p, sl)
 
-    compute_mdot!(s, p, shs)
+    compute_mdot!(s, p, mt)
 
     compute_K!(s, p)
 

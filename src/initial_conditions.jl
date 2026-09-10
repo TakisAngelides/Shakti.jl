@@ -117,10 +117,10 @@ function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, sl::Abst
     compute_taub_x!(s, p, sl)
     compute_taub_y!(s, p, sl)
 
-    # Sensible-heat scheme setup: same "off automatically if either factor in
-    # its ct*cw prefactor is zero" rule as Simulation's own constructor.
-    shs = (iszero(p.ct) || iszero(p.cw)) ? NoSensibleHeat() : WithSensibleHeat()
-    compute_mdot!(s, p, shs) # melt rate
+    # Melt-rate terms setup: same rule as Simulation's own constructor -- read directly off p's
+    # mdot_includes_* fields (see MeltTerms, melt_rate.jl).
+    mt = MeltTerms{p.mdot_includes_G, p.mdot_includes_frictional, p.mdot_includes_potential, p.mdot_includes_sensible, p.mdot_includes_qT}()
+    compute_mdot!(s, p, mt) # melt rate
     compute_K!(s, p) # transmissivity
 
 end

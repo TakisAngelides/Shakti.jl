@@ -5,7 +5,7 @@ How `taub` (basal shear stress, feeding [`compute_mdot!`](@ref)'s frictional-hea
 obtained -- multiple dispatch on the concrete subtype ([`RegularizedCoulombSlidingLaw`](@ref),
 [`RegularizedCoulombFieldSlidingLaw`](@ref), [`RegularizedCoulombV0SlidingLaw`](@ref),
 [`LinearSlidingLaw`](@ref), [`PrescribedSlidingLaw`](@ref)), decided once per `Simulation` (same
-idiom as [`AbstractSensibleHeatScheme`](@ref), `melt_rate.jl`).
+idiom as [`MeltTerms`](@ref), `melt_rate.jl`).
 
 # Notes
 

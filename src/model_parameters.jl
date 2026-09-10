@@ -25,6 +25,11 @@ struct ModelParameters{F <: AbstractFloat, NE1, NE2, NE3}
     N_min::F   # minimum effective pressure (-Inf by default, i.e. no floor -- see docstring below)
     N_max::F   # maximum effective pressure (Inf by default, i.e. no cap -- see docstring below)
     e_v::F     # englacial storage void ratio
+    mdot_includes_G::Bool           # include the geothermal-flux term in compute_mdot! (see MeltTerms, melt_rate.jl)
+    mdot_includes_frictional::Bool  # include the frictional (sliding) heating term in compute_mdot!
+    mdot_includes_potential::Bool   # include the potential-energy-dissipation term in compute_mdot!
+    mdot_includes_sensible::Bool    # include the sensible-heat-exchange term in compute_mdot! (its own ct*cw*rho_w prefactor still applies when on)
+    mdot_includes_qT::Bool          # include (subtract) the conductive-heat-into-ice term q_T in compute_mdot!
     n_exp::NE1         # canonical_exponent(n), see the fast-exponentiation note below
     n_minus_1_exp::NE2 # canonical_exponent(n - 1)
     inv_n_exp::NE3     # canonical_exponent(1 / n)
@@ -63,6 +68,18 @@ creep-closure denominator, `gap_height.jl`'s `compute_b_implicit_kernel!`, from 
 Left off by default for the same reason as `b_max` -- a modeling choice (does clamping `N` mask a
 real resolution problem, or is it a reasonable numerical safeguard, is worth deciding per
 application) -- opt in explicitly (e.g. `ModelParameters(N_min = 0.0)`) where the risk applies.
+
+`mdot_includes_G`/`mdot_includes_frictional`/`mdot_includes_potential`/`mdot_includes_sensible`/
+`mdot_includes_qT` each independently switch one term of [`compute_mdot!`](@ref) on or off --
+geothermal flux `s.G`, frictional (sliding) heating, potential-energy dissipation, the sensible-heat
+exchange term (`ct*cw*rho_w*sens`), and the conductive-heat-into-ice term `s.q_T` respectively (see
+[`MeltTerms`](@ref), `melt_rate.jl`). All default to `true`: every term is included unless a run
+explicitly opts one out (e.g. `ModelParameters(mdot_includes_sensible = false)`). Unlike `b_max`/
+`N_min` these aren't numerical safeguards, just an explicit switchboard -- a run that wants
+Sommers et al. (2023) Eq. 8 without the sensible-heat term should set
+`mdot_includes_sensible = false` directly rather than relying on `ct`/`cw` happening to be zero
+(that coupling has been removed: `ct`/`cw` are now purely the sensible term's own physical
+prefactor, not also an implicit on/off switch).
 """
 function ModelParameters(;
     F::Type{<:AbstractFloat} = floattype,
@@ -83,7 +100,12 @@ function ModelParameters(;
     b_max = Inf,
     N_min = -Inf,
     N_max = Inf,
-    e_v = 0.0)
+    e_v = 0.0,
+    mdot_includes_G = true,
+    mdot_includes_frictional = true,
+    mdot_includes_potential = true,
+    mdot_includes_sensible = true,
+    mdot_includes_qT = true)
 
     n_F = F(n)
     n_exp = canonical_exponent(n_F)
@@ -92,6 +114,7 @@ function ModelParameters(;
 
     return ModelParameters(
         F(rho_w), F(rho_sw), F(rho_i), F(g), F(nu), n_F, F(omega), F(L), F(br), F(lr), F(ct), F(cw), F(p_atm), F(b_min), F(b_max), F(N_min), F(N_max), F(e_v),
+        mdot_includes_G, mdot_includes_frictional, mdot_includes_potential, mdot_includes_sensible, mdot_includes_qT,
         n_exp, n_minus_1_exp, inv_n_exp
     )
 

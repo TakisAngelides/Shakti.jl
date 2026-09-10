@@ -59,9 +59,7 @@ compute_K_face
 ## Sliding laws and melt rate
 
 ```@docs
-AbstractSensibleHeatScheme
-WithSensibleHeat
-NoSensibleHeat
+MeltTerms
 AbstractSlidingLaw
 RegularizedCoulombSlidingLaw
 PrescribedSlidingLaw

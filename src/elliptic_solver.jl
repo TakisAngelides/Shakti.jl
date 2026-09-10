@@ -113,19 +113,19 @@ place.
 
 # Notes
 
-`state`/`grid`/`p`/`shs` are taken as separate arguments (rather than a bundled `sim::Simulation`)
+`state`/`grid`/`p`/`mt` are taken as separate arguments (rather than a bundled `sim::Simulation`)
 so this file doesn't need `Simulation` to already be defined -- it can be included, and
 `PicardSolver`'s struct fully written, before `simulation.jl`, letting `EllipticHeadScheme{PS}`
-(`simulation.jl`) use a proper `PS <: PicardSolver` bound instead of leaving `PS` unbounded. The `shs`
-which stands for sensible heat scheme chooses between including or not including the last term of Eq. 7
-in https://doi.org/10.1017/jog.2023.39; a melt rate term accounting for the changes in the pressure-melting-point 
-temperature with changes in water pressure. The `kfs` that stands for K face scheme determines how to calculate the
+(`simulation.jl`) use a proper `PS <: PicardSolver` bound instead of leaving `PS` unbounded. The `mt`
+(a [`MeltTerms`](@ref)) chooses which terms of Eq. 7 in https://doi.org/10.1017/jog.2023.39 to include
+in the melt rate -- e.g. its `Sensible` flag is the last term, accounting for changes in the
+pressure-melting-point temperature with changes in water pressure. The `kfs` that stands for K face scheme determines how to calculate the
 transmissivity on a grid cell face given the two cell center values, with choices such as arithmetic or harmonic mean.
 The `sl` sliding law determines which sliding law to use to calculate the basal shear stress tau_b. The choices can be
 regularized Coulomb law, linear law, or prescribed by the user.
 """
-function elliptic_solver!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, shs::AbstractSensibleHeatScheme, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping())
-    Picard_loop!(ps, state, grid, p, shs, kfs, sl; cnc)
+function elliptic_solver!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping())
+    Picard_loop!(ps, state, grid, p, mt, kfs, sl; cnc)
 end
 
 """
@@ -135,7 +135,7 @@ Repeatedly calls [`Picard_iteration!`](@ref) (up to `ps.iters` times), checking 
 `ps.check_every` iterations via a relative max-norm on the head update
 (`max|delta_h| / (max|h| + eps) < ps.tol`), and sets `ps.converged`/`ps.last_iter` accordingly.
 """
-function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, shs::AbstractSensibleHeatScheme, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping())
+function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping())
 
     s = state
 
@@ -148,7 +148,7 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
         # Store previous head for convergence check
         @. ps.h_prev = s.h
 
-        Picard_iteration!(ps.ls, ps.hr, state, grid, p, shs, kfs, sl, ps.h_prev; cnc) # run one linear solve to update h and the relevant fields
+        Picard_iteration!(ps.ls, ps.hr, state, grid, p, mt, kfs, sl, ps.h_prev; cnc) # run one linear solve to update h and the relevant fields
 
         @. ps.delta_h = s.h - ps.h_prev
 
@@ -184,7 +184,7 @@ optionally relaxes it ([`relax_h!`](@ref)), then refreshes every field that depe
 water depth `b` is left untouched within one Picard loop until we step out of it and update `b` following
 Eq. 2 of https://gmd.copernicus.org/articles/11/2955/2018/.
 """
-function Picard_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation, s::State, g::Grid, p::ModelParameters, shs::AbstractSensibleHeatScheme, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, h_prev; cnc::AbstractCellNClamping = NoCellNClamping())
+function Picard_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation, s::State, g::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, h_prev; cnc::AbstractCellNClamping = NoCellNClamping())
 
     solve_elliptic_linear_system!(ls, s, g, p, kfs) # update the h field
     relax_h!(hr, s, h_prev) # update the h field again according to the relaxation parameter, damp the raw Picard update before anything downstream of h is recomputed, so the next iteration's coefficients are consistent with the relaxed h
@@ -201,7 +201,7 @@ function Picard_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation,
 
     compute_taub_xy!(s, p, sl) # update the basal shear stress based on the sliding law `sl` chosen
 
-    compute_mdot!(s, p, shs) # update the melt rate based on whether we should include the sensible heat term or not which is determined by `shs`
+    compute_mdot!(s, p, mt) # update the melt rate, including/excluding each term per `mt`
 
     compute_K!(s, p) # update the transmissivity
 

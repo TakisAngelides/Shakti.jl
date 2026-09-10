@@ -68,8 +68,8 @@
 
             ls = CholeskyDirectSolver(grid)
             ps = PicardSolver(500, 1e-6, ls, grid)
-            shs = (iszero(p.ct) || iszero(p.cw)) ? NoSensibleHeat() : WithSensibleHeat()
-            elliptic_solver!(ps, state, grid, p, shs, Arithmetic(), sl)
+            mt = MeltTerms{p.mdot_includes_G, p.mdot_includes_frictional, p.mdot_includes_potential, p.mdot_includes_sensible, p.mdot_includes_qT}()
+            elliptic_solver!(ps, state, grid, p, mt, Arithmetic(), sl)
 
             @test ps.converged
             @test all(isfinite, Array(state.h))

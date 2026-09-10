@@ -42,9 +42,9 @@
             h_before = copy(Array(state.h))
 
             ls = CholeskyDirectSolver(grid)
-            shs = (iszero(p.ct) || iszero(p.cw)) ? NoSensibleHeat() : WithSensibleHeat()
+            mt = MeltTerms{p.mdot_includes_G, p.mdot_includes_frictional, p.mdot_includes_potential, p.mdot_includes_sensible, p.mdot_includes_qT}()
             dt = 60.0
-            Shakti.parabolic_solver!(ls, state, grid, p, shs, Arithmetic(), sl, dt)
+            Shakti.parabolic_solver!(ls, state, grid, p, mt, Arithmetic(), sl, dt)
 
             @test !(Array(state.h) ≈ h_before) # the moulin input should actually move h
             @test all(isfinite, Array(state.h))

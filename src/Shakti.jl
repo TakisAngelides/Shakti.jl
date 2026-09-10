@@ -135,7 +135,7 @@ export AbstractSlidingLaw, RegularizedCoulombSlidingLaw, RegularizedCoulombField
 export compute_taub_x!, compute_taub_y!, compute_taub_xy!
 
 # melt_rate.jl
-export AbstractSensibleHeatScheme, WithSensibleHeat, NoSensibleHeat
+export MeltTerms
 export compute_shear!, compute_potential!, compute_sensible!, compute_mdot!
 
 # elliptic_solver.jl

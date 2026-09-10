@@ -49,8 +49,8 @@
         compute_Re!(state)
         compute_taub_x!(state, p, sl)
         compute_taub_y!(state, p, sl)
-        shs = (iszero(p.ct) || iszero(p.cw)) ? NoSensibleHeat() : WithSensibleHeat()
-        compute_mdot!(state, p, shs)
+        mt = MeltTerms{p.mdot_includes_G, p.mdot_includes_frictional, p.mdot_includes_potential, p.mdot_includes_sensible, p.mdot_includes_qT}()
+        compute_mdot!(state, p, mt)
         compute_K!(state, p)
 
         sals = SparseAssembledLinearSystem(grid)
@@ -129,8 +129,8 @@
             compute_Re!(state)
             compute_taub_x!(state, p, sl)
             compute_taub_y!(state, p, sl)
-            shs = (iszero(p.ct) || iszero(p.cw)) ? NoSensibleHeat() : WithSensibleHeat()
-            compute_mdot!(state, p, shs)
+            mt = MeltTerms{p.mdot_includes_G, p.mdot_includes_frictional, p.mdot_includes_potential, p.mdot_includes_sensible, p.mdot_includes_qT}()
+            compute_mdot!(state, p, mt)
             compute_K!(state, p)
             return state
         end

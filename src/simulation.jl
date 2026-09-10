@@ -59,17 +59,17 @@ struct ImplicitGapScheme <: AbstractGapScheme end
 $(TYPEDSIGNATURES)
 
 Everything needed to run a subglacial hydrology simulation: the grid, state, model parameters,
-and every "which scheme/law" choice (head, gap, sensible-heat, K-face, melt-input, sliding-law)
+and every "which scheme/law" choice (head, gap, melt-rate terms, K-face, melt-input, sliding-law)
 bundled together with the observer that records output. Build one with the keyword constructor
 below (not this positional one directly), then call [`run!`](@ref).
 """
-struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHeadScheme, GS <: AbstractGapScheme, SHS <: AbstractSensibleHeatScheme, OSS <: AbstractOpenBySlidingScheme, O <: AbstractObserver, G <: Grid, S <: State, MI <: AbstractMeltInput, KFS <: AbstractKFaceScheme, SL <: AbstractSlidingLaw, CGC <: AbstractCellGapClamping, CNC <: AbstractCellNClamping}
+struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHeadScheme, GS <: AbstractGapScheme, MT <: MeltTerms, OSS <: AbstractOpenBySlidingScheme, O <: AbstractObserver, G <: Grid, S <: State, MI <: AbstractMeltInput, KFS <: AbstractKFaceScheme, SL <: AbstractSlidingLaw, CGC <: AbstractCellGapClamping, CNC <: AbstractCellNClamping}
     tsteps::Int
     dt::F
     p::P
     hs::HS
     gs::GS
-    shs::SHS
+    mt::MT
     oss::OSS
     observer::O
     grid::G
@@ -95,8 +95,9 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
   [`PicardSolver`](@ref)), else [`ParabolicHeadScheme`](@ref) (requires `ls`, an
   [`AbstractLinearSolver`](@ref)).
 - `gap_scheme_choice`: `"explicit"` or `"implicit"` (see [`AbstractGapScheme`](@ref)).
-- Sensible-heat scheme: off automatically ([`NoSensibleHeat`](@ref)) if either `p.ct` or `p.cw` is
-  zero, else [`WithSensibleHeat`](@ref).
+- Melt-rate terms: [`MeltTerms`](@ref)'s five flags are read directly off `p.mdot_includes_G`/
+  `p.mdot_includes_frictional`/`p.mdot_includes_potential`/`p.mdot_includes_sensible`/
+  `p.mdot_includes_qT` (each defaults to `true` in [`ModelParameters`](@ref)).
 - Opening-by-sliding scheme: off automatically ([`NoOpenBySliding`](@ref)) if `p.br` is zero, else
   [`WithOpenBySliding`](@ref).
 - `k_face_choice`: `"arithmetic"` or `"harmonic"` (see [`AbstractKFaceScheme`](@ref)).
@@ -135,9 +136,9 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
         error("Unknown gap_scheme_choice: \"$gap_scheme_choice\" (expected \"explicit\" or \"implicit\")")
     end
 
-    # Sensible-heat scheme setup: off automatically if either factor in its
-    # ct*cw prefactor (see compute_mdot!) is zero.
-    shs = (iszero(p.ct) || iszero(p.cw)) ? NoSensibleHeat() : WithSensibleHeat()
+    # Melt-rate terms setup: each flag decided directly by its own ModelParameters field (see
+    # MeltTerms, melt_rate.jl) -- no longer inferred from ct/cw being zero.
+    mt = MeltTerms{p.mdot_includes_G, p.mdot_includes_frictional, p.mdot_includes_potential, p.mdot_includes_sensible, p.mdot_includes_qT}()
 
     # Opening-by-sliding scheme setup: off automatically if p.br (the sole
     # factor in compute_beta!'s term, see compute_beta_kernel!) is zero.
@@ -187,6 +188,6 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
         error("Unknown which_observer: \"$which_observer\" (expected \"IO\" or \"Live\")")
     end
 
-    return Simulation(tsteps, dt, p, hs, gs, shs, oss, observer, grid, state, mi, kfs, sl, verbose, Ref(zero(dt)), cell_gap_clamping, cell_N_clamping)
+    return Simulation(tsteps, dt, p, hs, gs, mt, oss, observer, grid, state, mi, kfs, sl, verbose, Ref(zero(dt)), cell_gap_clamping, cell_N_clamping)
 
 end

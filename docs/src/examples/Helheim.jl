@@ -142,7 +142,8 @@ println("Terminus: reclassified $n_ocean boundary cells to OCEAN")
 # `LinearSlidingLaw` matches the paper's own basal stress formula, `taub = C^2*N*u_b`, using
 # their inverted per-cell friction field. `rho_i=917`/`omega=1e-3`/`br=0` match Table 2 exactly;
 # `ct=0` matches their text right after Eq. 7, which drops the sensible-heat term Table 2's
-# `ct`/`cw` would otherwise imply -- see [`NoSensibleHeat`](@ref).
+# `ct`/`cw` would otherwise imply -- set explicitly below via `mdot_includes_sensible = false`
+# (see [`MeltTerms`](@ref)) rather than relying on `ct`/`cw` happening to be zero.
 
 grid = Grid(Nx, Ny, (Nx - 1) * DX, (Ny - 1) * DX)
 
@@ -161,7 +162,7 @@ ub_y[:, 1] .= VY_ms[:, 1]; ub_y[:, Ny+1] .= VY_ms[:, Ny]
 ub_y[:, 2:Ny] .= (VY_ms[:, 1:Ny-1] .+ VY_ms[:, 2:Ny]) ./ 2
 taub_x, taub_y = zeros(Nx + 1, Ny), zeros(Nx, Ny + 1)
 
-p = ModelParameters(rho_i = 917.0, omega = 1e-3, br = 0.0, lr = 2.0, ct = 0.0, b_min = 1e-3)
+p = ModelParameters(rho_i = 917.0, omega = 1e-3, br = 0.0, lr = 2.0, ct = 0.0, b_min = 1e-3, mdot_includes_sensible = false)
 mi = ConstantMeltInput()
 sl = LinearSlidingLaw(grid, FRIC)
 
