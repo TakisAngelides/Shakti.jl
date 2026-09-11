@@ -98,9 +98,10 @@ k_face_choice = "arithmetic"
 
 # ## 8. Gap scheme (`src/simulation.jl` / `src/gap_height.jl`)
 # How gap height `b` is time-integrated, passed as `gap_scheme_choice` to `Simulation`:
-#   - `"implicit"` -> [`ImplicitGapScheme`](@ref): backward-Euler on the creep-closure term, unconditionally stable, the usual choice
+#   - `"fully_implicit"` -> [`FullyImplicitGapScheme`](@ref): backward-Euler on both the creep-closure AND opening-by-sliding terms, unconditionally stable for any `dt`, the default
+#   - `"implicit"` -> [`ImplicitGapScheme`](@ref): backward-Euler on the creep-closure term only; the opening-by-sliding term stays lagged, so it isn't unconditionally stable when `p.br != 0`
 #   - `"explicit"` -> [`ExplicitGapScheme`](@ref): forward-Euler, cheaper per step but only stable for small enough `dt`
-gap_scheme_choice = "implicit"
+gap_scheme_choice = "fully_implicit"
 
 # ## 9. Linear solver (`src/linear_solver.jl`, `src/preconditioner.jl`)
 # Passed as `ps`/`ls` to `Simulation` depending on `p.e_v` (see section 3 above):

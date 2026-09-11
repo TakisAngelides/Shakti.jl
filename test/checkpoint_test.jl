@@ -36,7 +36,7 @@
             set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
             ls = CholeskyDirectSolver(grid)
             ps = PicardSolver(500, 1e-6, ls, grid)
-            return Simulation(grid, state, sim_tsteps, floattype(dt), p, "implicit", tracked_obs, mi, sl;
+            return Simulation(grid, state, sim_tsteps, floattype(dt), p, "fully_implicit", tracked_obs, mi, sl;
                                ps = ps, which_observer = "IO", which_file_writer = which_file_writer,
                                tracked_times = tracked_times, path = path)
         end

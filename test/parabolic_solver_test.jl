@@ -27,10 +27,10 @@
             state = State(grid)
             set_initial_conditions!(state, grid, p_parabolic, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
 
-            @test_throws ErrorException Simulation(grid, state, 1, floattype(60.0), p_parabolic, "implicit", String[], ConstantMeltInput(), sl)
+            @test_throws ErrorException Simulation(grid, state, 1, floattype(60.0), p_parabolic, "fully_implicit", String[], ConstantMeltInput(), sl)
 
             ls = CholeskyDirectSolver(grid)
-            sim = Simulation(grid, state, 1, floattype(60.0), p_parabolic, "implicit", String[], ConstantMeltInput(), sl; ls = ls)
+            sim = Simulation(grid, state, 1, floattype(60.0), p_parabolic, "fully_implicit", String[], ConstantMeltInput(), sl; ls = ls)
             @test sim.hs isa ParabolicHeadScheme
         end
 
@@ -73,11 +73,11 @@
 
             ls_elliptic = CholeskyDirectSolver(grid)
             ps_elliptic = PicardSolver(500, 1e-6, ls_elliptic, grid)
-            sim_elliptic = Simulation(grid, state_elliptic, tsteps, floattype(dt), p_elliptic, "implicit", String[], ConstantMeltInput(), sl; ps = ps_elliptic)
+            sim_elliptic = Simulation(grid, state_elliptic, tsteps, floattype(dt), p_elliptic, "fully_implicit", String[], ConstantMeltInput(), sl; ps = ps_elliptic)
             run!(sim_elliptic)
 
             ls_parabolic = CholeskyDirectSolver(grid)
-            sim_parabolic = Simulation(grid, state_parabolic, tsteps, floattype(dt), p_parabolic, "implicit", String[], ConstantMeltInput(), sl; ls = ls_parabolic)
+            sim_parabolic = Simulation(grid, state_parabolic, tsteps, floattype(dt), p_parabolic, "fully_implicit", String[], ConstantMeltInput(), sl; ls = ls_parabolic)
             run!(sim_parabolic)
 
             # Empirically ~3e-7 relative -- rtol here leaves ample margin rather than pinning the exact residual.
@@ -92,7 +92,7 @@
             set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
 
             ls = CholeskyDirectSolver(grid)
-            sim = Simulation(grid, state, 5, floattype(60.0), p, "implicit", ["h", "b"], ConstantMeltInput(), sl;
+            sim = Simulation(grid, state, 5, floattype(60.0), p, "fully_implicit", ["h", "b"], ConstantMeltInput(), sl;
                              ls = ls, which_observer = "Live", tracked_times = 0:5)
             run!(sim)
 

@@ -162,6 +162,21 @@ end
 """
 $(TYPEDSIGNATURES)
 
+Fully implicit update of `sim.state.b`: both the creep-closure term and the opening-by-sliding
+term are evaluated at the new `b` -- unconditionally stable for any `sim.dt`, regardless of `p.br`.
+Unlike [`ImplicitGapScheme`](@ref), this reads `p.br`/`p.lr` directly instead of `s.beta` (which
+stays lagged by design, see `gap_height.jl`'s module docstring) -- see
+[`compute_b_fully_implicit_kernel!`](@ref) for the closed-form two-branch solve.
+"""
+function compute_b!(sim::Simulation, ::FullyImplicitGapScheme)
+    s, p = sim.state, sim.p
+    @parallel compute_b_fully_implicit_kernel!(s.b, s.mask, s.mdot, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, sim.dt, p.b_min, p.b_max, p.br, p.lr)
+    return sim
+end
+
+"""
+$(TYPEDSIGNATURES)
+
 Evolves the gap height `sim.state.b` for one timestep ([`compute_b!`](@ref), dispatching
 internally on `sim.gs`), then refreshes everything that depends on it (`beta`, `b_x`, `b_y`) so
 they're ready for the *next* timestep's Picard loop.

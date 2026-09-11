@@ -152,7 +152,7 @@ export AbstractOpenBySlidingScheme, WithOpenBySliding, NoOpenBySliding
 
 # simulation.jl
 export AbstractHeadScheme, ParabolicHeadScheme, EllipticHeadScheme
-export AbstractGapScheme, ExplicitGapScheme, ImplicitGapScheme
+export AbstractGapScheme, ExplicitGapScheme, ImplicitGapScheme, FullyImplicitGapScheme
 export AbstractCellGapClamping, NoCellGapClamping, CellGapClamping, apply_cell_gap_clamping!
 export AbstractCellNClamping, NoCellNClamping, CellNClamping, apply_cell_N_clamping!
 export Simulation

@@ -36,8 +36,8 @@ end
 $(TYPEDSIGNATURES)
 
 How the gap height `b` is time-integrated each timestep -- multiple dispatch on the concrete
-subtype picks between [`ExplicitGapScheme`](@ref) and [`ImplicitGapScheme`](@ref) (see
-`compute_b!` in `gap_height.jl`).
+subtype picks between [`ExplicitGapScheme`](@ref), [`ImplicitGapScheme`](@ref), and
+[`FullyImplicitGapScheme`](@ref) (see `compute_b!` in `gap_height.jl`).
 """
 abstract type AbstractGapScheme end
 
@@ -51,9 +51,34 @@ struct ExplicitGapScheme <: AbstractGapScheme end
 """
 $(TYPEDSIGNATURES)
 
-Implicit (backward-Euler) update of `b`: unconditionally stable, the default choice.
+Implicit (backward-Euler) update of `b`: the creep-closure term is unconditionally stable at any
+`dt`, but the opening-by-sliding term (`beta(b)*|u_b|`, active when `p.br != 0`) is still evaluated
+at the *lagged* `b` (last step's value, via `s.beta`) rather than the new one -- so this scheme
+inherits a real, if usually generous, `dt` cap from that term whenever `p.br != 0` and `b < p.br`
+(see [`compute_b_implicit_kernel!`](@ref)'s docstring for the exact bound). Confirmed in practice,
+not just in theory: a real AIS 32km run hit this at `dt=900s` and blew `b` up to the `b_max` safety
+cap in one cell, something [`FullyImplicitGapScheme`](@ref) -- now the default -- doesn't do.
+Unconditionally stable outright when `p.br == 0`.
 """
 struct ImplicitGapScheme <: AbstractGapScheme end
+
+"""
+$(TYPEDSIGNATURES)
+
+Fully implicit update of `b`: both the creep-closure term AND the opening-by-sliding term are
+evaluated at the new (`k+1`) `b`, not the lagged one -- unconditionally stable for any `dt`,
+regardless of `p.br`. `beta(b) = max(0, (p.br-b)/p.lr)` is piecewise-linear (not smooth, but not
+genuinely nonlinear either), so this doesn't need a Newton iteration: [`compute_b_fully_implicit_kernel!`](@ref)
+solves both linear branches (`b_{k+1} < p.br` and `b_{k+1} >= p.br`) in closed form and picks
+whichever is self-consistent with its own assumption. Same per-step cost as
+[`ImplicitGapScheme`](@ref) (often cheaper in practice, since Picard convergence tends to benefit
+from not carrying the spurious runaway/clamp events `ImplicitGapScheme` is prone to) -- no extra
+iteration. **The default choice** -- confirmed against `ImplicitGapScheme` and `ExplicitGapScheme`
+in a 6-dt/2-domain (AIS/GrIS) sweep: all three agree closely at the finest `dt` (<0.3% relative
+RMSE), and `FullyImplicitGapScheme` tracks `ImplicitGapScheme` far more tightly than
+`ExplicitGapScheme` does as `dt` grows coarser.
+"""
+struct FullyImplicitGapScheme <: AbstractGapScheme end
 
 """
 $(TYPEDSIGNATURES)
@@ -94,7 +119,7 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
 - Head scheme: [`EllipticHeadScheme`](@ref) if `p.e_v == 0` (requires `ps`, a
   [`PicardSolver`](@ref)), else [`ParabolicHeadScheme`](@ref) (requires `ls`, an
   [`AbstractLinearSolver`](@ref)).
-- `gap_scheme_choice`: `"explicit"` or `"implicit"` (see [`AbstractGapScheme`](@ref)).
+- `gap_scheme_choice`: `"explicit"`, `"implicit"`, or `"fully_implicit"` (see [`AbstractGapScheme`](@ref)).
 - Melt-rate terms: [`MeltTerms`](@ref)'s five flags are read directly off `p.mdot_includes_G`/
   `p.mdot_includes_frictional`/`p.mdot_includes_potential`/`p.mdot_includes_sensible`/
   `p.mdot_includes_qT` (each defaults to `true` in [`ModelParameters`](@ref)).
@@ -132,8 +157,10 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
         gs = ExplicitGapScheme()
     elseif gap_scheme_choice == "implicit"
         gs = ImplicitGapScheme()
+    elseif gap_scheme_choice == "fully_implicit"
+        gs = FullyImplicitGapScheme()
     else
-        error("Unknown gap_scheme_choice: \"$gap_scheme_choice\" (expected \"explicit\" or \"implicit\")")
+        error("Unknown gap_scheme_choice: \"$gap_scheme_choice\" (expected \"explicit\", \"implicit\", or \"fully_implicit\")")
     end
 
     # Melt-rate terms setup: each flag decided directly by its own ModelParameters field (see

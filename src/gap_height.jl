@@ -133,3 +133,35 @@ end
     end
     return
 end
+
+"""
+$(TYPEDSIGNATURES)
+
+Fully implicit update of `b`: unlike [`compute_b_implicit_kernel!`](@ref), the opening-by-sliding
+term is evaluated at the *new* `b` too, not read from the lagged `s.beta`. `beta(b) = max(0,
+(br-b)/lr)` is piecewise-linear in `b`, so this has a closed-form solution -- solve both branches
+and keep whichever is self-consistent with its own assumption, no Newton iteration needed:
+
+  - Branch "b_{k+1} < br" (opening-by-sliding still active): `beta(b)*|u_b| = (br-b)/lr * |u_b|`
+    contributes its own linear-in-b rate `gamma = |u_b|/lr` alongside the closure rate `C`, giving
+    `b_{k+1} = (b_k + dt*(mdot/rho_i + br*|u_b|/lr)) / (1 + dt*(gamma+C))`.
+  - Branch "b_{k+1} >= br" (cavity already past the bump height, `beta=0`): reduces to the same
+    closure-only solve [`compute_b_implicit_kernel!`](@ref) always uses.
+
+Both branches have amplification factor `1/(1+dt*(...))` with only non-negative rates in the
+denominator -- unconditionally stable for any `dt`, unlike [`compute_b_implicit_kernel!`](@ref)
+(which inherits a `dt` cap from evaluating `beta` at the lagged `b`; see its own docstring).
+"""
+@parallel_indices (ix, iy) function compute_b_fully_implicit_kernel!(b, mask, mdot, abs_ub, A_visc, N, rho_i, n_minus_1, dt, b_min, b_max, br, lr)
+    if ix <= size(b, 1) && iy <= size(b, 2) && mask[ix, iy] == GROUNDED
+        C = A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy]
+        gamma = abs_ub[ix, iy] / lr
+        b_below = (b[ix, iy] + dt * (mdot[ix, iy] / rho_i + br * abs_ub[ix, iy] / lr)) / (1 + dt * (gamma + C))
+        b[ix, iy] = if b_below < br
+            clamp(b_below, b_min, b_max)
+        else # branch 1's own assumption (b_{k+1} < br) failed -- beta(b_{k+1}) is actually 0
+            clamp((b[ix, iy] + dt * mdot[ix, iy] / rho_i) / (1 + dt * C), b_min, b_max)
+        end
+    end
+    return
+end

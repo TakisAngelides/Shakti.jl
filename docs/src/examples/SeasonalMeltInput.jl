@@ -81,7 +81,7 @@ set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub
 ls = CholeskyDirectSolver(grid)
 ps = PicardSolver(500, 1e-6, ls, grid; alpha = 0.1) # under-relaxed: the paper's own Fig. 10 shows this Picard/dt combination oscillates once channelization onsets
 
-sim_spinup = Simulation(grid, state, 20, floattype(3600.0), p, "implicit", String[], mi_spinup, sl; ps = ps)
+sim_spinup = Simulation(grid, state, 20, floattype(3600.0), p, "fully_implicit", String[], mi_spinup, sl; ps = ps)
 run!(sim_spinup)
 
 # ## Seasonal cycle
@@ -95,7 +95,7 @@ dt = 3600.0
 tsteps = round(Int, SECONDS_PER_YEAR / dt)
 tracked_times = 0:tsteps
 
-sim = Simulation(grid, state, tsteps, floattype(dt), p, "implicit", ["h", "b", "N"], mi_seasonal, sl;
+sim = Simulation(grid, state, tsteps, floattype(dt), p, "fully_implicit", ["h", "b", "N"], mi_seasonal, sl;
                  ps = ps, which_observer = "Live", tracked_times = tracked_times)
 run!(sim)
 

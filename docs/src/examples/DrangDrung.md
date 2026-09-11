@@ -75,7 +75,7 @@ set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, gap, G, ub_x, 
 ls = CholeskyDirectSolver(grid)
 ps = PicardSolver(500, 1e-6, ls, grid)
 
-sim = Simulation(grid, state, 17520, 1800.0, p, "implicit",
+sim = Simulation(grid, state, 17520, 1800.0, p, "fully_implicit",
                  ["h", "pw", "po", "b", "N", "mdot", "Re", "K"], mi, sl;
                  ps = ps, which_observer = "IO", which_file_writer = "NetCDF",
                  path = "drangdrung_winter.nc")

@@ -125,7 +125,7 @@ function run_to_steady_state(mask)
 
     ls = CholeskyDirectSolver(grid)
     ps = PicardSolver(500, 1e-6, ls, grid)
-    sim = Simulation(grid, state, TSTEPS, floattype(DT), p, "implicit", String[], mi, sl; ps = ps)
+    sim = Simulation(grid, state, TSTEPS, floattype(DT), p, "fully_implicit", String[], mi, sl; ps = ps)
     run!(sim)
 
     return state
