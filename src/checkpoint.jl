@@ -11,8 +11,10 @@
 $(TYPEDSIGNATURES)
 
 Saves everything needed to resume `sim`'s physics at timestep `t`: the full `State` (not just
-the observer's `tracked_obs` subset, which is often a small slice picked for output/analysis) and
-`sim.total_time[]`.
+the observer's `tracked_obs` subset, which is often a small slice picked for output/analysis),
+`sim.total_time[]`, and `sim.dt[]` (matters under [`AdaptiveTimeStep`](@ref): without it, a
+resumed run would restart from the constructor's initial `dt` guess rather than whatever
+`AdaptiveTimeStep` had actually converged to before the checkpoint).
 
 # Notes
 
@@ -29,6 +31,7 @@ function save_checkpoint(path::String, sim::Simulation, t::Int)
     JLD2.jldopen(tmp_path, "w") do file
         file["t"] = t
         file["total_time"] = sim.total_time[]
+        file["dt"] = sim.dt[]
         for name in fieldnames(typeof(state)) # for every field name in the State struct save it to file
             file[String(name)] = Array(getfield(state, name))
         end
@@ -40,13 +43,14 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Restores `sim.state` and `sim.total_time[]` in place from a checkpoint written by
+Restores `sim.state`, `sim.total_time[]`, and `sim.dt[]` in place from a checkpoint written by
 [`save_checkpoint`](@ref), and returns the timestep it was saved at, so [`run!`](@ref) knows
-where to resume the loop.
+where to resume the loop. A checkpoint written before `dt` was added to it (no `"dt"` key) leaves
+`sim.dt[]` untouched, at whatever the `Simulation` constructor set it to.
 """
 function load_checkpoint!(sim::Simulation, path::String)
     state = sim.state
-    t, total_time = JLD2.jldopen(path, "r") do file
+    t, total_time, dt = JLD2.jldopen(path, "r") do file
         for name in fieldnames(typeof(state))
             # copyto! (not .=): JLD2 always hands back a plain CPU Array, and
             # broadcasting that into a GPU-resident field (CuArray/MtlArray)
@@ -57,8 +61,9 @@ function load_checkpoint!(sim::Simulation, path::String)
             # (Threads/Array) fields.
             copyto!(getfield(state, name), file[String(name)])
         end
-        return file["t"], file["total_time"]
+        return file["t"], file["total_time"], (haskey(file, "dt") ? file["dt"] : nothing)
     end
     sim.total_time[] = total_time
+    dt !== nothing && (sim.dt[] = dt)
     return t
 end

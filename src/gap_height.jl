@@ -165,3 +165,28 @@ denominator -- unconditionally stable for any `dt`, unlike [`compute_b_implicit_
     end
     return
 end
+
+"""
+$(TYPEDSIGNATURES)
+
+Writes `C + gamma` (the same local relaxation rate behind [`compute_b_fully_implicit_kernel!`](@ref)'s
+branch-1 denominator, i.e. the reciprocal of the physical timescale `tau` the timestep-selection
+report is built on) into `rate` for every `GROUNDED` cell; non-grounded cells get `0`, which is
+harmless for a `maximum` reduction (never wins) and is explicitly excluded from a percentile
+reduction via `AdaptiveTimeStep`'s precomputed `grounded_indices`. `gamma` only contributes while
+`b < br` (mirrors `compute_b_fully_implicit_kernel!`'s own branch condition) and is `0` outright
+when `br == 0` (opening-by-sliding off) -- so a domain that never uses it (e.g. Drang Drung) isn't
+penalized with an artificially small `dt`.
+"""
+@parallel_indices (ix, iy) function compute_dt_rate_kernel!(rate, mask, b, abs_ub, A_visc, N, n_minus_1, br, lr)
+    if ix <= size(rate, 1) && iy <= size(rate, 2)
+        if mask[ix, iy] == GROUNDED
+            C = A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy]
+            gamma = (br > 0 && b[ix, iy] < br) ? abs_ub[ix, iy] / lr : zero(C)
+            rate[ix, iy] = C + gamma
+        else
+            rate[ix, iy] = zero(eltype(rate))
+        end
+    end
+    return
+end

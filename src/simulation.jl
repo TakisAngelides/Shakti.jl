@@ -83,14 +83,110 @@ struct FullyImplicitGapScheme <: AbstractGapScheme end
 """
 $(TYPEDSIGNATURES)
 
+How `sim.dt[]` is chosen each timestep -- multiple dispatch on the concrete subtype picks between
+[`FixedTimeStep`](@ref) (today's behavior: `dt` set once at construction, never changes) and
+[`AdaptiveTimeStep`](@ref) (recomputed every step from the current `A_visc`/`N`/`u_b` fields).
+"""
+abstract type AbstractTimeStepScheme end
+
+"""
+$(TYPEDSIGNATURES)
+
+`sim.dt[]` is set once at construction and never changes. Today's behavior; the default.
+"""
+struct FixedTimeStep <: AbstractTimeStepScheme end
+
+"""
+$(TYPEDSIGNATURES)
+
+Recomputes `sim.dt[]` every step from the gap-height equation's own local relaxation rate
+`C + gamma = A_visc*|N|^(n-1)*N + |u_b|/lr` -- the same quantities behind
+[`FullyImplicitGapScheme`](@ref)'s unconditional-stability proof and [`ImplicitGapScheme`](@ref)'s
+`dt` cap: `dt = clamp(safety_factor / stat, dt_min, dt_max)`, where `stat` is either the domain
+maximum of that rate (`UsePercentile=false`, the default -- a single cheap, GPU-native reduction,
+fully conservative) or a chosen percentile of it restricted to grounded cells
+(`UsePercentile=true` -- needs a sort each step, and a host-device transfer on a GPU backend, but
+avoids one outlier cell dominating). `UsePercentile` is a type parameter, not a field, so the
+choice is resolved at compile time into two separate `rate_statistic` methods -- same "dispatch on
+a type decided once outside the hot loop" idiom as [`MeltTerms`](@ref) -- not a runtime branch
+inside the per-step reduction.
+
+Note this recomputes `dt` from the *previous* step's converged `N`/`u_b` (it can't know the
+current step's `N` before solving it) -- the same lagged-coefficient idiom already used for
+`s.beta` in [`ImplicitGapScheme`](@ref).
+
+Build with the [`AdaptiveTimeStep(grid, state; ...)`](@ref) convenience constructor below, not
+this one directly -- it sizes `rate_field`/`scratch`/`grounded_indices` correctly.
+"""
+struct AdaptiveTimeStep{UsePercentile, F} <: AbstractTimeStepScheme
+    safety_factor::F
+    percentile::F                 # quantile of the RATE field C+gamma (not of tau=1/(C+gamma)); unused when UsePercentile=false
+    dt_min::F
+    dt_max::F
+    target_time::F                # physical duration to run for; run! breaks out of its tsteps loop once total_time[] reaches this
+    rate_field::AbstractMatrix{F} # preallocated once (same backend as State), holds C+gamma per cell each step
+    host_rate::Vector{F}          # preallocated once, CPU-side; empty when UsePercentile=false. Bridges a possibly-GPU-resident rate_field via one bulk copyto! (CUDA.jl/Metal.jl's real device->host transfer -- scalar-indexing a GPU array per grounded cell would be illegal/catastrophically slow, see checkpoint.jl's own note on this)
+    scratch::Vector{F}            # preallocated once; empty when UsePercentile=false. Gathered from host_rate via grounded_indices, then sorted in place each step
+    grounded_indices::Vector{Int} # linear indices of GROUNDED cells into rate_field, precomputed once from the (static) mask; empty when UsePercentile=false
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Builds an [`AdaptiveTimeStep`](@ref), sizing its scratch buffers from `grid`/`state.mask`.
+
+# Arguments
+- `use_percentile`: `false` (default) uses the domain maximum of `C+gamma` each step (cheap,
+  GPU-native, fully conservative); `true` uses the `percentile`-th quantile of `C+gamma`
+  restricted to grounded cells instead (needs a sort; more representative, less swayed by one
+  outlier cell).
+- `safety_factor`: `dt_candidate = safety_factor / stat` -- e.g. `0.3` for the accuracy-oriented
+  guidance worked out empirically for AIS/GrIS/Drang Drung, larger if some inaccuracy is
+  acceptable.
+- `percentile`: only used when `use_percentile=true`, in RATE space (not `tau` space) -- `0.75`
+  means "the value such that 75% of grounded cells have `C+gamma` below it", i.e. the
+  *fast-relaxing* end of the distribution, corresponding to the 25th percentile of
+  `tau=1/(C+gamma)`.
+- `dt_min`/`dt_max`: hard bounds on the resulting `dt`. `dt_min` in particular guarantees
+  [`run!`](@ref)'s loop terminates: total simulated time advances by at least `dt_min` every step,
+  so a `target_time`-based run takes at most `ceil((target_time-total_time)/dt_min)` steps -- pass
+  that same bound as `tsteps` when constructing the [`Simulation`](@ref).
+- `target_time`: the physical duration (seconds) this run is meant to cover -- the final step is
+  clipped to land exactly on it rather than overshoot.
+"""
+function AdaptiveTimeStep(grid::Grid, state::State; use_percentile::Bool = false, safety_factor, percentile = 0.75, dt_min, dt_max, target_time)
+    F = eltype(state.N)
+    rate_field = initialize_center_field(grid)
+    if use_percentile
+        grounded_indices = findall(vec(Array(state.mask)) .== GROUNDED)
+        host_rate = Vector{F}(undef, length(rate_field))
+        scratch = Vector{F}(undef, length(grounded_indices))
+        return AdaptiveTimeStep{true, F}(F(safety_factor), F(percentile), F(dt_min), F(dt_max), F(target_time), rate_field, host_rate, scratch, grounded_indices)
+    else
+        return AdaptiveTimeStep{false, F}(F(safety_factor), F(percentile), F(dt_min), F(dt_max), F(target_time), rate_field, F[], F[], Int[])
+    end
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+The physical duration (seconds) `sim` should stop at, or `nothing` under [`FixedTimeStep`](@ref)
+(meaning: run the full `sim.tsteps`, no early stop). Used by [`run!`](@ref)'s loop.
+"""
+target_time(::FixedTimeStep) = nothing
+target_time(ts::AdaptiveTimeStep) = ts.target_time
+
+"""
+$(TYPEDSIGNATURES)
+
 Everything needed to run a subglacial hydrology simulation: the grid, state, model parameters,
 and every "which scheme/law" choice (head, gap, melt-rate terms, K-face, melt-input, sliding-law)
 bundled together with the observer that records output. Build one with the keyword constructor
 below (not this positional one directly), then call [`run!`](@ref).
 """
-struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHeadScheme, GS <: AbstractGapScheme, MT <: MeltTerms, OSS <: AbstractOpenBySlidingScheme, O <: AbstractObserver, G <: Grid, S <: State, MI <: AbstractMeltInput, KFS <: AbstractKFaceScheme, SL <: AbstractSlidingLaw, CGC <: AbstractCellGapClamping, CNC <: AbstractCellNClamping}
+struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHeadScheme, GS <: AbstractGapScheme, MT <: MeltTerms, OSS <: AbstractOpenBySlidingScheme, O <: AbstractObserver, G <: Grid, S <: State, MI <: AbstractMeltInput, KFS <: AbstractKFaceScheme, SL <: AbstractSlidingLaw, CGC <: AbstractCellGapClamping, CNC <: AbstractCellNClamping, TS <: AbstractTimeStepScheme}
     tsteps::Int
-    dt::F
+    dt::Base.RefValue{F} # a Ref so AdaptiveTimeStep can update it in place each step, same reason total_time is a Ref despite Simulation itself being immutable
     p::P
     hs::HS
     gs::GS
@@ -106,6 +202,7 @@ struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHea
     total_time::Base.RefValue{F} # elapsed simulation time in seconds; a Ref so run!/step_h! can update it in place despite Simulation itself being immutable (same reason PicardSolver -- nested under hs -- is a mutable struct)
     cgc::CGC # per-cell gap-clamping override, see cell_gap_clamping.jl; NoCellGapClamping() (a no-op) by default
     cnc::CNC # per-cell N-clamping override, see cell_N_clamping.jl; NoCellNClamping() (a no-op) by default
+    ts::TS # AbstractTimeStepScheme; FixedTimeStep() (a no-op, dt never changes) by default
 end
 
 """
@@ -135,8 +232,13 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
 - Observer: [`NoObserver`](@ref) if `tracked_obs` is empty; otherwise `which_observer` must be
   `"IO"` (writes to `path` via `which_file_writer`, one of `"NetCDF"`/`"HDF5"`/`"JLD2"`/`"CSV"`,
   at `tracked_times`) or `"Live"` (keeps `tracked_times` in memory instead of writing to disk).
+- `timestep_scheme`: [`FixedTimeStep`](@ref) (default, `dt` never changes) or
+  [`AdaptiveTimeStep`](@ref) (`dt` recomputed every step from `C+gamma`). With the latter, `dt` is
+  still the *first* step's value (until the first recomputation) and `tsteps` should be sized from
+  `AdaptiveTimeStep`'s own `dt_min`/`target_time` (see its docstring) rather than from `dt` itself,
+  since the true step count isn't known in advance.
 """
-function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::Vector{String}, mi::AbstractMeltInput, sl::AbstractSlidingLaw; ps = nothing, ls = nothing, which_observer = nothing, which_file_writer = nothing, tracked_times = nothing, path = nothing, k_face_choice = "arithmetic", verbose = false, cell_gap_clamping::AbstractCellGapClamping = NoCellGapClamping(), cell_N_clamping::AbstractCellNClamping = NoCellNClamping())
+function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::Vector{String}, mi::AbstractMeltInput, sl::AbstractSlidingLaw; ps = nothing, ls = nothing, which_observer = nothing, which_file_writer = nothing, tracked_times = nothing, path = nothing, k_face_choice = "arithmetic", verbose = false, cell_gap_clamping::AbstractCellGapClamping = NoCellGapClamping(), cell_N_clamping::AbstractCellNClamping = NoCellNClamping(), timestep_scheme::AbstractTimeStepScheme = FixedTimeStep())
 
     # Check that all tracked observables are valid State fields
     for name in tracked_obs
@@ -215,6 +317,6 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
         error("Unknown which_observer: \"$which_observer\" (expected \"IO\" or \"Live\")")
     end
 
-    return Simulation(tsteps, dt, p, hs, gs, mt, oss, observer, grid, state, mi, kfs, sl, verbose, Ref(zero(dt)), cell_gap_clamping, cell_N_clamping)
+    return Simulation(tsteps, Ref(dt), p, hs, gs, mt, oss, observer, grid, state, mi, kfs, sl, verbose, Ref(zero(dt)), cell_gap_clamping, cell_N_clamping, timestep_scheme)
 
 end
