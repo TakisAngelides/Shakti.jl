@@ -23,6 +23,10 @@ Thumbs.db
 *.jl.mem
 /docs/build/
 
+# Cluster-only docs-build tooling (sbatch launcher + its job logs).
+/docs/run_build.sh
+/docs/logs/
+
 # Literate.jl output: regenerated from docs/src/examples/*.jl by docs/make.jl on every build.
 /docs/src/examples/*.md
 # DrangDrung.md is hand-written (no live @example execution, see its own header), not Literate output.
