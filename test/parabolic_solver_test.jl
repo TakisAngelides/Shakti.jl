@@ -22,7 +22,7 @@
         taub_x = zeros(nx + 1, ny)
         taub_y = zeros(nx, ny + 1)
 
-        @testset "Simulation constructor requires ls (not ps) when e_v != 0" begin
+        @testset "Simulation constructor requires pps (not ps) when e_v != 0" begin
             p_parabolic = ModelParameters(e_v = 1e-3)
             state = State(grid)
             set_initial_conditions!(state, grid, p_parabolic, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
@@ -30,7 +30,8 @@
             @test_throws ErrorException Simulation(grid, state, 1, floattype(60.0), p_parabolic, "fully_implicit", String[], ConstantMeltInput(), sl)
 
             ls = CholeskyDirectSolver(grid)
-            sim = Simulation(grid, state, 1, floattype(60.0), p_parabolic, "fully_implicit", String[], ConstantMeltInput(), sl; ls = ls)
+            pps = ParabolicPicardSolver(50, 1e-6, ls, grid)
+            sim = Simulation(grid, state, 1, floattype(60.0), p_parabolic, "fully_implicit", String[], ConstantMeltInput(), sl; pps = pps)
             @test sim.hs isa ParabolicHeadScheme
         end
 
@@ -77,7 +78,8 @@
             run!(sim_elliptic)
 
             ls_parabolic = CholeskyDirectSolver(grid)
-            sim_parabolic = Simulation(grid, state_parabolic, tsteps, floattype(dt), p_parabolic, "fully_implicit", String[], ConstantMeltInput(), sl; ls = ls_parabolic)
+            pps_parabolic = ParabolicPicardSolver(50, 1e-6, ls_parabolic, grid)
+            sim_parabolic = Simulation(grid, state_parabolic, tsteps, floattype(dt), p_parabolic, "fully_implicit", String[], ConstantMeltInput(), sl; pps = pps_parabolic)
             run!(sim_parabolic)
 
             # Empirically ~3e-7 relative -- rtol here leaves ample margin rather than pinning the exact residual.
@@ -92,17 +94,48 @@
             set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
 
             ls = CholeskyDirectSolver(grid)
+            pps = ParabolicPicardSolver(50, 1e-6, ls, grid)
             sim = Simulation(grid, state, 5, floattype(60.0), p, "fully_implicit", ["h", "b"], ConstantMeltInput(), sl;
-                             ls = ls, which_observer = "Live", tracked_times = 0:5)
+                             pps = pps, which_observer = "Live", tracked_times = 0:5)
             run!(sim)
 
             @test all(isfinite, Array(sim.state.h))
             @test all(isfinite, Array(sim.state.b))
 
-            # ParabolicHeadScheme has no Picard loop to report on -- see run.jl's picard_status.
+            # ParabolicHeadScheme now iterates to nonlinear convergence within each timestep too
+            # (ParabolicPicardSolver), so this reports real convergence info, not missing/missing.
             converged, last_iter = Shakti.picard_status(sim.hs)
-            @test converged === missing
-            @test last_iter === missing
+            @test converged isa Bool
+            @test converged # trivial 6x6 fixture, well within 50 iterations
+            @test last_iter isa Int
+        end
+
+        @testset "run! with a FROZEN_BED cell present keeps it pinned" begin
+            # Closes the one gap in the tests above: none of them exercise FROZEN_BED, the
+            # biggest architectural addition since this file was last touched. Mirrors
+            # frozen_bed_test.jl's own elliptic-path check, but under ParabolicHeadScheme
+            # (update_SALS_parabolic_kernel!/update_MFLS_parabolic_kernel! -- see
+            # linear_solver.jl -- already branch on FROZEN_BED the same way the elliptic
+            # kernels do; this confirms that branch is actually exercised end-to-end).
+            mask_frozen = copy(mask) # copy, not mutate: `mask` is shared with the other testsets above
+            mask_frozen[3, 3] = FROZEN_BED
+
+            p = ModelParameters(e_v = 1e-3)
+            state = State(grid)
+            set_initial_conditions!(state, grid, p, sl, mask_frozen, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
+
+            h_before = state.h[3, 3]
+
+            ls = CholeskyDirectSolver(grid)
+            pps = ParabolicPicardSolver(50, 1e-6, ls, grid)
+            sim = Simulation(grid, state, 5, floattype(60.0), p, "fully_implicit", String[], ConstantMeltInput(), sl; pps = pps)
+            run!(sim)
+
+            @test all(isfinite, Array(sim.state.h))
+            @test all(isfinite, Array(sim.state.N))
+            @test sim.state.h[3, 3] == h_before # frozen row: h held exactly fixed through every backward-Euler solve
+            @test sim.state.b[3, 3] == 0.0      # step_b! never touches a non-GROUNDED cell
+            @test sim.state.N[3, 3] ≈ sim.state.po[3, 3] # still reads as full overburden throughout
         end
 
     end

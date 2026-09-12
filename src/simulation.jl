@@ -3,8 +3,8 @@ $(TYPEDSIGNATURES)
 
 How the hydraulic head is advanced each timestep -- multiple dispatch on the concrete subtype
 (see [`step_h!`](@ref) in `run.jl`) picks between [`EllipticHeadScheme`](@ref) (Picard iteration,
-used when `p.e_v == 0`) and [`ParabolicHeadScheme`](@ref) (single backward-Euler solve, used when
-`p.e_v != 0`).
+used when `p.e_v == 0`) and [`ParabolicHeadScheme`](@ref) (backward-Euler, iterated to nonlinear
+convergence within each timestep, used when `p.e_v != 0`).
 """
 abstract type AbstractHeadScheme end
 
@@ -12,14 +12,18 @@ abstract type AbstractHeadScheme end
 $(TYPEDSIGNATURES)
 
 Head scheme for `p.e_v != 0` (nonzero englacial storage void ratio, Sommers et al. 2018 Eq. 13's
-`∂(e_v(h-zb))/∂t` storage term): each timestep, a single backward-Euler linear solve (`ls`, see
-[`parabolic_solver!`](@ref)) updates `h` directly -- no Picard loop. Every nonlinear coefficient
-(`K`, `N`, `A_visc`, `b`, `mdot`, `beta`, `abs_ub`) is evaluated at the current (start-of-timestep)
-state rather than iterated to convergence, the same lagged-coefficient idiom
-`compute_b_implicit_kernel!` uses for `b`.
+`∂(e_v(h-zb))/∂t` storage term): each timestep, [`Parabolic_loop!`](@ref) (`pps`, a
+[`ParabolicPicardSolver`](@ref)) repeats the backward-Euler linear solve (see
+[`solve_parabolic_linear_system!`](@ref)), refreshing every nonlinear coefficient (`K`, `N`,
+`A_visc`, `b`, `mdot`, `beta`, `abs_ub`) against the newly-updated `h` each time, until the head
+update converges (or `pps.iters` is exhausted) -- the parabolic counterpart of
+[`EllipticHeadScheme`](@ref)'s Picard loop, needed because a *single* backward-Euler solve leaves
+those coefficients lagged at the start-of-timestep state (see [`parabolic_solver!`](@ref)'s
+docstring for where that lag causes real, demonstrated error at large `dt`). Pass a
+`ParabolicPicardSolver` built with `iters = 1` to recover that old, non-iterating behavior exactly.
 """
-struct ParabolicHeadScheme{LS <: AbstractLinearSolver} <: AbstractHeadScheme
-    ls::LS
+struct ParabolicHeadScheme{PPS <: ParabolicPicardSolver} <: AbstractHeadScheme
+    pps::PPS
 end
 
 """
@@ -214,8 +218,8 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
 # Notes
 
 - Head scheme: [`EllipticHeadScheme`](@ref) if `p.e_v == 0` (requires `ps`, a
-  [`PicardSolver`](@ref)), else [`ParabolicHeadScheme`](@ref) (requires `ls`, an
-  [`AbstractLinearSolver`](@ref)).
+  [`PicardSolver`](@ref)), else [`ParabolicHeadScheme`](@ref) (requires `pps`, a
+  [`ParabolicPicardSolver`](@ref)).
 - `gap_scheme_choice`: `"explicit"`, `"implicit"`, or `"fully_implicit"` (see [`AbstractGapScheme`](@ref)).
 - Melt-rate terms: [`MeltTerms`](@ref)'s five flags are read directly off `p.mdot_includes_G`/
   `p.mdot_includes_frictional`/`p.mdot_includes_potential`/`p.mdot_includes_sensible`/
@@ -238,7 +242,7 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
   `AdaptiveTimeStep`'s own `dt_min`/`target_time` (see its docstring) rather than from `dt` itself,
   since the true step count isn't known in advance.
 """
-function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::Vector{String}, mi::AbstractMeltInput, sl::AbstractSlidingLaw; ps = nothing, ls = nothing, which_observer = nothing, which_file_writer = nothing, tracked_times = nothing, path = nothing, k_face_choice = "arithmetic", verbose = false, cell_gap_clamping::AbstractCellGapClamping = NoCellGapClamping(), cell_N_clamping::AbstractCellNClamping = NoCellNClamping(), timestep_scheme::AbstractTimeStepScheme = FixedTimeStep())
+function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::Vector{String}, mi::AbstractMeltInput, sl::AbstractSlidingLaw; ps = nothing, pps = nothing, which_observer = nothing, which_file_writer = nothing, tracked_times = nothing, path = nothing, k_face_choice = "arithmetic", verbose = false, cell_gap_clamping::AbstractCellGapClamping = NoCellGapClamping(), cell_N_clamping::AbstractCellNClamping = NoCellNClamping(), timestep_scheme::AbstractTimeStepScheme = FixedTimeStep())
 
     # Check that all tracked observables are valid State fields
     for name in tracked_obs
@@ -250,8 +254,8 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
         ps === nothing && error("ps (a PicardSolver) must be provided when p.e_v == 0 (elliptic head scheme)")
         hs = EllipticHeadScheme(ps)
     else # parabolic head scheme
-        ls === nothing && error("ls (an AbstractLinearSolver) must be provided when p.e_v != 0 (parabolic head scheme)")
-        hs = ParabolicHeadScheme(ls)
+        pps === nothing && error("pps (a ParabolicPicardSolver) must be provided when p.e_v != 0 (parabolic head scheme)")
+        hs = ParabolicHeadScheme(pps)
     end
 
     # Gap scheme setup

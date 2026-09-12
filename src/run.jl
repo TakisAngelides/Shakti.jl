@@ -92,13 +92,14 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Returns `(converged, last_iter)` for `hs`'s Picard solve at the current timestep -- dispatched
+Returns `(converged, last_iter)` for `hs`'s iterative solve at the current timestep -- dispatched
 (rather than an `isa` check) so this stays correct if another `AbstractHeadScheme` is ever added:
-`EllipticHeadScheme` has a `PicardSolver` to report on, `ParabolicHeadScheme` doesn't (it's a
-single backward-Euler solve per timestep, not an iterative one -- see `step_h!` below).
+`EllipticHeadScheme` reports on its `PicardSolver`, `ParabolicHeadScheme` on its
+[`ParabolicPicardSolver`](@ref) (see `step_h!` below) -- both are genuine within-timestep
+iterations now, so both have real convergence info to report.
 """
 picard_status(hs::EllipticHeadScheme) = (hs.ps.converged, hs.ps.last_iter)
-picard_status(hs::ParabolicHeadScheme) = (missing, missing)
+picard_status(hs::ParabolicHeadScheme) = (hs.pps.converged, hs.pps.last_iter)
 
 """
 $(TYPEDSIGNATURES)
@@ -180,11 +181,11 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Solves for the new hydraulic head under [`ParabolicHeadScheme`](@ref): a single backward-Euler
-linear solve ([`parabolic_solver!`](@ref)), no Picard loop.
+Solves for the new hydraulic head under [`ParabolicHeadScheme`](@ref): repeats the backward-Euler
+linear solve to nonlinear convergence within this timestep ([`Parabolic_loop!`](@ref)).
 """
 function step_h!(hs::ParabolicHeadScheme, sim::Simulation)
-    parabolic_solver!(hs.ls, sim.state, sim.grid, sim.p, sim.mt, sim.kfs, sim.sl, sim.dt[]; cnc = sim.cnc)
+    Parabolic_loop!(hs.pps, sim.state, sim.grid, sim.p, sim.mt, sim.kfs, sim.sl, sim.dt[]; cnc = sim.cnc)
 end
 
 """

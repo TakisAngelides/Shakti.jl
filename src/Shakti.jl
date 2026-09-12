@@ -110,7 +110,7 @@ export AbstractMeltInput, ConstantMeltInput, SeasonalMeltInput, update_ieb!
 export AbstractKFaceScheme, Arithmetic, Harmonic, compute_K_face
 
 # linear_solver.jl
-# (update_SALS!/update_MFLS! are internal assembly plumbing, not part of the
+# (update_SALS_elliptic!/update_MFLS_elliptic! are internal assembly plumbing, not part of the
 # public API; AbstractLinearSystem/SparseAssembledLinearSystem/MatrixFreeLinearSystem
 # ARE public -- they're passed as the representation-choosing argument to the
 # iterative solver constructors, e.g. CGIterativeSolver(g, MatrixFreeLinearSystem))
@@ -143,10 +143,12 @@ export compute_shear!, compute_potential!, compute_sensible!, compute_mdot!
 export AbstractHeadRelaxation, NoHeadRelaxation, UnderHeadRelaxation
 export relax_h!
 export PicardSolver
-export elliptic_solver!, Picard_loop!, Picard_iteration!
+export elliptic_solver!, Picard_loop!, Picard_iteration!, refresh_head_dependents!
 
 # parabolic_solver.jl
 export parabolic_solver!
+export ParabolicPicardSolver
+export Parabolic_loop!, Parabolic_iteration!
 
 # gap_height.jl
 export AbstractOpenBySlidingScheme, WithOpenBySliding, NoOpenBySliding

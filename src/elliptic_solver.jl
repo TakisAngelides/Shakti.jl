@@ -178,18 +178,16 @@ end
 """
 $(TYPEDSIGNATURES)
 
-One Picard iteration: solves the linearized system for a new `h` ([`solve_elliptic_linear_system!`](@ref)),
-optionally relaxes it ([`relax_h!`](@ref)), then refreshes every field that depends on the new `h`
-(`pw`, `N`, `q`/`Re`, `taub`, `mdot`, `K`) so the next iteration's linearization is consistent. The
-water depth `b` is left untouched within one Picard loop until we step out of it and update `b` following
-Eq. 2 of https://gmd.copernicus.org/articles/11/2955/2018/.
+Refreshes every state field that depends on the just-solved `h` (`pw`, `N`, `q`/`Re`, `taub`,
+`mdot`, `K`) -- the tail shared by one elliptic Picard iteration
+([`Picard_iteration!`](@ref)) and one parabolic backward-Euler iteration
+([`Parabolic_iteration!`](@ref), `parabolic_solver.jl`), once each has updated `h` by its own
+linear solve. The water depth `b` is left untouched here in either case until we step out of the
+head solve entirely and update `b` following Eq. 2 of
+https://gmd.copernicus.org/articles/11/2955/2018/.
 """
-function Picard_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation, s::State, g::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, h_prev; cnc::AbstractCellNClamping = NoCellNClamping())
+function refresh_head_dependents!(s::State, g::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping())
 
-    solve_elliptic_linear_system!(ls, s, g, p, kfs) # update the h field
-    relax_h!(hr, s, h_prev) # update the h field again according to the relaxation parameter, damp the raw Picard update before anything downstream of h is recomputed, so the next iteration's coefficients are consistent with the relaxed h
-
-    # Update state variables that depend on the new h
     compute_dhdxy!(s, g) # updates gradient of h in both x and y directions in one kernel to reduce the number of kernels
 
     compute_pw!(s, p) # update water pressure
@@ -204,6 +202,24 @@ function Picard_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation,
     compute_mdot!(s, p, mt) # update the melt rate, including/excluding each term per `mt`
 
     compute_K!(s, p) # update the transmissivity
+
+    return s
+
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+One Picard iteration: solves the linearized system for a new `h` ([`solve_elliptic_linear_system!`](@ref)),
+optionally relaxes it ([`relax_h!`](@ref)), then refreshes every field that depends on the new `h`
+via [`refresh_head_dependents!`](@ref) so the next iteration's linearization is consistent.
+"""
+function Picard_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation, s::State, g::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, h_prev; cnc::AbstractCellNClamping = NoCellNClamping())
+
+    solve_elliptic_linear_system!(ls, s, g, p, kfs) # update the h field
+    relax_h!(hr, s, h_prev) # update the h field again according to the relaxation parameter, damp the raw Picard update before anything downstream of h is recomputed, so the next iteration's coefficients are consistent with the relaxed h
+
+    refresh_head_dependents!(s, g, p, mt, kfs, sl; cnc)
 
 end
 

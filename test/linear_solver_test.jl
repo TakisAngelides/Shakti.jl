@@ -2,7 +2,7 @@
 
         # A nontrivial mask/state: GROUNDED interior, OCEAN/LAND/OTHER_BASIN
         # edges, sloped bed, point-source moulin -- exercises every branch of
-        # update_SALS_kernel!/update_MFLS_kernel! (all four mask cases, and
+        # update_SALS_elliptic_kernel!/update_MFLS_elliptic_kernel! (all four mask cases, and
         # every face of the GROUNDED stencil), not just a trivial uniform case
         # that could pass by coincidence.
         nx, ny = 6, 6
@@ -56,8 +56,8 @@
         sals = SparseAssembledLinearSystem(grid)
         mfls = MatrixFreeLinearSystem(grid)
 
-        Shakti.update_SALS!(sals, state, grid, p, kfs)
-        Shakti.update_MFLS!(mfls, state, grid, p, kfs)
+        Shakti.update_SALS_elliptic!(sals, state, grid, p, kfs)
+        Shakti.update_MFLS_elliptic!(mfls, state, grid, p, kfs)
 
         @test sals.rhs ≈ mfls.rhs
 
