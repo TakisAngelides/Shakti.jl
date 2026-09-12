@@ -41,8 +41,8 @@ function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, sl::Abst
     taub_x = Data.Array(taub_x)
     taub_y = Data.Array(taub_y)
 
-    @. s.mask = mask # 0.0: grounded ice, 1.0: ocean, 2.0: land, 3.0: other basin - see mask.jl
-    compute_face_masks!(s) # goes into mask.jl to calculate valid_x and valid_y for the faces that touch OTHER_BASIN cells to have their field value be zeroed there when we compute e.g. staggered gradients on faces
+    @. s.mask = mask # 0.0: grounded ice, 1.0: ocean, 2.0: land, 3.0: other basin, 4.0: frozen bed - see mask.jl
+    compute_face_masks!(s) # goes into mask.jl to calculate valid_x and valid_y for the faces that touch OTHER_BASIN/FROZEN_BED cells to have their field value be zeroed there when we compute e.g. staggered gradients on faces
 
     @. s.A_visc = A_visc # Glen's flow law viscosity parameter field
     lambda_coeff = F(1.5) # precomputed outside the broadcast: `@.` rewrites every call it sees, including F(1.5) itself, into F.(1.5) -- fusing a Float64-literal broadcast into the kernel and risking the same GPU compile failure this was meant to avoid
@@ -85,10 +85,14 @@ function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, sl::Abst
     # immediately) but keeps pw/N consistent from the start.
     # Vectorized rather than a scalar for-loop so that it is GPU compatible.
     zero_zb = zero(F)
+    zero_pw = F(0.0)
     @. s.pw = ifelse(s.mask == OCEAN, # if the cell is OCEAN then set the water pressure to be the hydrostatic pressure of ocean water that is present above the zb at that point
                       p.p_atm - p.rho_sw * p.g * min(s.zb, zero_zb), # see linear_system.jl's OCEAN branch for the sign convention
                ifelse((s.mask == LAND) | (s.mask == OTHER_BASIN),
-                      p.p_atm, s.pw))
+                      p.p_atm,
+               ifelse(s.mask == FROZEN_BED,
+                      zero_pw, # exactly 0, not p_atm: a frozen bed has no water at all, so pw=0 regardless of what p_atm happens to be (unlike LAND/OTHER_BASIN's Dirichlet convention) -- gives N=po via compute_N!, see FROZEN_BED's own docstring in mask.jl
+                      s.pw)))
     compute_dpwdx!(s, g) # water pressure gradient in x and y, feeds compute_sensible!'s sensible-heat term (via compute_mdot! below)
     compute_dpwdy!(s, g)
     compute_N!(s, p) # Effective pressure

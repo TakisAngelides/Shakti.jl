@@ -40,7 +40,12 @@ of what kind of cell the neighbour is.
 
 # Notes
 
-- `OTHER_BASIN`: unsolved/frozen -- zero-flux (Neumann) face.
+- `OTHER_BASIN`/`FROZEN_BED`: unsolved/frozen -- zero-flux (Neumann) face. `FROZEN_BED`'s own `K`
+  is genuinely `0` there (`b=0`, no gap), so this isn't just a convention matching `OTHER_BASIN`'s
+  -- either scheme would already give `0` on that face from `K[i2,j2]=0` alone (harmonic
+  trivially, arithmetic because `boundary_K_face` never blends toward a real `K` for a
+  non-`GROUNDED` neighbour in the first place); the explicit branch keeps the *reason* (no water
+  crosses into a frozen cell) stated directly rather than left to fall out of the arithmetic.
 - `OCEAN`/`LAND`: real Dirichlet drainage boundaries, but `K` there is a bookkeeping placeholder
   (`b` is forced to `0` at those cells in [`set_initial_conditions!`](@ref), since they have no
   physical gap height), not an actual conductivity. Folding that `0` into [`compute_K_face`](@ref)
@@ -51,7 +56,7 @@ of what kind of cell the neighbour is.
 """
 @inline function boundary_K_face(kfs::AbstractKFaceScheme, K, mask, i1, j1, i2, j2)
     m2 = mask[i2, j2]
-    if m2 == OTHER_BASIN
+    if m2 == OTHER_BASIN || m2 == FROZEN_BED
         return zero(eltype(K))
     elseif m2 == OCEAN || m2 == LAND
         return K[i1, j1] # if the neighbour is land or ocean, there is no meaningful conductivity value K there so we just use the center value at i1, j1 for that cell face

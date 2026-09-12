@@ -84,6 +84,7 @@ include("pressure.jl")
 include("field_gradients.jl")
 include("water_flux.jl")
 include("initial_conditions.jl")
+include("frozen_bed.jl")
 include("checkpoint.jl")
 include("run.jl")
 include("animation.jl")
@@ -99,7 +100,7 @@ export Grid
 export State
 
 # mask.jl
-export GROUNDED, OCEAN, LAND, OTHER_BASIN
+export GROUNDED, OCEAN, LAND, OTHER_BASIN, FROZEN_BED
 export compute_face_masks!, apply_mask_to_sliding!
 
 # melt_input.jl
@@ -176,6 +177,9 @@ export compute_beta!, compute_b_x!, compute_b_y!, compute_b!
 
 # initial_conditions.jl
 export set_initial_conditions!
+
+# frozen_bed.jl
+export freeze_cells!, thaw_cells!
 
 # checkpoint.jl
 export save_checkpoint, load_checkpoint!

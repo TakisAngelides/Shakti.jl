@@ -46,7 +46,7 @@ struct State{A <: AbstractArray}
     ub_x::A       # sliding velocity in x direction
     taub_x::A     # basal shear stress in x direction
     dpwdx::A      # gradient of water pressure in x direction
-    valid_x::A    # 1.0 where the x-face does NOT touch an OTHER_BASIN cell, else 0.0
+    valid_x::A    # 1.0 where the x-face does NOT touch an OTHER_BASIN or FROZEN_BED cell, else 0.0
 
     # YFace fields
     dhdy::A       # gradient of hydraulic head in y direction
@@ -56,7 +56,7 @@ struct State{A <: AbstractArray}
     ub_y::A       # sliding velocity in y direction
     taub_y::A     # basal shear stress in y direction
     dpwdy::A      # gradient of water pressure in y direction
-    valid_y::A    # 1.0 where the y-face does NOT touch an OTHER_BASIN cell, else 0.0
+    valid_y::A    # 1.0 where the y-face does NOT touch an OTHER_BASIN or FROZEN_BED cell, else 0.0
 end
 
 """
@@ -110,7 +110,7 @@ function State(g::Grid)
     lambda    = initialize_center_field(g)
     A_visc    = initialize_center_field(g)
     N         = initialize_center_field(g)
-    mask      = @fill(0.0, g.nx, g.ny) # 0.0: GROUNDED, 1.0: OCEAN, 2.0: LAND, 3.0: OTHER_BASIN
+    mask      = @fill(0.0, g.nx, g.ny) # 0.0: GROUNDED, 1.0: OCEAN, 2.0: LAND, 3.0: OTHER_BASIN, 4.0: FROZEN_BED
 
     # XFace fields
     dhdx    = initialize_xface_field(g)

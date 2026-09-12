@@ -17,4 +17,5 @@ using CSV
     include("checkpoint_test.jl")
     include("sliding_law_test.jl")
     include("parabolic_solver_test.jl")
+    include("frozen_bed_test.jl")
 end

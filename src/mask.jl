@@ -40,6 +40,21 @@ is zeroed.
 """
 const OTHER_BASIN = 3.0
 
+"""
+Mask value: a genuinely frozen bed -- no water, so no gap height (`b=0`) and no water pressure
+(`pw=0`, giving `N=po` exactly; see [`compute_N!`](@ref)). Otherwise handled identically to
+[`OTHER_BASIN`](@ref): not solved here (frozen Dirichlet row in the elliptic solve), any
+`GROUNDED` neighbour treats the shared face as zero-flux, and any face-based quantity touching
+this cell is zeroed. Distinct from `OTHER_BASIN` (which is a domain-restriction category -- real
+ice just outside the region being solved, `pw` held at whatever `p_atm` happens to be) precisely
+in that `N` is computed here rather than reported as `0`, and its own `pw` is pinned to exactly
+`0` regardless of `p_atm`. Transition a cell to/from `FROZEN_BED` at runtime with
+[`freeze_cells!`](@ref)/[`thaw_cells!`](@ref) (`frozen_bed.jl`) -- not yet wired to any automatic
+driver (e.g. an ice-thermal-state coupling), so call them directly with whatever mask your own
+driving logic computes.
+"""
+const FROZEN_BED = 4.0
+
 # =============================================================================
 # Face-validity bookkeeping
 # =============================================================================
@@ -50,7 +65,7 @@ const OTHER_BASIN = 3.0
 # masks in fields_gradients.jl (e.g. `dhdx[...] * valid_x[...]`), which is
 # exactly what a 1.0/0.0 float wants to be used for anyway.
 #
-# A face is invalid iff either cell it connects is OTHER_BASIN: that cell's
+# A face is invalid iff either cell it connects is OTHER_BASIN or FROZEN_BED: that cell's
 # hydrology isn't solved here, so any gradient computed across that face would
 # spuriously reflect a frozen, non-evolving neighbour value rather than a real
 # head/pressure difference. LAND and OCEAN faces are left valid, since those
@@ -62,7 +77,8 @@ const OTHER_BASIN = 3.0
 @parallel_indices (ix, iy) function compute_valid_x_kernel!(valid_x, mask)
     if ix <= size(valid_x, 1) && iy <= size(valid_x, 2)
         if ix > 1 && ix < size(valid_x, 1)
-            valid = (mask[ix-1, iy] != OTHER_BASIN) && (mask[ix, iy] != OTHER_BASIN) # both cells touching the face must not be OTHER_BASIN
+            m1, m2 = mask[ix-1, iy], mask[ix, iy]
+            valid = (m1 != OTHER_BASIN) && (m1 != FROZEN_BED) && (m2 != OTHER_BASIN) && (m2 != FROZEN_BED) # neither cell touching the face may be OTHER_BASIN or FROZEN_BED
             valid_x[ix, iy] = valid ? one(eltype(valid_x)) : zero(eltype(valid_x))
         else
             valid_x[ix, iy] = one(eltype(valid_x))
@@ -74,7 +90,8 @@ end
 @parallel_indices (ix, iy) function compute_valid_y_kernel!(valid_y, mask)
     if ix <= size(valid_y, 1) && iy <= size(valid_y, 2)
         if iy > 1 && iy < size(valid_y, 2)
-            valid = (mask[ix, iy-1] != OTHER_BASIN) && (mask[ix, iy] != OTHER_BASIN) # both cells touching the face must not be OTHER_BASIN
+            m1, m2 = mask[ix, iy-1], mask[ix, iy]
+            valid = (m1 != OTHER_BASIN) && (m1 != FROZEN_BED) && (m2 != OTHER_BASIN) && (m2 != FROZEN_BED) # neither cell touching the face may be OTHER_BASIN or FROZEN_BED
             valid_y[ix, iy] = valid ? one(eltype(valid_y)) : zero(eltype(valid_y))
         else
             valid_y[ix, iy] = one(eltype(valid_y))
@@ -91,10 +108,10 @@ Recomputes `s.valid_x`/`s.valid_y` from `s.mask`. Must be called (directly, or v
 
 # Notes
 
-A face is invalid iff either cell it connects is `OTHER_BASIN`: that cell's hydrology isn't
-solved, so any gradient computed across that face would spuriously reflect a frozen,
-non-evolving neighbour value rather than a real head/pressure difference. `LAND` and `OCEAN`
-faces are left valid, since those are genuine (Dirichlet) drainage boundaries where a real flux
+A face is invalid iff either cell it connects is `OTHER_BASIN` or `FROZEN_BED`: that cell's
+hydrology isn't solved, so any gradient computed across that face would spuriously reflect a
+frozen, non-evolving neighbour value rather than a real head/pressure difference. `LAND` and
+`OCEAN` faces are left valid, since those are genuine (Dirichlet) drainage boundaries where a real flux
 is physically meaningful.
 """
 function compute_face_masks!(s::State)

@@ -196,7 +196,7 @@ Evolves the gap height `sim.state.b` by one timestep, dispatching on `sim.gs`
 # Notes
 
 Only evolves `b` where hydrology is actually being solved (`GROUNDED`). Cells with a
-Dirichlet-prescribed `pw` (`LAND`/`OCEAN`) or a frozen `h` (`OTHER_BASIN`) don't have a
+Dirichlet-prescribed `pw` (`LAND`/`OCEAN`) or a frozen `h` (`OTHER_BASIN`/`FROZEN_BED`) don't have a
 meaningfully-evolving `b` in this model, so their `b` is simply left untouched at whatever it was
 initialized to.
 """

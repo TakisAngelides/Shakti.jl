@@ -12,6 +12,7 @@
 !/test/checkpoint_test.jl
 !/test/sliding_law_test.jl
 !/test/parabolic_solver_test.jl
+!/test/frozen_bed_test.jl
 
 # OS junk
 .DS_Store

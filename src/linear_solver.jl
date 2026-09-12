@@ -238,19 +238,21 @@ end
             nzval[idxP[ix, iy]] = 1 # set the diagonal value of that row to 1 and the rhs to the value of h we want that row - which represents an i, j grid point - to have
             rhs[row] = dirichlet_head(m, zb[ix, iy], p_atm, rho_w, rho_sw, ggrav)
 
-        elseif m == OTHER_BASIN # Dirichlet BC
+        elseif m == OTHER_BASIN || m == FROZEN_BED # Dirichlet BC
 
-            # Not part of this domain's solve: frozen/inert row. h is held at its initial value; via valid_x/valid_y every gradient/
-            # flux/melt - in compute_dhdx!, compute_dhdy!, compute_dpwdx!, compute_dpwdy! -
+            # Not part of this domain's solve: frozen/inert row. h is held at whatever it currently
+            # is (its initial value, unless a FROZEN_BED cell's pw/h was explicitly reset at the
+            # moment it froze -- see mask.jl's FROZEN_BED docstring); via valid_x/valid_y every
+            # gradient/flux/melt - in compute_dhdx!, compute_dhdy!, compute_dpwdx!, compute_dpwdy! -
             # computation touching this cell from a GROUNDED neighbour is zeroed, so this frozen value never leaks in.
             nzval[idxP[ix, iy]] = 1
-            rhs[row] = h[ix, iy] # frozen as the initial value it was set at
+            rhs[row] = h[ix, iy] # frozen at whatever value it currently holds
 
         else
             # m == GROUNDED: dynamic hydrology.
 
             # A face contributes only if the neighbour exists; no neighbour reduces to a natural
-            # zero-flux (Neumann) condition. boundary_K_face handles OTHER_BASIN/OCEAN/LAND neighbours
+            # zero-flux (Neumann) condition. boundary_K_face handles OTHER_BASIN/FROZEN_BED/OCEAN/LAND neighbours
             # (see k_face_scheme.jl).
             aE = (ix < nx) ? boundary_K_face(kfs, K, mask, ix, iy, ix+1, iy) / dx2 : zero(dx2)
             aW = (ix > 1)  ? boundary_K_face(kfs, K, mask, ix, iy, ix-1, iy) / dx2 : zero(dx2)
@@ -311,9 +313,9 @@ $(TYPEDSIGNATURES)
 
 Rebuilds `sals.M`/`sals.rhs` in place from the current `s`/`p` (mask, head, transmissivity, ...):
 `GROUNDED` cells get the diffusion + Newton-linearized creep-closure stencil, `OCEAN`/`LAND` cells
-get a Dirichlet row, `OTHER_BASIN` cells get a frozen (`h` held at its current value) row. `M`
-stays exactly symmetric: a `GROUNDED` cell's Dirichlet neighbours are eliminated by folding their
-known head into `rhs` rather than left as a one-sided matrix coupling.
+get a Dirichlet row, `OTHER_BASIN`/`FROZEN_BED` cells get a frozen (`h` held at its current value)
+row. `M` stays exactly symmetric: a `GROUNDED` cell's Dirichlet neighbours are eliminated by
+folding their known head into `rhs` rather than left as a one-sided matrix coupling.
 """
 function update_SALS!(sals::SparseAssembledLinearSystem, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme)
 
@@ -357,7 +359,7 @@ end
             nzval[idxP[ix, iy]] = 1
             rhs[row] = dirichlet_head(m, zb[ix, iy], p_atm, rho_w, rho_sw, ggrav)
 
-        elseif m == OTHER_BASIN # Dirichlet BC
+        elseif m == OTHER_BASIN || m == FROZEN_BED # Dirichlet BC
 
             nzval[idxP[ix, iy]] = 1
             rhs[row] = h[ix, iy]
@@ -450,7 +452,7 @@ end
             aP[ix, iy] = 1
             rhs[row] = dirichlet_head(m, zb[ix, iy], p_atm, rho_w, rho_sw, ggrav)
 
-        elseif m == OTHER_BASIN # Dirichlet BC
+        elseif m == OTHER_BASIN || m == FROZEN_BED # Dirichlet BC
 
             aP[ix, iy] = 1
             rhs[row] = h[ix, iy]
@@ -541,7 +543,7 @@ end
             aP[ix, iy] = 1
             rhs[row] = dirichlet_head(m, zb[ix, iy], p_atm, rho_w, rho_sw, ggrav)
 
-        elseif m == OTHER_BASIN # Dirichlet BC
+        elseif m == OTHER_BASIN || m == FROZEN_BED # Dirichlet BC
 
             aP[ix, iy] = 1
             rhs[row] = h[ix, iy]
