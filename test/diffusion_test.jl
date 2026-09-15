@@ -288,7 +288,7 @@
         bref = reshape(Aref \ rhsref, nx, ny)
 
         @testset "Cholesky solve matches the independent reference exactly" begin
-            grid = Grid(nx, ny, nx * dx, ny * dy) # dx = Lx/nx, so this reproduces dx/dy above
+            grid = Grid(nx, ny, dx * (nx - 1), dy * (ny - 1)) # Grid computes dx = Lx/(nx-1), so this reproduces dx/dy above
             @assert grid.dx ≈ dx && grid.dy ≈ dy # sanity: the reference above assumed this exact dx/dy
 
             s = State(grid)
@@ -308,7 +308,8 @@
         end
 
         @testset "CG (SparseAssembledLinearSystem) solve agrees with the Cholesky/reference solution" begin
-            grid = Grid(nx, ny, nx * dx, ny * dy)
+            grid = Grid(nx, ny, dx * (nx - 1), dy * (ny - 1))
+            @assert grid.dx ≈ dx && grid.dy ≈ dy
             s = State(grid)
             s.mask .= mask; s.b .= b; s.N .= N; s.mdot .= mdot; s.beta .= beta; s.abs_ub .= abs_ub
             s.A_visc .= A_visc; s.lc .= lc; s.D_x .= D_x; s.D_y .= D_y
