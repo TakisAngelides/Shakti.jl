@@ -119,6 +119,7 @@ export AbstractLinearSystem, SparseAssembledLinearSystem, MatrixFreeLinearSystem
 export CholeskyDirectSolver, CGIterativeSolver
 export solve_elliptic_linear_system!, solve_parabolic_linear_system!
 export AbstractDiffusionScheme, NoDiffusion, WithDiffusion
+export solve_b_diffusion!
 
 # preconditioner.jl
 export ChebyshevPreconditioner

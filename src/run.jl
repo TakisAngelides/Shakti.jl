@@ -237,17 +237,37 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Evolves the gap height `sim.state.b` by one timestep, dispatching on `sim.gs`
-(`ImplicitGapScheme()`/`ExplicitGapScheme()`) to [`compute_b!(sim, sim.gs)`](@ref) below.
+Evolves the gap height `sim.state.b` by one timestep. Dispatches on `sim.ds` first: under
+[`WithDiffusion`](@ref), `sim.gs` is **not consulted at all** -- [`solve_b_diffusion!`](@ref) solves
+the coupled diffusion system (SUHMO Eq. 17) directly, since that equation only defines one way to
+combine diffusion with the local opening/closure terms (evaluated explicitly, at the lagged `b`/`N`
+-- see `update_SALS_b_diffusion_kernel!`'s own module-level note, `linear_solver.jl`), not one per
+[`AbstractGapScheme`](@ref). Under [`NoDiffusion`](@ref) (the default), behaves exactly as before,
+dispatching on `sim.gs` (`ImplicitGapScheme()`/`ExplicitGapScheme()`/`FullyImplicitGapScheme()`) to
+[`compute_b!(sim, sim.gs)`](@ref) below.
 
 # Notes
 
 Only evolves `b` where hydrology is actually being solved (`GROUNDED`). Cells with a
 Dirichlet-prescribed `pw` (`LAND`/`OCEAN`) or a frozen `h` (`OTHER_BASIN`/`FROZEN_BED`) don't have a
 meaningfully-evolving `b` in this model, so their `b` is simply left untouched at whatever it was
-initialized to.
+initialized to (under [`WithDiffusion`](@ref): held fixed via its own frozen identity row instead,
+same effect).
 """
-compute_b!(sim::Simulation) = compute_b!(sim, sim.gs)
+compute_b!(sim::Simulation) = sim.ds isa WithDiffusion ? compute_b!(sim, sim.ds) : compute_b!(sim, sim.gs)
+
+"""
+$(TYPEDSIGNATURES)
+
+Solves `b`'s coupled diffusion system for the new timestep ([`solve_b_diffusion!`](@ref), using
+the second, independent linear solver bundled in `ds`) -- the [`WithDiffusion`](@ref) counterpart
+of the `sim.gs`-dispatched methods below, taking over `b`'s evolution entirely rather than
+composing with any of them.
+"""
+function compute_b!(sim::Simulation, ds::WithDiffusion)
+    solve_b_diffusion!(ds.ls, sim.state, sim.grid, sim.p, sim.dt[])
+    return sim
+end
 
 """
 $(TYPEDSIGNATURES)
@@ -291,8 +311,8 @@ end
 $(TYPEDSIGNATURES)
 
 Evolves the gap height `sim.state.b` for one timestep ([`compute_b!`](@ref), dispatching
-internally on `sim.gs`), then refreshes everything that depends on it (`beta`, `lc`, `b_x`, `b_y`)
-so they're ready for the *next* timestep's Picard loop.
+internally on `sim.ds`/`sim.gs`), then refreshes everything that depends on it (`beta`, `lc`,
+`b_x`, `b_y`) so they're ready for the *next* timestep's Picard loop.
 """
 function step_b!(sim::Simulation)
 

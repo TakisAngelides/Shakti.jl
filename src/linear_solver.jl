@@ -742,6 +742,152 @@ function update_MFLS_parabolic!(mfls::MatrixFreeLinearSystem, s::State, g::Grid,
 
 end
 
+# =============================================================================
+# b's own implicit diffusion solve (SUHMO Eq. 17, WithDiffusion only)
+# =============================================================================
+# Unlike h's operator, b's has no real Dirichlet boundary: every GROUNDED cell
+# solves the diffusion-coupled equation below, every non-GROUNDED cell gets a
+# frozen identity row (b held at its current value) -- the same "not evolved
+# here" convention compute_b_implicit_kernel!/etc. already use (they only
+# ever touch GROUNDED cells), just expressed as a solvable row instead of a
+# skipped one, since every cell needs SOME row in a system sized (nx*ny).
+# Face coupling uses the exact same "neighbour must be GROUNDED" Neumann rule
+# as diffusion_source above (not just the domain edge) -- see that function's
+# own docstring for why OCEAN/LAND get the same treatment as OTHER_BASIN/
+# FROZEN_BED here, unlike h's operator.
+#
+# Local (opening/closure) terms are evaluated explicitly, at the lagged b/N/
+# beta/lc (matching Eq. 17: only the spatial term is implicit) -- the exact
+# same RHS ImplicitGapScheme's own compute_b_implicit_kernel! would produce
+# under StandardCreep, just here it becomes the right-hand side of a global
+# solve instead of the final per-cell answer.
+"""
+$(TYPEDSIGNATURES)
+
+Builds `b`'s own diffusion operator `(I - dt*∇·D∇)` and RHS (SUHMO Eq. 17) into `sals` -- see the
+module-level note just above for the boundary convention and the local-term treatment. `aP = 1 +
+dt*(D_E+D_W)/dx2 + dt*(D_N+D_S)/dy2` (the `1` is the equation's own "`I`"), each face coupling
+`dt*D_face/dx2_or_dy2` if that neighbour is `GROUNDED`, else `0` -- symmetric by construction (a
+shared face's `D` value is read identically from both sides, same reasoning as `h`'s own operator).
+"""
+@parallel_indices (ix, iy) function update_SALS_b_diffusion_kernel!(mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, b, mdot, beta, abs_ub, A_visc, N, lc, D_x, D_y, rho_i, n_minus_1, dx2, dy2, dt)
+
+    nx, ny = size(mask, 1), size(mask, 2)
+
+    if ix <= nx && iy <= ny
+
+        row = ix + (iy - 1) * nx
+        m = mask[ix, iy]
+
+        if m == GROUNDED
+
+            aE = (ix < nx && mask[ix+1, iy] == GROUNDED) ? dt * D_x[ix+1, iy] / dx2 : zero(dt)
+            aW = (ix > 1  && mask[ix-1, iy] == GROUNDED) ? dt * D_x[ix, iy]   / dx2 : zero(dt)
+            aN = (iy < ny && mask[ix, iy+1] == GROUNDED) ? dt * D_y[ix, iy+1] / dy2 : zero(dt)
+            aS = (iy > 1  && mask[ix, iy-1] == GROUNDED) ? dt * D_y[ix, iy]   / dy2 : zero(dt)
+
+            nzval[idxP[ix, iy]] = one(aE) + aE + aW + aN + aS
+            ix < nx && (nzval[idxE[ix, iy]] = -aE)
+            ix > 1  && (nzval[idxW[ix, iy]] = -aW)
+            iy < ny && (nzval[idxN[ix, iy]] = -aN)
+            iy > 1  && (nzval[idxS[ix, iy]] = -aS)
+
+            rhs[row] = b[ix, iy] + dt * (mdot[ix, iy] / rho_i + beta[ix, iy] * abs_ub[ix, iy] -
+                            A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy] * lc[ix, iy])
+
+        else # not evolved: frozen at its current value, same convention as compute_b_implicit_kernel!'s own GROUNDED-only guard
+
+            nzval[idxP[ix, iy]] = 1
+            rhs[row] = b[ix, iy]
+
+        end
+
+    end
+
+    return
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Rebuilds `sals.M`/`sals.rhs` in place for `b`'s own diffusion solve from the current `s`/`p`/`dt`
+-- see [`update_SALS_b_diffusion_kernel!`](@ref).
+"""
+function update_SALS_b_diffusion!(sals::SparseAssembledLinearSystem, s::State, g::Grid, p::ModelParameters, dt)
+
+    rhs = sals.rhs
+    nzval = sals.M.nzval
+    idxP, idxE, idxW, idxN, idxS = sals.idxP, sals.idxE, sals.idxW, sals.idxN, sals.idxS
+
+    fill!(nzval, 0)
+    fill!(rhs, 0)
+
+    @parallel update_SALS_b_diffusion_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.b, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, s.lc, s.D_x, s.D_y, p.rho_i, p.n_minus_1_exp, g.dx2, g.dy2, dt)
+
+    return
+
+end
+
+# MatrixFreeLinearSystem counterpart of update_SALS_b_diffusion_kernel! -- same per-cell logic, no
+# sparse matrix to address into (see update_MFLS_elliptic_kernel!'s own note on this pairing).
+@parallel_indices (ix, iy) function update_MFLS_b_diffusion_kernel!(mask, aP, aE, aW, aN, aS, rhs, b, mdot, beta, abs_ub, A_visc, N, lc, D_x, D_y, rho_i, n_minus_1, dx2, dy2, dt)
+
+    nx, ny = size(mask, 1), size(mask, 2)
+
+    if ix <= nx && iy <= ny
+
+        row = ix + (iy - 1) * nx
+        m = mask[ix, iy]
+
+        if m == GROUNDED
+
+            aE_ij = (ix < nx && mask[ix+1, iy] == GROUNDED) ? dt * D_x[ix+1, iy] / dx2 : zero(dt)
+            aW_ij = (ix > 1  && mask[ix-1, iy] == GROUNDED) ? dt * D_x[ix, iy]   / dx2 : zero(dt)
+            aN_ij = (iy < ny && mask[ix, iy+1] == GROUNDED) ? dt * D_y[ix, iy+1] / dy2 : zero(dt)
+            aS_ij = (iy > 1  && mask[ix, iy-1] == GROUNDED) ? dt * D_y[ix, iy]   / dy2 : zero(dt)
+
+            aP[ix, iy] = one(aE_ij) + aE_ij + aW_ij + aN_ij + aS_ij
+            ix < nx && (aE[ix, iy] = aE_ij)
+            ix > 1  && (aW[ix, iy] = aW_ij)
+            iy < ny && (aN[ix, iy] = aN_ij)
+            iy > 1  && (aS[ix, iy] = aS_ij)
+
+            rhs[row] = b[ix, iy] + dt * (mdot[ix, iy] / rho_i + beta[ix, iy] * abs_ub[ix, iy] -
+                            A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy] * lc[ix, iy])
+
+        else
+
+            aP[ix, iy] = 1
+            rhs[row] = b[ix, iy]
+
+        end
+
+    end
+
+    return
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Rebuilds `mfls.aP`/`aE`/`aW`/`aN`/`aS`/`rhs` in place for `b`'s own diffusion solve -- the
+[`MatrixFreeLinearSystem`](@ref) counterpart of [`update_SALS_b_diffusion!`](@ref).
+"""
+function update_MFLS_b_diffusion!(mfls::MatrixFreeLinearSystem, s::State, g::Grid, p::ModelParameters, dt)
+
+    fill!(mfls.aP, 0)
+    fill!(mfls.aE, 0)
+    fill!(mfls.aW, 0)
+    fill!(mfls.aN, 0)
+    fill!(mfls.aS, 0)
+    fill!(mfls.rhs, 0)
+
+    @parallel update_MFLS_b_diffusion_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.b, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, s.lc, s.D_x, s.D_y, p.rho_i, p.n_minus_1_exp, g.dx2, g.dy2, dt)
+
+    return
+
+end
+
 # The matrix-free matvec: y = A*x computed directly from the stencil
 # coefficients, with no sparse matrix ever materialized. x/y arrive as flat
 # Vectors (Krylov.jl's calling convention); reshape is a zero-copy view for a
@@ -877,6 +1023,28 @@ function solve_parabolic_linear_system!(ls::CholeskyDirectSolver, s::State, g::G
     ls.h_vec .= ls.fact \ ls.sals.rhs
 
     s.h .= reshape(ls.h_vec, g.nx, g.ny)
+
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Solves `b`'s own coupled diffusion system (SUHMO Eq. 17) via `ls`, storing the (clamped to
+`p.b_min`/`p.b_max`, same convention every other `compute_b!` method uses) result in `s.b` -- the
+[`CholeskyDirectSolver`](@ref) method. `ls` here is the *second*, independent solver instance
+bundled in [`WithDiffusion`](@ref) (built the same way as `h`'s own, e.g. a second
+`CholeskyDirectSolver(grid)`) -- reuses `ls.h_vec` as a generic solve-result scratch buffer despite
+its name; this instance never actually solves for `h`.
+"""
+function solve_b_diffusion!(ls::CholeskyDirectSolver, s::State, g::Grid, p::ModelParameters, dt)
+
+    update_SALS_b_diffusion!(ls.sals, s, g, p, dt)
+
+    cholesky!(ls.fact, Symmetric(ls.sals.M))
+
+    ls.h_vec .= ls.fact \ ls.sals.rhs
+
+    s.b .= clamp.(reshape(ls.h_vec, g.nx, g.ny), p.b_min, p.b_max)
 
 end
 
@@ -1050,6 +1218,25 @@ end
 """
 $(TYPEDSIGNATURES)
 
+Solves `b`'s own coupled diffusion system (SUHMO Eq. 17), storing the (clamped) result in `s.b` --
+the [`CGIterativeSolver`](@ref) over [`SparseAssembledLinearSystem`](@ref) method, warm-started
+from the current `s.b` (a good starting guess: `b`'s own value from the previous timestep).
+"""
+function solve_b_diffusion!(ls::CGIterativeSolver{<:SparseAssembledLinearSystem}, s::State, g::Grid, p::ModelParameters, dt)
+
+    update_SALS_b_diffusion!(ls.lsy, s, g, p, dt)
+    update_diag_precond!(ls.precond_diag, ls.lsy)
+    precond_matrix = _cg_precond!(ls)
+
+    cg!(ls.ws, ls.lsy.M, ls.lsy.rhs, vec(s.b); M = precond_matrix, ldiv = true)
+
+    s.b .= clamp.(reshape(ls.ws.x, g.nx, g.ny), p.b_min, p.b_max)
+
+end
+
+"""
+$(TYPEDSIGNATURES)
+
 Solves the linearized elliptic equation for `h`, storing the result in `s.h` -- the
 [`CGIterativeSolver`](@ref) over [`MatrixFreeLinearSystem`](@ref) method, using
 [`StencilOperator`](@ref) as `cg!`'s matvec.
@@ -1083,5 +1270,24 @@ function solve_parabolic_linear_system!(ls::CGIterativeSolver{<:MatrixFreeLinear
     cg!(ls.ws, StencilOperator(ls.lsy), ls.lsy.rhs, vec(s.h); M = precond_matrix, ldiv = true)
 
     s.h .= reshape(ls.ws.x, g.nx, g.ny)
+
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Solves `b`'s own coupled diffusion system (SUHMO Eq. 17), storing the (clamped) result in `s.b` --
+the [`CGIterativeSolver`](@ref) over [`MatrixFreeLinearSystem`](@ref) method, using
+[`StencilOperator`](@ref) as `cg!`'s matvec, warm-started from the current `s.b`.
+"""
+function solve_b_diffusion!(ls::CGIterativeSolver{<:MatrixFreeLinearSystem}, s::State, g::Grid, p::ModelParameters, dt)
+
+    update_MFLS_b_diffusion!(ls.lsy, s, g, p, dt)
+    update_diag_precond!(ls.precond_diag, ls.lsy)
+    precond_matrix = _cg_precond!(ls)
+
+    cg!(ls.ws, StencilOperator(ls.lsy), ls.lsy.rhs, vec(s.b); M = precond_matrix, ldiv = true)
+
+    s.b .= clamp.(reshape(ls.ws.x, g.nx, g.ny), p.b_min, p.b_max)
 
 end

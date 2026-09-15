@@ -229,3 +229,136 @@
         end
 
     end
+
+    @testset "solve_b_diffusion!: b's own coupled diffusion solve (SUHMO Eq. 17)" begin
+
+        # An independent dense-matrix reference solution, built fresh in this test (not by calling
+        # into update_SALS_b_diffusion_kernel! itself -- that would just test the code against
+        # itself). Small 3x3 grid, mixed mask (GROUNDED interior + OCEAN/LAND/OTHER_BASIN edges) so
+        # the Neumann convention at every neighbour category is actually exercised.
+        nx, ny = 3, 3
+        dx, dy = 10.0, 15.0
+        dx2, dy2 = dx^2, dy^2
+        dt = 3600.0
+
+        mask = [GROUNDED GROUNDED OCEAN;
+                GROUNDED GROUNDED GROUNDED;
+                LAND     GROUNDED OTHER_BASIN]
+
+        b      = [0.02 0.03 0.0;  0.015 0.025 0.03; 0.0 0.018 0.04]
+        N      = fill(5e5, nx, ny)
+        mdot   = fill(1e-8, nx, ny)
+        beta   = fill(2e-6, nx, ny)
+        abs_ub = fill(1e-6, nx, ny)
+        A_visc = fill(5e-25, nx, ny)
+        lc     = copy(b) # StandardCreep (l_c = b) for this test
+        D_x    = [1e-8 2e-8 0.0; 1.5e-8 2.5e-8 0.5e-8; 0.8e-8 1.2e-8 0.3e-8; 0.0 0.0 0.0] # (nx+1, ny)
+        D_y    = [1e-8 2e-8 1.5e-8 0.0; 2e-8 3e-8 2.5e-8 0.5e-8; 0.5e-8 1e-8 0.8e-8 0.0]  # (nx, ny+1)
+
+        p = ModelParameters(e_v = 0.0, n = 3.0)
+        n_minus_1 = Int(p.n - 1) # match p.n_minus_1_exp's own canonical_exponent path exactly (model_parameters.jl):
+                                  # x^2 (Int exponent, power-by-squaring) and x^2.0 (Float exponent, exp(y*log(x)))
+                                  # aren't guaranteed bit-identical, so this avoids a spurious ULP-level mismatch
+                                  # against the kernel's own fast integer-exponent path
+
+        # Independent reference build: dense (I - dt*div(D*grad(.))) operator and Eq. 17's own RHS.
+        Nc = nx * ny
+        Aref = zeros(Nc, Nc)
+        rhsref = zeros(Nc)
+        row(i, j) = i + (j - 1) * nx
+        for j in 1:ny, i in 1:nx
+            r = row(i, j)
+            if mask[i, j] == GROUNDED
+                aE = (i < nx && mask[i+1, j] == GROUNDED) ? dt * D_x[i+1, j] / dx2 : 0.0
+                aW = (i > 1  && mask[i-1, j] == GROUNDED) ? dt * D_x[i, j]   / dx2 : 0.0
+                aN = (j < ny && mask[i, j+1] == GROUNDED) ? dt * D_y[i, j+1] / dy2 : 0.0
+                aS = (j > 1  && mask[i, j-1] == GROUNDED) ? dt * D_y[i, j]   / dy2 : 0.0
+                Aref[r, r] = 1 + aE + aW + aN + aS
+                i < nx && (Aref[r, row(i+1, j)] = -aE)
+                i > 1  && (Aref[r, row(i-1, j)] = -aW)
+                j < ny && (Aref[r, row(i, j+1)] = -aN)
+                j > 1  && (Aref[r, row(i, j-1)] = -aS)
+                rhsref[r] = b[i, j] + dt * (mdot[i, j] / p.rho_i + beta[i, j] * abs_ub[i, j] -
+                                A_visc[i, j] * abs(N[i, j])^n_minus_1 * N[i, j] * lc[i, j])
+            else
+                Aref[r, r] = 1.0
+                rhsref[r] = b[i, j]
+            end
+        end
+        bref = reshape(Aref \ rhsref, nx, ny)
+
+        @testset "Cholesky solve matches the independent reference exactly" begin
+            grid = Grid(nx, ny, nx * dx, ny * dy) # dx = Lx/nx, so this reproduces dx/dy above
+            @assert grid.dx ≈ dx && grid.dy ≈ dy # sanity: the reference above assumed this exact dx/dy
+
+            s = State(grid)
+            s.mask .= mask; s.b .= b; s.N .= N; s.mdot .= mdot; s.beta .= beta; s.abs_ub .= abs_ub
+            s.A_visc .= A_visc; s.lc .= lc; s.D_x .= D_x; s.D_y .= D_y
+
+            ls = CholeskyDirectSolver(grid)
+            solve_b_diffusion!(ls, s, grid, p, dt)
+
+            @test Array(s.b) ≈ bref atol = 1e-12
+
+            # Non-GROUNDED cells are held exactly fixed (frozen identity row) -- b there is
+            # unchanged from its input value, not solved toward anything.
+            for j in 1:ny, i in 1:nx
+                mask[i, j] != GROUNDED && @test s.b[i, j] == b[i, j]
+            end
+        end
+
+        @testset "CG (SparseAssembledLinearSystem) solve agrees with the Cholesky/reference solution" begin
+            grid = Grid(nx, ny, nx * dx, ny * dy)
+            s = State(grid)
+            s.mask .= mask; s.b .= b; s.N .= N; s.mdot .= mdot; s.beta .= beta; s.abs_ub .= abs_ub
+            s.A_visc .= A_visc; s.lc .= lc; s.D_x .= D_x; s.D_y .= D_y
+
+            ls = CGIterativeSolver(grid, SparseAssembledLinearSystem)
+            solve_b_diffusion!(ls, s, grid, p, dt)
+
+            @test Array(s.b) ≈ bref atol = 1e-6 # CG's own convergence tolerance, looser than Cholesky's exact solve
+        end
+
+        @testset "sim.gs is truly ignored under WithDiffusion: different gs, identical result" begin
+            # Two Simulations differing ONLY in gap_scheme_choice, both with WithDiffusion active --
+            # if gs really has no effect while diffusion is on, one full step_b! call must leave
+            # both with bit-identical b.
+            grid = Grid(4, 4, 1e3, 1e3)
+            sl = RegularizedCoulombSlidingLaw(0.25)
+            mask4 = fill(GROUNDED, 4, 4)
+            mask4[end, :] .= OCEAN
+            mask4[1, :]   .= LAND
+            mask4[:, 1]   .= OTHER_BASIN
+            A_visc4 = fill(5e-25, 4, 4)
+            zb4     = repeat(reshape(-0.02 .* grid.x, 4, 1), 1, 4)
+            zs4     = zb4 .+ 500.0
+            b04     = [0.01 + 0.002 * i + 0.003 * j for i in 1:4, j in 1:4]
+            G4      = fill(0.06, 4, 4)
+            ub_x4   = fill(1e-6, 5, 4)
+            ub_y4   = zeros(4, 5)
+            ieb4    = zeros(4, 4)
+            ieb4[3, 3] = 3 / (grid.dx * grid.dy)
+            taub_x4 = zeros(5, 4)
+            taub_y4 = zeros(4, 5)
+
+            function build(gap_scheme_choice)
+                state = State(grid)
+                p4 = ModelParameters(e_v = 0.0)
+                set_initial_conditions!(state, grid, p4, sl, mask4, A_visc4, zb4, zs4, b04, G4, ub_x4, ub_y4, ieb4, taub_x4, taub_y4)
+                state.D_x .= 1e-8; state.D_y .= 1e-8
+                ls_h = CholeskyDirectSolver(grid)
+                ps = PicardSolver(50, floattype(1e-6), ls_h, grid)
+                ls_b = CholeskyDirectSolver(grid)
+                return Simulation(grid, state, 1, floattype(3600.0), p4, gap_scheme_choice, String[], ConstantMeltInput(), sl; ps = ps, diffusion_scheme = WithDiffusion(ls_b))
+            end
+
+            sim_explicit = build("explicit")
+            sim_fully_implicit = build("fully_implicit")
+
+            step_b!(sim_explicit)
+            step_b!(sim_fully_implicit)
+
+            @test Array(sim_explicit.state.b) == Array(sim_fully_implicit.state.b)
+        end
+
+    end
