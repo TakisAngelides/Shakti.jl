@@ -139,7 +139,7 @@
         wd = WithDiffusion(CholeskyDirectSolver(grid))
 
         @testset "NoDiffusion is always exactly zero" begin
-            @test Shakti.diffusion_source(NoDiffusion(), D_x, D_y, mask, b, 2, 2, nx, ny, dx2, dy2) == 0.0
+            @test Shakti.diffusion_source(Val(false), D_x, D_y, mask, b, 2, 2, nx, ny, dx2, dy2) == 0.0
         end
 
         @testset "Interior cell: only GROUNDED neighbours contribute, others are zero-flux" begin
@@ -168,7 +168,7 @@
             D_y2[2, 2] = 4e-8 # south face of cell (2,2)
 
             expected = -(D_x2[2, 2] * (b2[1, 2] - b2[2, 2]) / dx2 + D_y2[2, 2] * (b2[2, 1] - b2[2, 2]) / dy2)
-            @test Shakti.diffusion_source(wd, D_x2, D_y2, mask2, b2, 2, 2, nx, ny, dx2, dy2) ≈ expected
+            @test Shakti.diffusion_source(Val(true), D_x2, D_y2, mask2, b2, 2, 2, nx, ny, dx2, dy2) ≈ expected
             @test !(expected ≈ 0.0) # nonzero, driven entirely by the two GROUNDED (included) neighbours
 
             # Confirm the excluded (OCEAN/OTHER_BASIN) faces really contribute nothing -- wildly
@@ -176,7 +176,7 @@
             # ignored rather than just coincidentally zero in this particular setup.
             D_x2_alt = copy(D_x2); D_x2_alt[3, 2] = 999.0 # excluded east face
             D_y2_alt = copy(D_y2); D_y2_alt[2, 3] = 999.0 # excluded north face
-            @test Shakti.diffusion_source(wd, D_x2_alt, D_y2_alt, mask2, b2, 2, 2, nx, ny, dx2, dy2) ≈ expected
+            @test Shakti.diffusion_source(Val(true), D_x2_alt, D_y2_alt, mask2, b2, 2, 2, nx, ny, dx2, dy2) ≈ expected
         end
 
         @testset "Domain-edge cell: missing neighbours are zero-flux" begin
@@ -192,7 +192,7 @@
             D_y3[1, 2] = 6e-8 # north face of cell (1,1)
 
             expected_corner = -(D_x3[2, 1] * (b3[2, 1] - b3[1, 1]) / dx2 + D_y3[1, 2] * (b3[1, 2] - b3[1, 1]) / dy2)
-            @test Shakti.diffusion_source(wd, D_x3, D_y3, mask3, b3, 1, 1, nx, ny, dx2, dy2) ≈ expected_corner
+            @test Shakti.diffusion_source(Val(true), D_x3, D_y3, mask3, b3, 1, 1, nx, ny, dx2, dy2) ≈ expected_corner
         end
 
         @testset "M stays symmetric: the source term only touches rhs, never nzval" begin

@@ -286,10 +286,20 @@ just below) or when the neighbour is anything other than `GROUNDED`:
   - `OTHER_BASIN`/`FROZEN_BED`: `D` is already exactly zero at these faces automatically (inherited
     from `compute_D_kernel!`'s own zero-cascade through `dhdx`/`dpwdx`/`q_x`, `melt_rate.jl`), so
     this `GROUNDED`-only check is a no-op restatement for them, not new behaviour.
-"""
-@inline diffusion_source(::NoDiffusion, D_x, D_y, mask, b, ix, iy, nx, ny, dx2, dy2) = zero(eltype(b))
 
-@inline function diffusion_source(::WithDiffusion, D_x, D_y, mask, b, ix, iy, nx, ny, dx2, dy2)
+Dispatches on `Val{true}`/`Val{false}` rather than directly on `WithDiffusion`/`NoDiffusion`
+(`ds`) itself: `@parallel` infers a kernel's launch range by inspecting every one of its
+arguments, requiring each to be an array, scalar, or other `isbits` type -- true of every other
+scheme marker passed into these kernels (`Arithmetic()`, `MeltTerms{...}()`, `StandardCreep()`,
+all empty structs), but *not* of `WithDiffusion`, whose `ls` field holds a real
+[`AbstractLinearSolver`](@ref) (sparse matrices, factorizations, ...). The wrapper functions below
+convert `ds` to `Val(ds isa WithDiffusion)` -- an `isbits`, zero-size flag carrying no more than
+the one bit `@parallel` and this dispatch actually need -- right before the kernel call, rather
+than threading the heavy `ds` itself all the way into the hot loop.
+"""
+@inline diffusion_source(::Val{false}, D_x, D_y, mask, b, ix, iy, nx, ny, dx2, dy2) = zero(eltype(b))
+
+@inline function diffusion_source(::Val{true}, D_x, D_y, mask, b, ix, iy, nx, ny, dx2, dy2)
     acc = zero(eltype(b))
     if ix < nx && mask[ix+1, iy] == GROUNDED
         acc += D_x[ix+1, iy] * (b[ix+1, iy] - b[ix, iy]) / dx2
@@ -309,7 +319,7 @@ end
 # mask is passed first so @parallel infers the (ix,iy) launch range from its
 # shape (nx,ny) -- nzval/rhs are flat length-(nx*ny) Vectors, and using one of
 # those as the first arg would infer a 1D launch instead.
-@parallel_indices (ix, iy) function update_SALS_elliptic_kernel!(mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, zb, h, K, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, kfs, b, D_x, D_y, ds)
+@parallel_indices (ix, iy) function update_SALS_elliptic_kernel!(mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, zb, h, K, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, kfs, b, D_x, D_y, diffusion_on)
 
     nx, ny = size(mask, 1), size(mask, 2)
 
@@ -388,7 +398,7 @@ end
                         A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy] * lc[ix, iy] +
                         A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * (n * rho_w * ggrav * h[ix, iy]) * lc[ix, iy] + # term from Newton linearization of the creep closing term
                         ieb[ix, iy] +
-                        diffusion_source(ds, D_x, D_y, mask, b, ix, iy, nx, ny, dx2, dy2) + # -div(D*grad(b)) (SUHMO Eq. 11), zero under NoDiffusion
+                        diffusion_source(diffusion_on, D_x, D_y, mask, b, ix, iy, nx, ny, dx2, dy2) + # -div(D*grad(b)) (SUHMO Eq. 11), zero under NoDiffusion
                         dirichlet_rhs
         end
 
@@ -417,7 +427,7 @@ function update_SALS_elliptic!(sals::SparseAssembledLinearSystem, s::State, g::G
     fill!(nzval, 0)
     fill!(rhs, 0)
 
-    @parallel update_SALS_elliptic_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.zb, s.h, s.K, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, kfs, s.b, s.D_x, s.D_y, ds)
+    @parallel update_SALS_elliptic_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.zb, s.h, s.K, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, kfs, s.b, s.D_x, s.D_y, Val(ds isa WithDiffusion))
 
     return
 
@@ -450,7 +460,7 @@ end
 # Newton-corrected, same as the elliptic kernel) -- one full Parabolic_loop!
 # call still drives all of them to self-consistency across iterations, same
 # as Picard_loop! does.
-@parallel_indices (ix, iy) function update_SALS_parabolic_kernel!(mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, zb, h, h_old, K, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, kfs, e_v, dt, b, D_x, D_y, ds)
+@parallel_indices (ix, iy) function update_SALS_parabolic_kernel!(mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, zb, h, h_old, K, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, kfs, e_v, dt, b, D_x, D_y, diffusion_on)
 
     nx, ny = size(mask, 1), size(mask, 2)
 
@@ -508,7 +518,7 @@ end
                         A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy] * lc[ix, iy] +
                         A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * (n * rho_w * ggrav * h[ix, iy]) * lc[ix, iy] + # term from Newton linearization of the creep closing term
                         ieb[ix, iy] +
-                        diffusion_source(ds, D_x, D_y, mask, b, ix, iy, nx, ny, dx2, dy2) + # -div(D*grad(b)) (SUHMO Eq. 11), zero under NoDiffusion
+                        diffusion_source(diffusion_on, D_x, D_y, mask, b, ix, iy, nx, ny, dx2, dy2) + # -div(D*grad(b)) (SUHMO Eq. 11), zero under NoDiffusion
                         (e_v / dt) * h_old[ix, iy] +
                         dirichlet_rhs
         end
@@ -541,7 +551,7 @@ function update_SALS_parabolic!(sals::SparseAssembledLinearSystem, s::State, g::
     fill!(nzval, 0)
     fill!(rhs, 0)
 
-    @parallel update_SALS_parabolic_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.zb, s.h, h_old, s.K, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, kfs, p.e_v, dt, s.b, s.D_x, s.D_y, ds)
+    @parallel update_SALS_parabolic_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.zb, s.h, h_old, s.K, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, kfs, p.e_v, dt, s.b, s.D_x, s.D_y, Val(ds isa WithDiffusion))
 
     return
 
@@ -553,7 +563,7 @@ end
 # stored as the raw positive face conductances -- stencil_matvec_kernel!
 # below applies the minus sign when it uses them, matching the sign
 # convention update_SALS_elliptic_kernel! bakes directly into nzval.
-@parallel_indices (ix, iy) function update_MFLS_elliptic_kernel!(mask, aP, aE, aW, aN, aS, rhs, zb, h, K, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, kfs, b, D_x, D_y, ds)
+@parallel_indices (ix, iy) function update_MFLS_elliptic_kernel!(mask, aP, aE, aW, aN, aS, rhs, zb, h, K, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, kfs, b, D_x, D_y, diffusion_on)
 
     nx, ny = size(mask, 1), size(mask, 2)
 
@@ -610,7 +620,7 @@ end
                         A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy] * lc[ix, iy] +
                         A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * (n * rho_w * ggrav * h[ix, iy]) * lc[ix, iy] +
                         ieb[ix, iy] +
-                        diffusion_source(ds, D_x, D_y, mask, b, ix, iy, nx, ny, dx2, dy2) + # -div(D*grad(b)) (SUHMO Eq. 11), zero under NoDiffusion
+                        diffusion_source(diffusion_on, D_x, D_y, mask, b, ix, iy, nx, ny, dx2, dy2) + # -div(D*grad(b)) (SUHMO Eq. 11), zero under NoDiffusion
                         dirichlet_rhs
         end
 
@@ -635,7 +645,7 @@ function update_MFLS_elliptic!(mfls::MatrixFreeLinearSystem, s::State, g::Grid, 
     fill!(mfls.aS, 0)
     fill!(mfls.rhs, 0)
 
-    @parallel update_MFLS_elliptic_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.zb, s.h, s.K, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, kfs, s.b, s.D_x, s.D_y, ds)
+    @parallel update_MFLS_elliptic_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.zb, s.h, s.K, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, kfs, s.b, s.D_x, s.D_y, Val(ds isa WithDiffusion))
 
     return
 
@@ -647,7 +657,7 @@ end
 # for the storage-term/Newton-linearization reasoning, and for why `h_old`
 # (fixed for the whole real timestep) must be a separate argument from `h`
 # (the current Picard sub-iterate).
-@parallel_indices (ix, iy) function update_MFLS_parabolic_kernel!(mask, aP, aE, aW, aN, aS, rhs, zb, h, h_old, K, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, kfs, e_v, dt, b, D_x, D_y, ds)
+@parallel_indices (ix, iy) function update_MFLS_parabolic_kernel!(mask, aP, aE, aW, aN, aS, rhs, zb, h, h_old, K, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, kfs, e_v, dt, b, D_x, D_y, diffusion_on)
 
     nx, ny = size(mask, 1), size(mask, 2)
 
@@ -700,7 +710,7 @@ end
                         A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy] * lc[ix, iy] +
                         A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * (n * rho_w * ggrav * h[ix, iy]) * lc[ix, iy] + # term from Newton linearization of the creep closing term
                         ieb[ix, iy] +
-                        diffusion_source(ds, D_x, D_y, mask, b, ix, iy, nx, ny, dx2, dy2) + # -div(D*grad(b)) (SUHMO Eq. 11), zero under NoDiffusion
+                        diffusion_source(diffusion_on, D_x, D_y, mask, b, ix, iy, nx, ny, dx2, dy2) + # -div(D*grad(b)) (SUHMO Eq. 11), zero under NoDiffusion
                         (e_v / dt) * h_old[ix, iy] +
                         dirichlet_rhs
         end
@@ -726,7 +736,7 @@ function update_MFLS_parabolic!(mfls::MatrixFreeLinearSystem, s::State, g::Grid,
     fill!(mfls.aS, 0)
     fill!(mfls.rhs, 0)
 
-    @parallel update_MFLS_parabolic_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.zb, s.h, h_old, s.K, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, kfs, p.e_v, dt, s.b, s.D_x, s.D_y, ds)
+    @parallel update_MFLS_parabolic_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.zb, s.h, h_old, s.K, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, kfs, p.e_v, dt, s.b, s.D_x, s.D_y, Val(ds isa WithDiffusion))
 
     return
 
