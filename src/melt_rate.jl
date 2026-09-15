@@ -164,3 +164,67 @@ function compute_mdot!(s::State, p::ModelParameters, mt::MeltTerms)
     @parallel compute_mdot_kernel!(s.mdot, s.shear, s.potential, s.sensible, s.G, s.q_T, s.ub_x, s.taub_x, s.ub_y, s.taub_y, s.q_x, s.dhdx, s.q_y, s.dhdy, s.dpwdx, s.dpwdy, 1/p.L, p.rho_w, p.g, p.ct, p.cw, mt)
     return s
 end
+
+# D (SUHMO Eq. 10) is built from exactly the same two dissipation terms as mdot's own
+# Potential/Sensible contributions (potential-energy dissipation, sensible-heat exchange) -- just
+# with a different prefactor (b/(rho_i*L) instead of 1/L) and no geothermal/frictional/conductive
+# terms (those have no role in melting a channel's side walls). Reusing mt's own type parameters
+# to gate them, rather than a fresh always-on formula, keeps D consistent with whatever a run
+# already chose for mdot: a run with Sensible off shouldn't have D silently include it just
+# because p.ct/p.cw happen to be nonzero -- same rationale as ModelParameters' own docstring note
+# on mdot_includes_sensible not being inferred from ct/cw.
+#
+# Both faces in one launch (ParallelStencil infers the launch range from the union of every
+# argument's size, see compute_dhdxy_kernel!'s own note, field_gradients.jl); D_x/D_y are left
+# exactly zero (their @zeros default, never written) at domain-boundary faces and at any face
+# touching OTHER_BASIN/FROZEN_BED -- not via an explicit boundary branch, but because they're built
+# from q_x/dhdx/dpwdx (and the y-face equivalents), which are themselves already exactly zero
+# there (see compute_dhdx_kernel!'s docstring, field_gradients.jl): D_x = f(q_x, dhdx, dpwdx), and
+# q_x itself comes out to 0 wherever dhdx=0 (compute_q_and_Re_x_kernel!, water_flux.jl), so the
+# zero propagates through automatically.
+@parallel_indices (ix, iy) function compute_D_kernel!(D_x, D_y, b_x, b_y, q_x, q_y, dhdx, dhdy, dpwdx, dpwdy, Linv, rho_w, rho_i, ggrav, ct, cw,
+                                                        ::MeltTerms{Geothermal,Frictional,Potential,Sensible,Conductive}) where {Geothermal,Frictional,Potential,Sensible,Conductive}
+    if ix > 1 && ix < size(D_x, 1) && iy <= size(D_x, 2)
+        acc = zero(eltype(D_x))
+        if Potential
+            acc -= rho_w * ggrav * q_x[ix, iy] * dhdx[ix, iy]
+        end
+        if Sensible
+            acc += ct * cw * rho_w * q_x[ix, iy] * dpwdx[ix, iy]
+        end
+        D_x[ix, iy] = (b_x[ix, iy] / rho_i) * Linv * acc
+    end
+    if iy > 1 && iy < size(D_y, 2) && ix <= size(D_y, 1)
+        acc = zero(eltype(D_y))
+        if Potential
+            acc -= rho_w * ggrav * q_y[ix, iy] * dhdy[ix, iy]
+        end
+        if Sensible
+            acc += ct * cw * rho_w * q_y[ix, iy] * dpwdy[ix, iy]
+        end
+        D_y[ix, iy] = (b_y[ix, iy] / rho_i) * Linv * acc
+    end
+    return
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Skips updating `s.D_x`/`s.D_y` entirely under [`NoDiffusion`](@ref) (`linear_solver.jl`) -- they
+stay at whatever they last held (their `@zeros` default if never touched), which is correct since
+nothing reads them when diffusion is off.
+"""
+compute_D!(s::State, p::ModelParameters, mt::MeltTerms, ::NoDiffusion) = s
+
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.D_x`/`s.D_y` (the channel-wall diffusion coefficient, SUHMO Eq. 10) from the current
+`s.b_x`/`s.b_y`/`s.q_x`/`s.q_y`/`s.dhdx`/`s.dhdy`/`s.dpwdx`/`s.dpwdy` under [`WithDiffusion`](@ref)
+(`linear_solver.jl`) -- its two terms (potential-energy dissipation, sensible-heat exchange) gated
+by `mt`'s own `Potential`/`Sensible` flags, exactly like [`compute_mdot!`](@ref)'s matching terms.
+"""
+function compute_D!(s::State, p::ModelParameters, mt::MeltTerms, ::WithDiffusion)
+    @parallel compute_D_kernel!(s.D_x, s.D_y, s.b_x, s.b_y, s.q_x, s.q_y, s.dhdx, s.dhdy, s.dpwdx, s.dpwdy, 1/p.L, p.rho_w, p.rho_i, p.g, p.ct, p.cw, mt)
+    return s
+end

@@ -221,7 +221,7 @@ Solves for the new hydraulic head under [`EllipticHeadScheme`](@ref): runs the P
 solve (`sim.mi`'s melt input for the current time was already refreshed by [`step!`](@ref)).
 """
 function step_h!(hs::EllipticHeadScheme, sim::Simulation)
-    elliptic_solver!(hs.ps, sim.state, sim.grid, sim.p, sim.mt, sim.kfs, sim.sl; cnc = sim.cnc)
+    elliptic_solver!(hs.ps, sim.state, sim.grid, sim.p, sim.mt, sim.kfs, sim.sl; cnc = sim.cnc, ds = sim.ds)
 end
 
 """
@@ -231,7 +231,7 @@ Solves for the new hydraulic head under [`ParabolicHeadScheme`](@ref): repeats t
 linear solve to nonlinear convergence within this timestep ([`Parabolic_loop!`](@ref)).
 """
 function step_h!(hs::ParabolicHeadScheme, sim::Simulation)
-    Parabolic_loop!(hs.pps, sim.state, sim.grid, sim.p, sim.mt, sim.kfs, sim.sl, sim.dt[]; cnc = sim.cnc)
+    Parabolic_loop!(hs.pps, sim.state, sim.grid, sim.p, sim.mt, sim.kfs, sim.sl, sim.dt[]; cnc = sim.cnc, ds = sim.ds)
 end
 
 """

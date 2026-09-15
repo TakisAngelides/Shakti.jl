@@ -52,6 +52,48 @@ abstract type AbstractIterativeSolver <: AbstractLinearSolver end
 """
 $(TYPEDSIGNATURES)
 
+Whether `b`'s evolution includes the new channel-wall diffusion term (`∇·(D∇b)`, Felden et al.
+2023 -- SUHMO -- Eqs. 9-11, https://doi.org/10.5194/gmd-16-407-2023) -- multiple dispatch on the
+concrete subtype ([`NoDiffusion`](@ref)/[`WithDiffusion`](@ref)) picks whether the diffusion
+coefficient `D` (`s.D_x`/`s.D_y`, `melt_rate.jl`'s `compute_D!`) is refreshed every Picard
+iteration and whether `b`'s own timestep update solves the coupled diffusion system at all, same
+"dispatch on a type decided once outside the hot loop" idiom as [`AbstractOpenBySlidingScheme`](@ref)/
+[`AbstractCreepLengthScheme`](@ref) (`gap_height.jl`). Defined here (not in `gap_height.jl`, where
+those two live) because [`WithDiffusion`](@ref) bundles its own [`AbstractLinearSolver`](@ref) --
+`b`'s own diffusion operator needs a second, independent linear solve alongside `h`'s (different
+sparsity coefficients: `1` plus face diffusivities vs. `h`'s Newton-linearized creep-closure
+reaction term), not a shared one -- and this file (`linear_solver.jl`) is included well before
+`elliptic_solver.jl`, whose `refresh_head_dependents!`/`Picard_iteration!` need
+`AbstractDiffusionScheme` in scope to type-annotate `ds`.
+"""
+abstract type AbstractDiffusionScheme end
+
+"""
+$(TYPEDSIGNATURES)
+
+Today's behavior: `b`'s evolution has no diffusion term, `D` is never computed (its call is
+skipped entirely, not just multiplied by a zero prefactor, same "not just multiplied by zero"
+idiom as [`NoOpenBySliding`](@ref)).
+"""
+struct NoDiffusion <: AbstractDiffusionScheme end
+
+"""
+$(TYPEDSIGNATURES)
+
+Includes the channel-wall diffusion term in `b`'s evolution (and the matching `-∇·(D∇b)` source
+term in `h`'s elliptic/parabolic RHS): `D` is refreshed every Picard iteration from the current
+`q`/`∇h`/`∇P_w` (Eq. 10), and `b`'s own timestep update ([`compute_b!`](@ref)) solves the resulting
+coupled linear system using `ls` -- a *second*, independent [`AbstractLinearSolver`](@ref) instance
+from whatever solves `h` (`CholeskyDirectSolver`/`CGIterativeSolver`, same types, just built on
+`b`'s own operator).
+"""
+struct WithDiffusion{LS <: AbstractLinearSolver} <: AbstractDiffusionScheme
+    ls::LS
+end
+
+"""
+$(TYPEDSIGNATURES)
+
 How the assembled linear system is represented -- multiple dispatch on the concrete subtype picks
 between an explicit sparse matrix ([`SparseAssembledLinearSystem`](@ref), CPU-only, needed by
 [`CholeskyDirectSolver`](@ref)) and a matrix-free stencil representation

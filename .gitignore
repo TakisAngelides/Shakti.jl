@@ -14,6 +14,7 @@
 !/test/parabolic_solver_test.jl
 !/test/frozen_bed_test.jl
 !/test/gap_height_test.jl
+!/test/diffusion_test.jl
 
 # OS junk
 .DS_Store

@@ -47,6 +47,7 @@ struct State{A <: AbstractArray}
     ub_x::A       # sliding velocity in x direction
     taub_x::A     # basal shear stress in x direction
     dpwdx::A      # gradient of water pressure in x direction
+    D_x::A        # channel-wall diffusion coefficient in x direction (SUHMO Eq. 10, WithDiffusion only -- see AbstractDiffusionScheme, linear_solver.jl)
     valid_x::A    # 1.0 where the x-face does NOT touch an OTHER_BASIN or FROZEN_BED cell, else 0.0
 
     # YFace fields
@@ -57,6 +58,7 @@ struct State{A <: AbstractArray}
     ub_y::A       # sliding velocity in y direction
     taub_y::A     # basal shear stress in y direction
     dpwdy::A      # gradient of water pressure in y direction
+    D_y::A        # channel-wall diffusion coefficient in y direction, the y-face counterpart of D_x
     valid_y::A    # 1.0 where the y-face does NOT touch an OTHER_BASIN or FROZEN_BED cell, else 0.0
 end
 
@@ -122,6 +124,7 @@ function State(g::Grid)
     ub_x    = initialize_xface_field(g)
     taub_x  = initialize_xface_field(g)
     dpwdx   = initialize_xface_field(g)
+    D_x     = initialize_xface_field(g)
     valid_x = @fill(1.0, g.nx+1, g.ny) # float 1.0 = valid; recomputed in compute_face_masks!
 
     # YFace fields
@@ -132,12 +135,13 @@ function State(g::Grid)
     ub_y    = initialize_yface_field(g)
     taub_y  = initialize_yface_field(g)
     dpwdy   = initialize_yface_field(g)
+    D_y     = initialize_yface_field(g)
     valid_y = @fill(1.0, g.nx, g.ny+1) # float 1.0 = valid; recomputed in compute_face_masks!
 
     return State(
         h, pw, po, b, beta, lc, abs_ub, mdot, shear, potential, sensible, Re, K, G, q_T, zb, zs, H, ieb, lambda, A_visc, N, mask,
-        dhdx, q_x, Re_x, b_x, ub_x, taub_x, dpwdx, valid_x,
-        dhdy, q_y, Re_y, b_y, ub_y, taub_y, dpwdy, valid_y,
+        dhdx, q_x, Re_x, b_x, ub_x, taub_x, dpwdx, D_x, valid_x,
+        dhdy, q_y, Re_y, b_y, ub_y, taub_y, dpwdy, D_y, valid_y,
     )
 
 end

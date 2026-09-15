@@ -118,6 +118,7 @@ export AbstractLinearSolver, AbstractDirectSolver, AbstractIterativeSolver
 export AbstractLinearSystem, SparseAssembledLinearSystem, MatrixFreeLinearSystem
 export CholeskyDirectSolver, CGIterativeSolver
 export solve_elliptic_linear_system!, solve_parabolic_linear_system!
+export AbstractDiffusionScheme, NoDiffusion, WithDiffusion
 
 # preconditioner.jl
 export ChebyshevPreconditioner
@@ -138,6 +139,7 @@ export compute_taub_x!, compute_taub_y!, compute_taub_xy!
 # melt_rate.jl
 export MeltTerms
 export compute_shear!, compute_potential!, compute_sensible!, compute_mdot!
+export compute_D!
 
 # elliptic_solver.jl
 export AbstractHeadRelaxation, NoHeadRelaxation, UnderHeadRelaxation

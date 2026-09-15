@@ -122,10 +122,13 @@ in the melt rate -- e.g. its `Sensible` flag is the last term, accounting for ch
 pressure-melting-point temperature with changes in water pressure. The `kfs` that stands for K face scheme determines how to calculate the
 transmissivity on a grid cell face given the two cell center values, with choices such as arithmetic or harmonic mean.
 The `sl` sliding law determines which sliding law to use to calculate the basal shear stress tau_b. The choices can be
-regularized Coulomb law, linear law, or prescribed by the user.
+regularized Coulomb law, linear law, or prescribed by the user. The `ds` keyword (an
+[`AbstractDiffusionScheme`](@ref), `linear_solver.jl`; [`NoDiffusion`](@ref) by default) chooses whether the
+channel-wall diffusion coefficient `D` is refreshed every Picard iteration ([`WithDiffusion`](@ref) recomputes it
+from the current `q`/`∇h`/`∇P_w`; `NoDiffusion` skips it entirely).
 """
-function elliptic_solver!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping())
-    Picard_loop!(ps, state, grid, p, mt, kfs, sl; cnc)
+function elliptic_solver!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion())
+    Picard_loop!(ps, state, grid, p, mt, kfs, sl; cnc, ds)
 end
 
 """
@@ -135,7 +138,7 @@ Repeatedly calls [`Picard_iteration!`](@ref) (up to `ps.iters` times), checking 
 `ps.check_every` iterations via a relative max-norm on the head update
 (`max|delta_h| / (max|h| + eps) < ps.tol`), and sets `ps.converged`/`ps.last_iter` accordingly.
 """
-function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping())
+function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion())
 
     s = state
 
@@ -148,7 +151,7 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
         # Store previous head for convergence check
         @. ps.h_prev = s.h
 
-        Picard_iteration!(ps.ls, ps.hr, state, grid, p, mt, kfs, sl, ps.h_prev; cnc) # run one linear solve to update h and the relevant fields
+        Picard_iteration!(ps.ls, ps.hr, state, grid, p, mt, kfs, sl, ps.h_prev; cnc, ds) # run one linear solve to update h and the relevant fields
 
         @. ps.delta_h = s.h - ps.h_prev
 
@@ -179,14 +182,14 @@ end
 $(TYPEDSIGNATURES)
 
 Refreshes every state field that depends on the just-solved `h` (`pw`, `N`, `q`/`Re`, `taub`,
-`mdot`, `K`) -- the tail shared by one elliptic Picard iteration
-([`Picard_iteration!`](@ref)) and one parabolic backward-Euler iteration
+`mdot`, `K`, and -- under [`WithDiffusion`](@ref) -- `D`) -- the tail shared by one elliptic Picard
+iteration ([`Picard_iteration!`](@ref)) and one parabolic backward-Euler iteration
 ([`Parabolic_iteration!`](@ref), `parabolic_solver.jl`), once each has updated `h` by its own
 linear solve. The water depth `b` is left untouched here in either case until we step out of the
 head solve entirely and update `b` following Eq. 2 of
 https://gmd.copernicus.org/articles/11/2955/2018/.
 """
-function refresh_head_dependents!(s::State, g::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping())
+function refresh_head_dependents!(s::State, g::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion())
 
     compute_dhdxy!(s, g) # updates gradient of h in both x and y directions in one kernel to reduce the number of kernels
 
@@ -203,6 +206,8 @@ function refresh_head_dependents!(s::State, g::Grid, p::ModelParameters, mt::Mel
 
     compute_K!(s, p) # update the transmissivity
 
+    compute_D!(s, p, mt, ds) # update the channel-wall diffusion coefficient (no-op under NoDiffusion)
+
     return s
 
 end
@@ -214,12 +219,12 @@ One Picard iteration: solves the linearized system for a new `h` ([`solve_ellipt
 optionally relaxes it ([`relax_h!`](@ref)), then refreshes every field that depends on the new `h`
 via [`refresh_head_dependents!`](@ref) so the next iteration's linearization is consistent.
 """
-function Picard_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation, s::State, g::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, h_prev; cnc::AbstractCellNClamping = NoCellNClamping())
+function Picard_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation, s::State, g::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, h_prev; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion())
 
     solve_elliptic_linear_system!(ls, s, g, p, kfs) # update the h field
     relax_h!(hr, s, h_prev) # update the h field again according to the relaxation parameter, damp the raw Picard update before anything downstream of h is recomputed, so the next iteration's coefficients are consistent with the relaxed h
 
-    refresh_head_dependents!(s, g, p, mt, kfs, sl; cnc)
+    refresh_head_dependents!(s, g, p, mt, kfs, sl; cnc, ds)
 
 end
 
