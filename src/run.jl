@@ -179,7 +179,7 @@ update_dt!(sim::Simulation, ::FixedTimeStep) = sim
 
 function update_dt!(sim::Simulation, ts::AdaptiveTimeStep)
     s, p = sim.state, sim.p
-    @parallel compute_dt_rate_kernel!(ts.rate_field, s.mask, s.b, s.abs_ub, s.A_visc, s.N, p.n_minus_1_exp, p.br, p.lr)
+    @parallel compute_dt_rate_kernel!(ts.rate_field, s.mask, s.b, s.abs_ub, s.A_visc, s.N, p.n_minus_1_exp, p.br, p.lr, sim.cls, p.b_c)
     stat = rate_statistic(ts.rate_field, ts)
     dt = stat > 0 ? ts.safety_factor / stat : ts.dt_max # stat<=0 means no grounded cell has a positive rate (e.g. all N<=0) -- fall back to dt_max rather than dividing by zero/a negative
     dt = clamp(dt, ts.dt_min, ts.dt_max)
@@ -256,7 +256,7 @@ Implicit (backward-Euler) update of `sim.state.b`: implicit on the creep closure
 """
 function compute_b!(sim::Simulation, ::ImplicitGapScheme)
     s, p = sim.state, sim.p
-    @parallel compute_b_implicit_kernel!(s.b, s.mask, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, sim.dt[], p.b_min, p.b_max)
+    @parallel compute_b_implicit_kernel!(s.b, s.mask, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, sim.dt[], p.b_min, p.b_max, sim.cls, p.b_c)
     return sim
 end
 
@@ -267,7 +267,7 @@ Explicit (forward-Euler) update of `sim.state.b`: cheaper per step, but only sta
 """
 function compute_b!(sim::Simulation, ::ExplicitGapScheme)
     s, p = sim.state, sim.p
-    @parallel compute_b_explicit_kernel!(s.b, s.mask, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, sim.dt[], p.b_min, p.b_max)
+    @parallel compute_b_explicit_kernel!(s.b, s.mask, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, sim.dt[], p.b_min, p.b_max, sim.cls, p.b_c)
     return sim
 end
 
@@ -278,11 +278,12 @@ Fully implicit update of `sim.state.b`: both the creep-closure term and the open
 term are evaluated at the new `b` -- unconditionally stable for any `sim.dt`, regardless of `p.br`.
 Unlike [`ImplicitGapScheme`](@ref), this reads `p.br`/`p.lr` directly instead of `s.beta` (which
 stays lagged by design, see `gap_height.jl`'s module docstring) -- see
-[`compute_b_fully_implicit_kernel!`](@ref) for the closed-form two-branch solve.
+[`compute_b_fully_implicit_kernel!`](@ref) for the closed-form solve (two branches under
+[`StandardCreep`](@ref), four under [`CreepCutoff`](@ref)).
 """
 function compute_b!(sim::Simulation, ::FullyImplicitGapScheme)
     s, p = sim.state, sim.p
-    @parallel compute_b_fully_implicit_kernel!(s.b, s.mask, s.mdot, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, sim.dt[], p.b_min, p.b_max, p.br, p.lr)
+    @parallel compute_b_fully_implicit_kernel!(s.b, s.mask, s.mdot, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, sim.dt[], p.b_min, p.b_max, p.br, p.lr, sim.cls, p.b_c)
     return sim
 end
 
@@ -290,8 +291,8 @@ end
 $(TYPEDSIGNATURES)
 
 Evolves the gap height `sim.state.b` for one timestep ([`compute_b!`](@ref), dispatching
-internally on `sim.gs`), then refreshes everything that depends on it (`beta`, `b_x`, `b_y`) so
-they're ready for the *next* timestep's Picard loop.
+internally on `sim.gs`), then refreshes everything that depends on it (`beta`, `lc`, `b_x`, `b_y`)
+so they're ready for the *next* timestep's Picard loop.
 """
 function step_b!(sim::Simulation)
 
@@ -301,6 +302,7 @@ function step_b!(sim::Simulation)
     apply_cell_gap_clamping!(s, sim.cgc) # optional per-cell b_min/b_max override on top of p's global clamp -- no-op under the default NoCellGapClamping()
 
     compute_beta!(s, p, sim.oss) # opening-by-sliding parameter depends on the new b
+    compute_lc!(s, p, sim.cls)   # ice-creep length scale depends on the new b
     compute_b_x!(s)          # water depth on x faces
     compute_b_y!(s)          # water depth on y faces
 

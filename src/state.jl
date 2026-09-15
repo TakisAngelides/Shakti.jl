@@ -18,6 +18,7 @@ struct State{A <: AbstractArray}
     po::A         # ice overburden pressure
     b::A          # water depth
     beta::A       # parameter for opening by sliding over bedrock bumps
+    lc::A         # ice-creep length scale (see AbstractCreepLengthScheme, gap_height.jl); equals b under StandardCreep
     abs_ub::A     # absolute value of the sliding velocity
     mdot::A       # melt rate
     shear::A      # frictional (sliding) heating contribution to mdot, preallocated for compute_mdot!
@@ -94,6 +95,7 @@ function State(g::Grid)
     po        = initialize_center_field(g)
     b         = initialize_center_field(g)
     beta      = initialize_center_field(g)
+    lc        = initialize_center_field(g)
     abs_ub    = initialize_center_field(g)
     mdot      = initialize_center_field(g)
     shear     = initialize_center_field(g)
@@ -133,7 +135,7 @@ function State(g::Grid)
     valid_y = @fill(1.0, g.nx, g.ny+1) # float 1.0 = valid; recomputed in compute_face_masks!
 
     return State(
-        h, pw, po, b, beta, abs_ub, mdot, shear, potential, sensible, Re, K, G, q_T, zb, zs, H, ieb, lambda, A_visc, N, mask,
+        h, pw, po, b, beta, lc, abs_ub, mdot, shear, potential, sensible, Re, K, G, q_T, zb, zs, H, ieb, lambda, A_visc, N, mask,
         dhdx, q_x, Re_x, b_x, ub_x, taub_x, dpwdx, valid_x,
         dhdy, q_y, Re_y, b_y, ub_y, taub_y, dpwdy, valid_y,
     )

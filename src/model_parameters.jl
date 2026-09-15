@@ -17,6 +17,7 @@ struct ModelParameters{F <: AbstractFloat, NE1, NE2, NE3}
     L::F       # latent heat of fusion
     br::F      # bedrock bump height
     lr::F      # bedrock bump spacing
+    b_c::F     # creep cutoff length scale (see AbstractCreepLengthScheme, gap_height.jl); 0 by default, i.e. l_c = b (StandardCreep)
     ct::F      # change of pressure melting point with temperature
     cw::F      # heat capacity of water
     p_atm::F   # atmospheric pressure, used as the Dirichlet reference for LAND/OCEAN BCs
@@ -69,6 +70,15 @@ Left off by default for the same reason as `b_max` -- a modeling choice (does cl
 real resolution problem, or is it a reasonable numerical safeguard, is worth deciding per
 application) -- opt in explicitly (e.g. `ModelParameters(N_min = 0.0)`) where the risk applies.
 
+`b_c` (default `0.0`) switches the ice-creep length scale `l_c` used in the closure term between
+`StandardCreep` (`l_c = b`, today's behavior, selected when `b_c == 0`) and `CreepCutoff`
+(Felden et al. 2023's Eq. 7, `l_c = b*(1 - (b_c-b)/b_c)` for `b <= b_c`, else `l_c = b`) -- see
+[`AbstractCreepLengthScheme`](@ref), `gap_height.jl`. Cuts ice-creep closure off faster than the
+standard linear-in-`b` term as `b -> 0` below `b_c`, letting sheet-like drainage survive under
+persistent lubricated bed areas rather than fully closing. Combines with every
+[`AbstractGapScheme`](@ref), including [`FullyImplicitGapScheme`](@ref) (see
+[`compute_b_fully_implicit_kernel!`](@ref)'s docstring for its closed-form solve).
+
 `mdot_includes_G`/`mdot_includes_frictional`/`mdot_includes_potential`/`mdot_includes_sensible`/
 `mdot_includes_qT` each independently switch one term of [`compute_mdot!`](@ref) on or off --
 geothermal flux `s.G`, frictional (sliding) heating, potential-energy dissipation, the sensible-heat
@@ -93,6 +103,7 @@ function ModelParameters(;
     L = 334e3,
     br = 0.1, # low/zero br (weak bed-bump opening) starves the Picard iteration and can fail to converge (observed on Thwaites: br=0 hit the 500-iteration cap every step); PicardSolver(...; alpha=0.5) (UnderHeadRelaxation) restored fast convergence there while leaving the converged N field essentially unchanged from the (non-converged) unrelaxed run -- prefer it over floor/cap hacks (N_min, b_min) which change the answer by clamping the very cells that were unstable
     lr = 2.0,
+    b_c = 0.0, # 0 => StandardCreep (l_c = b, today's behavior); nonzero => CreepCutoff (Felden et al. 2023 Eq. 7)
     ct = 7.5e-8,
     cw = 4.22e3,
     p_atm = 0.0,
@@ -113,7 +124,7 @@ function ModelParameters(;
     inv_n_exp = canonical_exponent(1 / n_F)
 
     return ModelParameters(
-        F(rho_w), F(rho_sw), F(rho_i), F(g), F(nu), n_F, F(omega), F(L), F(br), F(lr), F(ct), F(cw), F(p_atm), F(b_min), F(b_max), F(N_min), F(N_max), F(e_v),
+        F(rho_w), F(rho_sw), F(rho_i), F(g), F(nu), n_F, F(omega), F(L), F(br), F(lr), F(b_c), F(ct), F(cw), F(p_atm), F(b_min), F(b_max), F(N_min), F(N_max), F(e_v),
         mdot_includes_G, mdot_includes_frictional, mdot_includes_potential, mdot_includes_sensible, mdot_includes_qT,
         n_exp, n_minus_1_exp, inv_n_exp
     )

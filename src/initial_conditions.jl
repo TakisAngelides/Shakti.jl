@@ -4,7 +4,7 @@ $(TYPEDSIGNATURES)
 Populates `s` (built with [`State(::Grid)`](@ref), fields all zero) with a real starting state:
 the raw input fields (`mask`, `A_visc`, `zb`, `zs`, `b`, `G`, `ub_x`, `ub_y`, `ieb`, `taub_x`,
 `taub_y`) are copied in (converting to `s`'s backend/element type via `Data.Array`), then every
-derived field (`H`, `beta`, `abs_ub`, `po`, `pw`, `N`, `h`, gradients, `Re`, `b_x`/`b_y`,
+derived field (`H`, `beta`, `lc`, `abs_ub`, `po`, `pw`, `N`, `h`, gradients, `Re`, `b_x`/`b_y`,
 `q_x`/`q_y`, `taub_x`/`taub_y`, `mdot`, `K`) is computed from those in the same order the Picard
 loop itself would produce them, so `s` is immediately a valid state to time-step or Picard-solve
 from. `pw` is initialized to half of ice overburden pressure (`po/2`) as a generic starting
@@ -64,6 +64,10 @@ function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, sl::Abst
     # Opening-by-sliding scheme setup: same "off automatically when p.br == 0" rule as Simulation's own constructor.
     oss = iszero(p.br) ? NoOpenBySliding() : WithOpenBySliding()
     compute_beta!(s, p, oss) # update beta which is the parameter field used in the opening-by-sliding term
+
+    # Creep-length scheme setup: same "off automatically when p.b_c == 0" rule as Simulation's own constructor.
+    cls = iszero(p.b_c) ? StandardCreep() : CreepCutoff()
+    compute_lc!(s, p, cls) # update lc, the ice-creep length scale read by the closure term everywhere downstream
 
     @. s.G = G # geothermal heat flux
 

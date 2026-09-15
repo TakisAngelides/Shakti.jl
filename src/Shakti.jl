@@ -152,6 +152,7 @@ export Parabolic_loop!, Parabolic_iteration!
 
 # gap_height.jl
 export AbstractOpenBySlidingScheme, WithOpenBySliding, NoOpenBySliding
+export AbstractCreepLengthScheme, StandardCreep, CreepCutoff
 
 # simulation.jl
 export AbstractHeadScheme, ParabolicHeadScheme, EllipticHeadScheme
@@ -175,7 +176,7 @@ export compute_q_x!, compute_q_y!, compute_q_xy!, compute_Re_x!, compute_Re_y!, 
 export compute_q_and_Re_x!, compute_q_and_Re_y!, compute_q_and_Re_xy!
 
 # gap_height.jl
-export compute_beta!, compute_b_x!, compute_b_y!, compute_b!
+export compute_beta!, compute_lc!, compute_b_x!, compute_b_y!, compute_b!
 
 # initial_conditions.jl
 export set_initial_conditions!

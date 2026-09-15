@@ -188,7 +188,7 @@ and every "which scheme/law" choice (head, gap, melt-rate terms, K-face, melt-in
 bundled together with the observer that records output. Build one with the keyword constructor
 below (not this positional one directly), then call [`run!`](@ref).
 """
-struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHeadScheme, GS <: AbstractGapScheme, MT <: MeltTerms, OSS <: AbstractOpenBySlidingScheme, O <: AbstractObserver, G <: Grid, S <: State, MI <: AbstractMeltInput, KFS <: AbstractKFaceScheme, SL <: AbstractSlidingLaw, CGC <: AbstractCellGapClamping, CNC <: AbstractCellNClamping, TS <: AbstractTimeStepScheme}
+struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHeadScheme, GS <: AbstractGapScheme, MT <: MeltTerms, OSS <: AbstractOpenBySlidingScheme, CLS <: AbstractCreepLengthScheme, O <: AbstractObserver, G <: Grid, S <: State, MI <: AbstractMeltInput, KFS <: AbstractKFaceScheme, SL <: AbstractSlidingLaw, CGC <: AbstractCellGapClamping, CNC <: AbstractCellNClamping, TS <: AbstractTimeStepScheme}
     tsteps::Int
     dt::Base.RefValue{F} # a Ref so AdaptiveTimeStep can update it in place each step, same reason total_time is a Ref despite Simulation itself being immutable
     p::P
@@ -196,6 +196,7 @@ struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHea
     gs::GS
     mt::MT
     oss::OSS
+    cls::CLS # AbstractCreepLengthScheme; StandardCreep() unless p.b_c != 0 (see gap_height.jl)
     observer::O
     grid::G
     state::S
@@ -226,6 +227,9 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
   `p.mdot_includes_qT` (each defaults to `true` in [`ModelParameters`](@ref)).
 - Opening-by-sliding scheme: off automatically ([`NoOpenBySliding`](@ref)) if `p.br` is zero, else
   [`WithOpenBySliding`](@ref).
+- Creep-length scheme: [`StandardCreep`](@ref) (`l_c = b`) automatically if `p.b_c` is zero, else
+  [`CreepCutoff`](@ref) (see [`compute_b_fully_implicit_kernel!`](@ref) for how this combines with
+  `gap_scheme_choice = "fully_implicit"`).
 - `k_face_choice`: `"arithmetic"` or `"harmonic"` (see [`AbstractKFaceScheme`](@ref)).
 - `cell_gap_clamping`: [`NoCellGapClamping`](@ref) (default, no-op) or a [`CellGapClamping`](@ref)
   overriding specific cells' `b_min`/`b_max` on top of `p`'s global values (see
@@ -277,6 +281,10 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
     # factor in compute_beta!'s term, see compute_beta_kernel!) is zero.
     oss = iszero(p.br) ? NoOpenBySliding() : WithOpenBySliding()
 
+    # Creep-length scheme setup: CreepCutoff automatically if p.b_c (the sole
+    # factor in creep_length's cutoff branch, see gap_height.jl) is nonzero.
+    cls = iszero(p.b_c) ? StandardCreep() : CreepCutoff()
+
     # K-face averaging scheme setup
     if k_face_choice == "arithmetic"
         kfs = Arithmetic()
@@ -321,6 +329,6 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
         error("Unknown which_observer: \"$which_observer\" (expected \"IO\" or \"Live\")")
     end
 
-    return Simulation(tsteps, Ref(dt), p, hs, gs, mt, oss, observer, grid, state, mi, kfs, sl, verbose, Ref(zero(dt)), cell_gap_clamping, cell_N_clamping, timestep_scheme)
+    return Simulation(tsteps, Ref(dt), p, hs, gs, mt, oss, cls, observer, grid, state, mi, kfs, sl, verbose, Ref(zero(dt)), cell_gap_clamping, cell_N_clamping, timestep_scheme)
 
 end
