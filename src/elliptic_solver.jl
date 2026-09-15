@@ -221,7 +221,7 @@ via [`refresh_head_dependents!`](@ref) so the next iteration's linearization is 
 """
 function Picard_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation, s::State, g::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, h_prev; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion())
 
-    solve_elliptic_linear_system!(ls, s, g, p, kfs) # update the h field
+    solve_elliptic_linear_system!(ls, s, g, p, kfs, ds) # update the h field, including the -div(D*grad(b)) source term under WithDiffusion
     relax_h!(hr, s, h_prev) # update the h field again according to the relaxation parameter, damp the raw Picard update before anything downstream of h is recomputed, so the next iteration's coefficients are consistent with the relaxed h
 
     refresh_head_dependents!(s, g, p, mt, kfs, sl; cnc, ds)

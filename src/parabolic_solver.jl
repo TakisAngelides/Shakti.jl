@@ -31,7 +31,7 @@ function parabolic_solver!(ls::AbstractLinearSolver, state::State, grid::Grid, p
     # s.h itself is a valid h_old here: nothing has touched it yet this call, so "current s.h"
     # and "s.h at the start of this timestep" genuinely coincide -- unlike Parabolic_iteration!
     # below, where the same read would be a bug (see update_SALS_parabolic_kernel!'s docstring).
-    solve_parabolic_linear_system!(ls, s, g, p, kfs, dt, s.h) # update the h field
+    solve_parabolic_linear_system!(ls, s, g, p, kfs, dt, s.h, ds) # update the h field, including the -div(D*grad(b)) source term under WithDiffusion
 
     refresh_head_dependents!(s, g, p, mt, kfs, sl; cnc, ds)
 
@@ -122,7 +122,7 @@ array for both breaks convergence.
 """
 function Parabolic_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation, s::State, g::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, dt, h_old, h_prev; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion())
 
-    solve_parabolic_linear_system!(ls, s, g, p, kfs, dt, h_old)
+    solve_parabolic_linear_system!(ls, s, g, p, kfs, dt, h_old, ds)
     relax_h!(hr, s, h_prev)
 
     refresh_head_dependents!(s, g, p, mt, kfs, sl; cnc, ds)
