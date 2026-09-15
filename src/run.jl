@@ -1,22 +1,43 @@
 """
 $(TYPEDSIGNATURES)
 
-Runs `sim` from `t=0` (or from a checkpoint, see `restart_path`) up to `sim.tsteps`, calling
-[`step!`](@ref) each iteration and recording output via `sim.observer`.
+Runs `sim` from `t=0` (or from a checkpoint, see `restart_path`/`extend_path`) up to `sim.tsteps`,
+calling [`step!`](@ref) each iteration and recording output via `sim.observer`.
 
 # Notes
 
 `checkpoint_every`/`checkpoint_path`: if both given, `sim.state` is saved to `checkpoint_path`
 (overwriting the previous checkpoint -- only the latest is kept) every `checkpoint_every` tsteps,
 so a run killed at any point can be resumed via `restart_path` below instead of starting over from
-`t=0`.
+`t=0`. The loop's actual last step is also always checkpointed on top of that periodic schedule
+(whether or not it happens to be a `checkpoint_every` multiple), so a run that finishes cleanly
+never leaves its newest checkpoint stale. The same checkpoint also feeds `extend_path`, for the
+different "run finished, now go further" case -- see that keyword's own paragraph for how the two
+differ.
 
 `restart_path`: if given, resumes from a checkpoint written by a *previous* `run!` call instead of
 starting fresh at `t=0` -- loads `sim.state`/`sim.total_time` and continues the loop from the
 checkpointed tstep + 1 up to `sim.tsteps` (still the *original* total step count, not "how many
 more steps to do"). The observer's output file is reopened (not truncated) via `resume!` so it's
 appended to across the restart; see `observer.jl` for how each file writer handles a tstep that
-the crashed run may have already written.
+the crashed run may have already written. Use this when a run was *killed* partway to its original
+target and you want to finish reaching that same target in the same output file.
+
+`extend_path`: the other way to start from a checkpoint, for the different case of a run that
+*completed* its original target and you now want to push it further (a new, larger `sim.tsteps`
+than the run that wrote the checkpoint had). Loads `sim.state`/`sim.total_time`/`sim.dt` from the
+checkpoint via the same [`load_checkpoint!`](@ref) `restart_path` uses, but then starts a *fresh*
+tracked-output file (via `prepare!`/`observe!`, the same path a cold start takes) instead of
+reopening the old one -- the old file's own preallocated frame count was sized for its original,
+now-too-small target, and reopening a *different* path (the natural result of `sim.tsteps`
+changing, if your own script's output filename encodes it, as e.g. `pan_antarctica_simulation.jl`'s
+does) would fail outright since that path doesn't exist yet. The loop itself then runs fresh from
+`t=1` to `sim.tsteps`, so `sim.tsteps` here means "how many *more* steps to run," not the original
+run's total -- unlike `restart_path`. The new file's frame 0 is stamped with the *loaded*
+`total_time` (not 0), so day-labels stay physically correct (e.g. day 200 -> 300, not 0 -> 100)
+even though it's a separate file from the original run's own output; a reader that wants one
+continuous timeseries needs to know to read both files in sequence. Mutually exclusive with
+`restart_path` -- pass at most one.
 
 Under [`AdaptiveTimeStep`](@ref), the loop can also end *before* `sim.tsteps` if `total_time[]`
 reaches `sim.ts.target_time` first (the intended way to stop a time-targeted adaptive run, since
@@ -24,21 +45,35 @@ the true step count needed to cover `target_time` isn't known in advance) -- `si
 should still be sized generously from `AdaptiveTimeStep`'s own `dt_min` (see its docstring) so the
 loop is a real, finite upper bound either way, not just a number that happens to be big enough.
 """
-function run!(sim::Simulation; checkpoint_every::Union{Nothing, Int} = nothing, checkpoint_path::Union{Nothing, String} = nothing, restart_path::Union{Nothing, String} = nothing)
+function run!(sim::Simulation; checkpoint_every::Union{Nothing, Int} = nothing, checkpoint_path::Union{Nothing, String} = nothing, restart_path::Union{Nothing, String} = nothing, extend_path::Union{Nothing, String} = nothing)
 
     if (checkpoint_every === nothing) != (checkpoint_path === nothing)
         error("checkpoint_every and checkpoint_path must be given together")
     end
 
-    if restart_path === nothing
+    if restart_path !== nothing && extend_path !== nothing
+        error("restart_path and extend_path are mutually exclusive -- restart_path resumes a run " *
+              "killed partway toward its ORIGINAL target (reopens/appends to the same tracked " *
+              "file); extend_path continues an already-COMPLETED run toward a NEW, larger target " *
+              "(starts a fresh tracked file, preserving total_time)")
+    end
+
+    if restart_path === nothing && extend_path === nothing
         sim.total_time[] = zero(sim.dt[]) # reset so the same Simulation can be run! more than once, e.g. chained runs sharing one state
         prepare!(sim.observer, sim.state)
         observe!(sim.observer, sim.state, 0, sim.total_time[])
         start_t = 0
-    else
+    elseif restart_path !== nothing
         start_t = load_checkpoint!(sim, restart_path)
         resume!(sim.observer, sim.state, start_t)
+    else # extend_path !== nothing
+        load_checkpoint!(sim, extend_path) # sets sim.state/sim.total_time[]/sim.dt[]; return value (the checkpoint's own tstep) intentionally unused -- this file's own step indexing starts fresh at 0 below
+        prepare!(sim.observer, sim.state)
+        observe!(sim.observer, sim.state, 0, sim.total_time[]) # frame 0 of the NEW file is stamped with the LOADED total_time, not 0 -- see extend_path's own docstring paragraph above
+        start_t = 0
     end
+
+    last_t = start_t
 
     for t in (start_t + 1):sim.tsteps
 
@@ -51,6 +86,8 @@ function run!(sim::Simulation; checkpoint_every::Union{Nothing, Int} = nothing, 
         if checkpoint_every !== nothing && t % checkpoint_every == 0
             save_checkpoint(checkpoint_path, sim, t)
         end
+
+        last_t = t
 
         if sim.verbose
             converged, last_iter = picard_status(sim.hs)
@@ -83,6 +120,15 @@ function run!(sim::Simulation; checkpoint_every::Union{Nothing, Int} = nothing, 
         # no-op under the default scheme.
         (tt = target_time(sim.ts)) !== nothing && sim.total_time[] >= tt && break
 
+    end
+
+    # The periodic save above only fires on multiples of checkpoint_every, which won't generally
+    # include the loop's actual last step (sim.tsteps itself, or an earlier AdaptiveTimeStep
+    # target_time break) -- without this, a run that finishes cleanly can still leave its newest
+    # checkpoint stale by up to checkpoint_every-1 steps, silently truncating any later extend_path
+    # continuation to that older state instead of the true final one.
+    if checkpoint_every !== nothing && last_t > start_t && last_t % checkpoint_every != 0
+        save_checkpoint(checkpoint_path, sim, last_t)
     end
 
     finalize!(sim.observer, sim.state)
