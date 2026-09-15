@@ -18,4 +18,5 @@ using CSV
     include("sliding_law_test.jl")
     include("parabolic_solver_test.jl")
     include("frozen_bed_test.jl")
+    include("gap_height_test.jl")
 end
