@@ -79,6 +79,12 @@ persistent lubricated bed areas rather than fully closing. Combines with every
 [`AbstractGapScheme`](@ref), including [`FullyImplicitGapScheme`](@ref) (see
 [`compute_b_fully_implicit_kernel!`](@ref)'s docstring for its closed-form solve).
 
+**Before setting `b_c != 0`**: read [`CreepCutoff`](@ref)'s own docstring first -- real-dataset
+testing found a known, dataset-dependent instability (an uncontained gap-height runaway on one
+real dataset) triggered by cells with a deep negative-`N` excursion while `b` is still below
+`b_c`; it is not a solved problem and needs checking for per dataset, not something safe to enable
+by default.
+
 `mdot_includes_G`/`mdot_includes_frictional`/`mdot_includes_potential`/`mdot_includes_sensible`/
 `mdot_includes_qT` each independently switch one term of [`compute_mdot!`](@ref) on or off --
 geothermal flux `s.G`, frictional (sliding) heating, potential-energy dissipation, the sensible-heat

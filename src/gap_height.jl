@@ -107,6 +107,38 @@ Below the cutoff, ice-creep closure (`A|N|^(n-1)*N*l_c`) scales as `b^2` instead
 off faster than the standard linear term as `b -> 0` -- intended to let sheet-like drainage survive
 in places where the linear closure would otherwise close it out entirely. Selected automatically
 when `p.b_c != 0`.
+
+# Known instability -- NOT safe to enable without checking for near-flotation cells first
+
+Real-dataset testing (2026-09-16, real-dataset SUHMO test pass; reconfirmed 2026-09-17 against
+this exact code via a shortened reproduction, both in project memory/`suhmo.tex`) found
+`CreepCutoff` triggers an unbounded gap-height runaway at cells where `N` goes deeply negative
+while `b` is still below `b_c`. On Helheim (`b_c=0.05`, `b_max=Inf`), one cell reached
+`b=70.66m`/`K=8.1e10` by the end of a 90-day run (baseline: `b=0.27m`) -- and the 2026-09-17
+check reproduced the same divergence at the same cell (`b~3.9m` by day 30) from a fresh run,
+confirming this is not an artifact of one earlier run.
+
+**Mechanism** (`implicit_creep_update`, this file): while `b <= b_c` and `N < 0` (so the closure
+coefficient `C = A|N|^(n-1)*N` is negative), this scheme's cutoff branch returns
+`b_below = b_old + dt*opening` directly -- i.e. it DROPS the `(1 + dt*C)` implicit-closure
+denominator entirely in that regime, unlike [`StandardCreep`](@ref) which always applies it (even
+if only mildly, since `|dt*C|` is normally small). With nothing damping it, `b` then grows by the
+bare opening term every step, unchecked, until it crosses `b_c` onto the ordinary linear branch --
+by which point the growth already has enough momentum that it doesn't turn over.
+
+**Not a generic problem**: clean (1 Picard iteration/step, no instability) on 3 of 5 real datasets
+tested (Drang Drung, Thwaites, Pan-Antarctica) at the same or larger `b_c`. Failed only on the two
+datasets with known persistent near-flotation cells -- Helheim (uncontained runaway) and Greenland
+(contained non-convergence, ~1% of steps, no NaN/Inf). The datasets that stayed clean already use
+[`CellNClamping`](@ref) at their own known-unstable cells (Thwaites, Pan-Antarctica), for reasons
+predating this branch -- Helheim does not, and has no finite `p.b_max` either.
+
+**Before enabling `CreepCutoff` (`p.b_c != 0`) on a new dataset**: check for cells with a
+persistent or deep negative-`N` excursion and consider [`CellNClamping`](@ref) there, and set a
+finite `p.b_max`. Neither is a confirmed complete fix -- Greenland had `CellNClamping` and still
+saw contained non-convergence -- so treat this as a real, open risk to check for per-dataset, not a
+solved problem. See `test/helheim/diagnose_creepcutoff_runaway.jl` for the original root-cause
+trace.
 """
 struct CreepCutoff <: AbstractCreepLengthScheme end
 
