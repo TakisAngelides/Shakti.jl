@@ -243,7 +243,12 @@ is self-consistent" idea as [`compute_b_fully_implicit_kernel!`](@ref)'s `beta` 
 @inline function implicit_creep_update(::CreepCutoff, b_old, opening, C, dt, b_c)
     rhs = b_old + dt * opening
     a = dt * C / b_c
-    b_below = a > 0 ? (-one(a) + sqrt(max(zero(a), one(a) + 4 * a * rhs))) / (2 * a) : rhs
+    # a<=0 (C<=0, i.e. N<=0): the quadratic branch's own derivation (l_c=b^2/b_c) assumes C>0
+    # (an actually-closing force) -- it stops making physical sense once the term is opening
+    # instead. Fall back to the StandardCreep-equivalent form (same formula the b_below>b_c branch
+    # below already uses) rather than skipping the (1+dt*C) closure-feedback term entirely, which
+    # is what caused a real, confirmed runaway (see CreepCutoff's own docstring/project notes).
+    b_below = a > 0 ? (-one(a) + sqrt(max(zero(a), one(a) + 4 * a * rhs))) / (2 * a) : rhs / (1 + dt * C)
     if b_below <= b_c
         return b_below
     else # branch 1's own assumption (b_{k+1} <= b_c) failed -- l_c(b_{k+1}) is actually b_{k+1}
