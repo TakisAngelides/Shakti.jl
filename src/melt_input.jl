@@ -2,8 +2,9 @@
 $(TYPEDSIGNATURES)
 
 How `s.ieb` (englacial-to-bed meltwater input, e.g. moulins/crevasses) is set up and evolved over
-time -- multiple dispatch on the concrete subtype picks a fixed field ([`ConstantMeltInput`](@ref))
-or a time-varying seasonal cycle ([`SeasonalMeltInput`](@ref)). Every subtype implements
+time -- multiple dispatch on the concrete subtype picks a fixed field ([`ConstantMeltInput`](@ref)),
+a time-varying seasonal cycle ([`SeasonalMeltInput`](@ref)), or a spatially-localized,
+time-ramped point source ([`GaussianMoulinMeltInput`](@ref)). Every subtype implements
 [`update_ieb!`](@ref) (called once per real timestep, outside the Picard loop, so `s.ieb` stays
 fixed across every Picard iteration within that timestep). `s.ieb` itself is seeded directly (`s.ieb
 .= ieb`) during [`set_initial_conditions!`](@ref) and read directly (`ieb[i, j]`) inside
@@ -90,5 +91,60 @@ for the whole run. The `t` input is elapsed simulation time in seconds.
            (mi.offset - mi.amplitude * cos(mi.omega * (yf - mi.t_start))) : # give this cosine input
             mi.i_min # otherwise give this minimum background input only
     state.ieb .= i_ma / mi.seconds_per_year # uniform over the whole domain; m a^-1 -> m s^-1
+    return state
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+A single point source (moulin) with a fixed 2D Gaussian spatial footprint and a linear temporal
+ramp from `0` at `t=0` up to its full discharge `Q_max` at `t=ramp_duration`, held constant
+thereafter -- reproduces Felden et al. (2023, SUHMO)'s Sect. 4.2 channelized convergence test
+case ("the moulin source term follows a spatial Gaussian profile... the moulin input is gradually
+increased in time, from 0 at time t=0s to the maximum value after about a month"). The paper
+doesn't give the Gaussian's exact width or the ramp's exact functional shape -- `sigma` and the
+choice of a plain linear ramp (vs. e.g. a smoothstep) are this port's own, reasonable but
+unverified-against-the-paper choices.
+
+# Notes
+
+Unlike [`SeasonalMeltInput`](@ref), this DOES hold a full `(Nx, Ny)` array field (`shape`) -- fine
+here since `mi` itself is never passed into a `@parallel` kernel (only [`update_ieb!`](@ref)'s own
+plain broadcast reads it, same as how [`LinearSlidingLaw`](@ref)'s `C` field holds a full array).
+`shape` is precomputed once at construction, normalized so `sum(shape)*dx*dy ≈ 1` (an
+un-truncated Gaussian integrates to exactly 1 over the whole plane; on a finite domain this is
+only approximate, good enough as long as `sigma` is small relative to the domain size, as it is
+here).
+"""
+struct GaussianMoulinMeltInput{A <: AbstractArray, F <: AbstractFloat} <: AbstractMeltInput
+    shape::A          # precomputed, normalized spatial Gaussian (m^-2), sum(shape)*dx*dy ≈ 1
+    Q_max::F          # peak discharge, m^3 s^-1
+    ramp_duration::F  # seconds to reach Q_max from a t=0 start; held at Q_max thereafter
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Builds a [`GaussianMoulinMeltInput`](@ref) centered at `(x0, y0)` (grid coordinates, same origin
+as `grid.x`/`grid.y`) with spatial standard deviation `sigma`, ramping up to `Q_max` over
+`ramp_duration` seconds.
+"""
+function GaussianMoulinMeltInput(grid::Grid, x0, y0, sigma, Q_max, ramp_duration)
+    F = floattype
+    shape = [exp(-((xi - x0)^2 + (yi - y0)^2) / (2 * sigma^2)) for xi in grid.x, yi in grid.y]
+    shape ./= sum(shape) * grid.dx * grid.dy
+    return GaussianMoulinMeltInput(F.(shape), F(Q_max), F(ramp_duration))
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Updates `state.ieb` to `mi.shape * Q_max * min(t/ramp_duration, 1)` -- the fixed spatial Gaussian
+footprint scaled by the current point on the linear ramp (elapsed simulation time `t`, seconds).
+"""
+@inline function update_ieb!(mi::GaussianMoulinMeltInput, state::State, t)
+    F = eltype(state.ieb)
+    ramp = min(t / mi.ramp_duration, one(F))
+    state.ieb .= mi.shape .* mi.Q_max .* ramp
     return state
 end
