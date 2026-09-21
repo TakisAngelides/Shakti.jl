@@ -35,10 +35,12 @@ grid = Grid(NX, NY, LX, LY)
 # Every [`ModelParameters`](@ref) keyword, with its default. `e_v == 0.0` selects
 # [`EllipticHeadScheme`](@ref) (Picard iteration, used below); `e_v != 0.0` selects
 # [`ParabolicHeadScheme`](@ref) instead (single backward-Euler solve per step -- see the
-# [Parabolic head scheme](@ref ParabolicScheme) example). `ct == 0.0` or `cw == 0.0` disables the
-# sensible-heat term ([`NoSensibleHeat`](@ref) instead of [`WithSensibleHeat`](@ref), decided once
-# in `Simulation`'s constructor). `br == 0.0` disables the opening-by-sliding term
-# ([`NoOpenBySliding`](@ref) instead of [`WithOpenBySliding`](@ref), same "decided once" idiom).
+# [Parabolic head scheme](@ref ParabolicScheme) example). Each `mdot_includes_*` flag independently
+# switches one [`compute_mdot!`](@ref) term on/off (see [`MeltTerms`](@ref), decided once in
+# `Simulation`'s constructor); all default to `true`. `br == 0.0` disables the opening-by-sliding
+# term ([`NoOpenBySliding`](@ref) instead of [`WithOpenBySliding`](@ref), same "decided once" idiom,
+# independent of `mdot_includes_frictional` -- that's a different sliding-related term, in
+# `compute_beta!`, not `compute_mdot!`).
 p = ModelParameters(
     rho_w  = 1000.0, # density of subglacial/fresh water
     rho_sw = 1027.0, # density of ocean (sea) water -- only used for the OCEAN Dirichlet BC's hydrostatic pressure
@@ -50,11 +52,16 @@ p = ModelParameters(
     L      = 334e3,  # latent heat of fusion
     br     = 0.05,   # bedrock bump height (0.0 -> NoOpenBySliding)
     lr     = 2.0,    # bedrock bump spacing
-    ct     = 7.5e-8, # change of pressure-melting-point with temperature (0.0 -> NoSensibleHeat)
-    cw     = 4.22e3, # heat capacity of water (0.0 -> NoSensibleHeat)
+    ct     = 7.5e-8, # change of pressure-melting-point with temperature (sensible term's own prefactor)
+    cw     = 4.22e3, # heat capacity of water (sensible term's own prefactor)
     p_atm  = 0.0,    # atmospheric pressure, the Dirichlet reference for LAND/OCEAN boundary conditions
     b_min  = 1e-3,   # minimum water thickness (numerical floor)
     e_v    = 0.0,    # englacial storage void ratio (0.0 -> EllipticHeadScheme; nonzero -> ParabolicHeadScheme)
+    mdot_includes_G          = true, # include geothermal flux in compute_mdot!
+    mdot_includes_frictional = true, # include frictional (sliding) heating in compute_mdot!
+    mdot_includes_potential  = true, # include potential-energy dissipation in compute_mdot!
+    mdot_includes_sensible   = true, # include the sensible-heat exchange term in compute_mdot!
+    mdot_includes_qT         = true, # include (subtract) the conductive-heat-into-ice term q_T in compute_mdot!
 )
 
 # ## 4. Mask (`src/mask.jl`)
@@ -91,9 +98,10 @@ k_face_choice = "arithmetic"
 
 # ## 8. Gap scheme (`src/simulation.jl` / `src/gap_height.jl`)
 # How gap height `b` is time-integrated, passed as `gap_scheme_choice` to `Simulation`:
-#   - `"implicit"` -> [`ImplicitGapScheme`](@ref): backward-Euler on the creep-closure term, unconditionally stable, the usual choice
+#   - `"fully_implicit"` -> [`FullyImplicitGapScheme`](@ref): backward-Euler on both the creep-closure AND opening-by-sliding terms, unconditionally stable for any `dt`, the default
+#   - `"implicit"` -> [`ImplicitGapScheme`](@ref): backward-Euler on the creep-closure term only; the opening-by-sliding term stays lagged, so it isn't unconditionally stable when `p.br != 0`
 #   - `"explicit"` -> [`ExplicitGapScheme`](@ref): forward-Euler, cheaper per step but only stable for small enough `dt`
-gap_scheme_choice = "implicit"
+gap_scheme_choice = "fully_implicit"
 
 # ## 9. Linear solver (`src/linear_solver.jl`, `src/preconditioner.jl`)
 # Passed as `ps`/`ls` to `Simulation` depending on `p.e_v` (see section 3 above):

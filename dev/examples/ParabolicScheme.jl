@@ -61,7 +61,7 @@ set_initial_conditions!(state0, grid, p_base, sl, mask, A_visc, zb, zs, b, G, ub
 
 ls_spinup = CholeskyDirectSolver(grid)
 ps_spinup = PicardSolver(500, 1e-6, ls_spinup, grid; alpha = 0.1)
-sim_spinup = Simulation(grid, state0, 20, floattype(3600.0), p_base, "implicit", String[], ConstantMeltInput(), sl; ps = ps_spinup)
+sim_spinup = Simulation(grid, state0, 20, floattype(3600.0), p_base, "fully_implicit", String[], ConstantMeltInput(), sl; ps = ps_spinup)
 run!(sim_spinup)
 
 # ## Steady state: same destination, different path
@@ -82,12 +82,12 @@ tracked_times_ss = 0:tsteps_ss
 
 ls_elliptic_ss = CholeskyDirectSolver(grid)
 ps_elliptic_ss = PicardSolver(500, 1e-6, ls_elliptic_ss, grid; alpha = 0.1)
-sim_elliptic_ss = Simulation(grid, state_elliptic_ss, tsteps_ss, floattype(dt_ss), p_elliptic_ss, "implicit", ["h"], ConstantMeltInput(), sl;
+sim_elliptic_ss = Simulation(grid, state_elliptic_ss, tsteps_ss, floattype(dt_ss), p_elliptic_ss, "fully_implicit", ["h"], ConstantMeltInput(), sl;
                              ps = ps_elliptic_ss, which_observer = "Live", tracked_times = tracked_times_ss)
 run!(sim_elliptic_ss)
 
 ls_parabolic_ss = CholeskyDirectSolver(grid)
-sim_parabolic_ss = Simulation(grid, state_parabolic_ss, tsteps_ss, floattype(dt_ss), p_parabolic_ss, "implicit", ["h"], ConstantMeltInput(), sl;
+sim_parabolic_ss = Simulation(grid, state_parabolic_ss, tsteps_ss, floattype(dt_ss), p_parabolic_ss, "fully_implicit", ["h"], ConstantMeltInput(), sl;
                               ls = ls_parabolic_ss, which_observer = "Live", tracked_times = tracked_times_ss)
 run!(sim_parabolic_ss)
 
