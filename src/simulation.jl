@@ -29,10 +29,11 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Head scheme used when `p.e_v == 0`: each timestep, `ps` (a [`PicardSolver`](@ref)) is run to
-convergence via Picard iteration.
+Head scheme used when `p.e_v == 0`: each timestep, `ps` (any [`AbstractEllipticSolver`](@ref) --
+[`PicardSolver`](@ref), Picard iteration; or [`NewtonJFNKSolver`](@ref), Jacobian-Free
+Newton-Krylov) is run to convergence.
 """
-struct EllipticHeadScheme{PS <: PicardSolver} <: AbstractHeadScheme
+struct EllipticHeadScheme{PS <: AbstractEllipticSolver} <: AbstractHeadScheme
     ps::PS
 end
 
@@ -261,7 +262,7 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
 
     # Head scheme setup
     if iszero(p.e_v) # elliptic head scheme
-        ps === nothing && error("ps (a PicardSolver) must be provided when p.e_v == 0 (elliptic head scheme)")
+        ps === nothing && error("ps (a PicardSolver or NewtonJFNKSolver) must be provided when p.e_v == 0 (elliptic head scheme)")
         hs = EllipticHeadScheme(ps)
     else # parabolic head scheme
         pps === nothing && error("pps (a ParabolicPicardSolver) must be provided when p.e_v != 0 (parabolic head scheme)")

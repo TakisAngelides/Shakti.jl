@@ -214,15 +214,26 @@ end
 """
 $(TYPEDSIGNATURES)
 
+Common supertype for anything [`EllipticHeadScheme`](@ref) can drive to solve the nonlinear
+elliptic head equation each timestep -- [`PicardSolver`](@ref) (Picard iteration) or
+[`NewtonJFNKSolver`](@ref) (Jacobian-Free Newton-Krylov, `newton_solver.jl`). Any concrete subtype
+must expose mutable `converged::Bool`/`last_iter::Int` fields (read generically by
+[`picard_status`](@ref)) and a matching [`elliptic_solver!`](@ref) method.
+"""
+abstract type AbstractEllipticSolver end
+
+"""
+$(TYPEDSIGNATURES)
+
 Drives the Picard iteration used to solve the nonlinear elliptic equation for hydraulic head:
 holds the linear solver (`ls`), optional head relaxation (`hr`), iteration/tolerance settings,
 and the scratch fields (`h_prev`, `delta_h`) the convergence check needs. Build one with the
 keyword-free constructor below; `converged`/`last_iter` are updated in place by
-[`Picard_loop!`](@ref) each time it's called. It is a mutable struct to be able to change the 
-iter and converged fields, but also gives the flexibility to be changing the linear solver along the 
+[`Picard_loop!`](@ref) each time it's called. It is a mutable struct to be able to change the
+iter and converged fields, but also gives the flexibility to be changing the linear solver along the
 simulation if desired.
 """
-mutable struct PicardSolver{F <: AbstractFloat, LS <: AbstractLinearSolver, HR <: AbstractHeadRelaxation, A <: AbstractArray}
+mutable struct PicardSolver{F <: AbstractFloat, LS <: AbstractLinearSolver, HR <: AbstractHeadRelaxation, A <: AbstractArray} <: AbstractEllipticSolver
     iters::Int # how many Picard iterations to do for a Picard loop
     tol::F # tolerance for stopping the Picard loop
     ls::LS # linear solver
