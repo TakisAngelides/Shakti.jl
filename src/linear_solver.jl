@@ -1087,8 +1087,10 @@ end
 # update_MFLS_elliptic_kernel!) rather than left as a one-sided matrix coupling.
 #
 # amg = true (default) opts into AMGPreconditioner -- near mesh-independent
-# CG iteration counts, at the cost of a hierarchy-rebuild every solve; see
-# preconditioner.jl. Measured to consistently beat both plain Jacobi and ChebyshevPreconditioner, from a
+# CG iteration counts, at the cost of a hierarchy-rebuild every solve by default
+# (amg_refresh_every = 1); pass amg_refresh_every > 1 to amortize that rebuild
+# over several solves instead -- see preconditioner.jl's module-level note on
+# AMGPreconditioner for why that's safe, not just cheap. Measured to consistently beat both plain Jacobi and ChebyshevPreconditioner, from a
 # near-initial-condition state (5-7 CG iterations vs Jacobi's 192-745) all
 # the way through peak seasonal channelization (24 iterations vs Jacobi's
 # 199 and Chebyshev's 71, at K max/min ratio ~14000) -- hence the default.
@@ -1106,9 +1108,12 @@ $(TYPEDSIGNATURES)
 Builds a [`CGIterativeSolver`](@ref) over a [`SparseAssembledLinearSystem`](@ref) on grid `g`.
 `amg = true` (default) opts into `AMGPreconditioner`; `chebyshev_degree` (an `Int`) opts into
 `ChebyshevPreconditioner` instead (mutually exclusive with `amg`); both `false`/`nothing` gives
-plain Jacobi. CPU-only, same reasoning as [`CholeskyDirectSolver`](@ref).
+plain Jacobi. CPU-only, same reasoning as [`CholeskyDirectSolver`](@ref). `amg_refresh_every`
+(default `1`, i.e. every solve) is forwarded to [`AMGPreconditioner`](@ref) -- see its docstring
+and the module-level note in `preconditioner.jl` for the lagged-hierarchy amortization this opts
+into when set above `1`.
 """
-function CGIterativeSolver(g::Grid{F}, ::Type{SparseAssembledLinearSystem}; chebyshev_degree::Union{Nothing, Int} = nothing, chebyshev_nsteps_estimate::Int = 15, amg::Bool = true) where F
+function CGIterativeSolver(g::Grid{F}, ::Type{SparseAssembledLinearSystem}; chebyshev_degree::Union{Nothing, Int} = nothing, chebyshev_nsteps_estimate::Int = 15, amg::Bool = true, amg_refresh_every::Int = 1) where F
 
     # Krylov.jl's sparse matvec (SparseArrays.mul!) is CPU-only, same reasoning as CholeskyDirectSolver.
     backend != "Threads" && error("CGIterativeSolver(g, SparseAssembledLinearSystem) is CPU-only; use CGIterativeSolver(g, MatrixFreeLinearSystem) under the $backend backend.")
@@ -1119,7 +1124,7 @@ function CGIterativeSolver(g::Grid{F}, ::Type{SparseAssembledLinearSystem}; cheb
     ws = CgWorkspace(sals.M, sals.rhs)
     precond_diag = zeros(F, g.nx * g.ny)
     precond = if amg
-        AMGPreconditioner(sals.M)
+        AMGPreconditioner(sals.M; refresh_every = amg_refresh_every)
     elseif chebyshev_degree !== nothing
         ChebyshevPreconditioner(sals.M, precond_diag, chebyshev_degree; nsteps_estimate = chebyshev_nsteps_estimate)
     else
