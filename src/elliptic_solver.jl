@@ -64,19 +64,32 @@ constrained-weights form, since increments avoid needing to explicitly enforce `
 step itself provides); `beta < 1` mixes in some of [`UnderHeadRelaxation`](@ref)'s damping on top,
 which may help stability on stiff problems at the cost of some acceleration.
 
-Uses the normal equations (`(ΔF'ΔF) \\ (ΔF'f_k)`) rather than a QR-based least-squares solve, for
-simplicity -- the well-known less-robust choice (normal equations square `ΔF`'s condition number,
-a real risk once consecutive residual differences become nearly collinear, typically once the
-residual is already small) but acceptable for the small `depth` tested here, since a `depth x
-depth` solve is negligible either way next to the O(n) linear solve it's accelerating. A
-QR-with-column-dropping implementation would be needed for a fully robust production version; as a
-cheap stopgap, `gamma_clip` catches the specific failure mode actually observed empirically
-(`linear_solver_benchmarks.tex`/`beyond_solver_choice.tex`: depth 5-8 sometimes extrapolated in the
-wrong direction, making convergence *worse* than plain Picard) by discarding the extrapolation and
-falling back to a plain beta-damped step whenever the solved weights blow up
-(`maximum(abs, gamma) > gamma_clip`) -- a solved weight of that magnitude means the normal-equations
-solve is numerically unreliable for this iteration, and the safe thing is to skip the extrapolation
-for just that one iteration rather than apply a wild, unreliable correction to the head field.
+Solves the least-squares problem via Julia's `\` on the tall `n x mk` matrix `ΔF` directly (a
+Householder-QR-based solve, dispatched automatically for a non-square left-hand side), NOT the
+earlier normal-equations formulation (`(ΔF'ΔF) \\ (ΔF'f_k)`) -- normal equations square `ΔF`'s
+condition number, a real risk once consecutive residual differences become nearly collinear
+(typically once the residual is already small), and were the most likely explanation for a
+specific failure mode measured empirically: on the *synthetic* benchmark
+(`beyond_solver_choice.tex`), depth 5-8 sometimes extrapolated in the wrong direction, needing
+*more* total iterations than plain Picard, non-monotonically in depth. `gamma_clip` remains as a
+cheap safety net even with the more robust QR solve (a genuinely rank-deficient/near-collinear
+`ΔF` can still produce huge weights): whenever the solved weights blow up
+(`maximum(abs, gamma) > gamma_clip`), the extrapolation is discarded and this one iteration falls
+back to a plain beta-damped step instead of applying a wild, unreliable correction to `h`.
+
+**Real-dataset caveat (important -- read before using this on anything beyond a quick
+experiment):** on the real Drang Drung v2 dataset (`test/drangdrung/drangdrung_anderson_compare.jl`),
+depth 3 (the setting that looked best on the synthetic benchmark) was a clear, consistent net
+*loss* at every one of 30 real timesteps tested -- 46% more Picard iterations and ~2x more wall
+time than plain Picard, not an occasional fluke. The synthetic benchmark's spatially-uniform
+coefficients (flat slope, constant viscosity/friction) apparently make it an easier fixed-point
+map to extrapolate than a real, spatially-heterogeneous problem (real ice thickness/friction/mesh
+geometry) is. **Do not assume the synthetic-benchmark depth=3 result transfers to a real
+simulation without checking on that specific dataset first** -- this relaxation scheme is
+currently NOT recommended for production use on real data, opt-in-only, kept for further
+experimentation (e.g. once a scenario is found where it does help, or if this QR-based solve
+changes the picture where the normal-equations version didn't -- re-validate this claim itself
+when testing that).
 
 History is reset once per Picard loop (see [`reset_relaxation!`](@ref)/[`Picard_loop!`](@ref)):
 different timesteps solve a different fixed-point map (the Newton-linearization point and boundary
@@ -90,8 +103,6 @@ mutable struct AndersonHeadRelaxation{F <: AbstractFloat, M <: AbstractMatrix{F}
     Fhist::M   # n x (depth+1): past f_k = g(x_k) - x_k, same column convention as Xhist
     dX::M      # n x depth workspace: consecutive columns of Xhist, differenced
     dF::M      # n x depth workspace: consecutive columns of Fhist, differenced
-    gram::Matrix{F}  # depth x depth workspace for dF'dF
-    rhs::V     # depth workspace for dF'f_k
     gamma::V   # depth workspace, the solved least-squares weights
     fk::V      # n workspace for the current residual g(x_k) - x_k
     count::Int # how many valid raw (x, f) columns are currently held, 0..depth+1
@@ -100,13 +111,11 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Builds an [`AndersonHeadRelaxation`](@ref) for grid `g`. Defaults (`depth=3`, `beta=1.0`) are the
-empirically best-performing setting found for Shakti's Picard loop
-(`beyond_solver_choice.tex`: 18.5% fewer Picard iterations and 15.3% less wall time than plain
-Picard at 256x256 with `CholeskyDirectSolver`, combined with `-t 8`) -- depth 5 and 8 were
-tested and are both *worse* than depth 3, non-monotonically, so raising `depth` "for more history"
-is not a safe assumption here. `gamma_clip` (default `10.0`) bounds the fallback-triggering
-threshold described in [`AndersonHeadRelaxation`](@ref)'s docstring.
+Builds an [`AndersonHeadRelaxation`](@ref) for grid `g`. Defaults: `depth=3`, `beta=1.0` (the
+best-performing setting found on the *synthetic* benchmark used in `beyond_solver_choice.tex` --
+18.5% fewer Picard iterations there, but note the real-dataset caveat in
+[`AndersonHeadRelaxation`](@ref)'s own docstring before assuming this transfers). `gamma_clip`
+(default `10.0`) bounds the fallback-triggering threshold described there.
 """
 function AndersonHeadRelaxation(g::Grid{F}; depth::Int = 3, beta = 1.0, gamma_clip = 10.0) where F
     n = g.nx * g.ny
@@ -114,11 +123,9 @@ function AndersonHeadRelaxation(g::Grid{F}; depth::Int = 3, beta = 1.0, gamma_cl
     Fhist = @zeros(n, depth + 1)
     dX    = @zeros(n, depth)
     dF    = @zeros(n, depth)
-    gram  = zeros(F, depth, depth)
-    rhs   = zeros(F, depth)
     gamma = zeros(F, depth)
     fk    = @zeros(n)
-    return AndersonHeadRelaxation(depth, F(beta), F(gamma_clip), Xhist, Fhist, dX, dF, gram, rhs, gamma, fk, 0)
+    return AndersonHeadRelaxation(depth, F(beta), F(gamma_clip), Xhist, Fhist, dX, dF, gamma, fk, 0)
 end
 
 """
@@ -181,17 +188,17 @@ function relax_h!(hr::AndersonHeadRelaxation, state::State, h_prev)
             @. dF[:, j] = F[:, j+1] - F[:, j]
         end
 
-        gram = hr.gram[1:mk, 1:mk]
-        rhs  = hr.rhs[1:mk]
-        mul!(gram, dF', dF)
-        mul!(rhs, dF', hr.fk)
         gamma = hr.gamma[1:mk]
-        gamma .= gram \ rhs # small mk x mk dense solve -- negligible next to the O(n) elliptic solve this accelerates
+        gamma .= dF \ hr.fk # QR-based least-squares solve (Julia's \ on a tall n x mk matrix
+                             # dispatches to a Householder-QR least-squares solve automatically) --
+                             # replaces the earlier normal-equations ((ΔF'ΔF) \ (ΔF'f_k)) approach,
+                             # which squared ΔF's condition number and was the likely cause of
+                             # depth>=5 sometimes extrapolating in the wrong direction (see below).
 
         if maximum(abs, gamma) > hr.gamma_clip
-            # Normal-equations solve is numerically unreliable this iteration (near-collinear
-            # ΔF columns) -- discard the extrapolation rather than risk moving h in the wrong
-            # direction; fall back to a plain beta-damped step for just this one iteration.
+            # Even the more robust QR solve can still misbehave on a genuinely rank-deficient/
+            # near-collinear ΔF -- discard the extrapolation rather than risk moving h in the
+            # wrong direction; fall back to a plain beta-damped step for just this one iteration.
             @. hvec = hprev_v + hr.beta * hr.fk
             return state
         end
