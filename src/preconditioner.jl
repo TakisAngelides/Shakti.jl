@@ -85,14 +85,22 @@ iterations of ordinary (unpreconditioned) CG, extracting the associated Lanczos 
 matrix from the CG alpha/beta recurrence (Saad, section 6.7 -- the same trick PETSc's
 `KSPCHEBYSHEV` uses) rather than running separate power-iteration machinery. Used by
 [`update_chebyshev_bounds!`](@ref) to size [`ChebyshevPreconditioner`](@ref)'s polynomial.
+
+`r`/`p`/`Ap` are scratch buffers of the same length as `rhs`, overwritten in place -- callers
+pass [`ChebyshevPreconditioner`](@ref)'s own preallocated `r`/`p`/`Ap` fields (safe to clobber:
+by the time `ldiv!` later reads them, this function has long since returned and they hold no
+state it needs). This avoids allocating three fresh length-`N` vectors every solve just to
+throw them away -- at 512x512 this alone was ~6.2MB/call, the largest single avoidable
+allocation found in the 2026-09-22 benchmark sweep (`PostDoc_Latex_Notes/Notes_on_Shakti/
+linear_solver_benchmarks.tex`, Section 5.2).
 """
-function estimate_eigenvalue_bounds(op::JacobiScaledOperator, rhs::AbstractVector, nsteps::Int)
+function estimate_eigenvalue_bounds!(r::AbstractVector, p::AbstractVector, Ap::AbstractVector, op::JacobiScaledOperator, rhs::AbstractVector, nsteps::Int)
 
     T = eltype(rhs) # scalar type to match rhs (Float32/Float64), so all work below stays in that precision
 
-    r  = copy(rhs) # r_0 = rhs - op*0 = rhs (x0 = 0)
-    p  = copy(r)   # p_0 = r_0, the initial CG search direction
-    Ap = similar(r) # preallocated scratch for op*p each step
+    r .= rhs # r_0 = rhs - op*0 = rhs (x0 = 0)
+    p .= r   # p_0 = r_0, the initial CG search direction
+    # Ap is pure scratch (written by mul! before ever being read) -- no initial value needed
 
     gamma = dot(r, r) # gamma_0 = r_0'r_0, CG's running residual-norm-squared
 
@@ -189,14 +197,14 @@ end
 $(TYPEDSIGNATURES)
 
 Refreshes `P.lambda_min`/`P.lambda_max` from the current `rhs` via
-[`estimate_eigenvalue_bounds`](@ref) -- cheap (`P.nsteps_estimate` matvecs) but real, since the
+[`estimate_eigenvalue_bounds!`](@ref) -- cheap (`P.nsteps_estimate` matvecs) but real, since the
 operator's spectrum shifts between Picard iterations/timesteps. Falls back to the previous
 (valid) bounds if the estimate is numerically invalid (see the extensive in-code note for why
 that can happen and why the fallback is always safe).
 """
 function update_chebyshev_bounds!(P::ChebyshevPreconditioner, rhs::AbstractVector)
 
-    # The short, unreorthogonalized Lanczos recurrence in estimate_eigenvalue_bounds
+    # The short, unreorthogonalized Lanczos recurrence in estimate_eigenvalue_bounds!
     # is only exact in infinite precision -- on more ill-conditioned problems
     # (empirically, larger grids: fine at 64x64/256x256, but nonsensical/even
     # negative bounds at 512x512, non-monotonically in nsteps_estimate too,
@@ -217,7 +225,9 @@ function update_chebyshev_bounds!(P::ChebyshevPreconditioner, rhs::AbstractVecto
     # reusing the previous (valid) solve's bounds is a good approximation
     # since consecutive Picard iterations' matrices are close to each other.
     lambda_min, lambda_max = try
-        estimate_eigenvalue_bounds(P.op, rhs, P.nsteps_estimate) # re-run the short Lanczos estimate against this solve's current rhs
+        # Reuses P's own r/p/Ap scratch fields (otherwise idle until ldiv! runs later in this
+        # same solve) instead of allocating three fresh length-N vectors just for this estimate.
+        estimate_eigenvalue_bounds!(P.r, P.p, P.Ap, P.op, rhs, P.nsteps_estimate) # re-run the short Lanczos estimate against this solve's current rhs
     catch e
         e isa LinearAlgebra.LAPACKException || rethrow() # only swallow the tridiagonal-eigensolve failure mode; anything else is a real bug, propagate it
         (NaN, NaN) # sentinel: fails the isfinite check below, taking the same fallback path as a bogus-but-finite estimate
@@ -284,6 +294,26 @@ end
 # CPU/SparseMatrixCSC-only (AlgebraicMultigrid.jl has no GPU array support),
 # so -- like CholeskyDirectSolver -- this is only offered for
 # CGIterativeSolver{<:SparseAssembledLinearSystem}, not MatrixFreeLinearSystem.
+#
+# `refresh_every` (below): the 2026-09-22 benchmark report (linear_solver_benchmarks.tex,
+# Section 5.2/6.1) found the from-scratch hierarchy rebuild is by far the single largest
+# allocator measured anywhere in that whole study (up to ~8.6GB/call at 2048x2048) -- and, per
+# Section 6.1's discussion, it's rebuilt every solve for no numerical necessity: AMG's classical
+# advantage assumes its setup cost is amortized over MANY solves against a fixed operator, but
+# here it's paid once and used once. `refresh_every > 1` amortizes it properly: skip the
+# rebuild for `refresh_every - 1` calls out of every `refresh_every`, reusing the existing
+# hierarchy. This is NOT the same as reusing a fully stale preconditioner: AlgebraicMultigrid.jl's
+# `ruge_stuben` stores the finest level's matrix (and its Gauss-Seidel smoothers) as a direct
+# REFERENCE to whatever `SparseMatrixCSC` is passed in (confirmed by reading
+# AlgebraicMultigrid.jl v2.0.1's own source, src/classical.jl's `extend_hierarchy_rs!` and
+# src/smoother.jl's `FastGSSmoother`/`gs!`, which read `A.nzval` live) -- and `sals.M` is the
+# exact same array object mutated in place every Picard iteration (never reallocated), so the
+# finest-level smoothing and residual evaluation see CURRENT values even when the hierarchy
+# itself isn't rebuilt. Only the coarser levels (interpolation/restriction operators and their
+# Galerkin-product matrices, a one-time snapshot from whichever solve last rebuilt them) go
+# stale between refreshes. Trades some CG iteration-count growth between refreshes for a large
+# cut in allocation and (usually) wall time; `refresh_every = 1` (the default) is the original,
+# always-rebuild behavior, unchanged.
 
 """
 $(TYPEDSIGNATURES)
@@ -297,6 +327,8 @@ isn't offered for `MatrixFreeLinearSystem`.
 """
 mutable struct AMGPreconditioner{P}
     precond::P # AlgebraicMultigrid.jl's aspreconditioner(::MultiLevel) wrapper; already implements LinearAlgebra.ldiv!, so ldiv! below just delegates
+    refresh_every::Int # rebuild the hierarchy every this many update_amg! calls; 1 = always (original behavior). See the module note above.
+    calls_since_refresh::Int # counter driving the above; starts at 0 (a fresh hierarchy from construction counts as "just refreshed")
 end
 
 """
@@ -308,19 +340,28 @@ Builds an [`AMGPreconditioner`](@ref) hierarchy from `M`'s current values.
 
 `M`'s sparsity pattern is fixed, but its VALUES change every Picard iteration -- like
 [`ChebyshevPreconditioner`](@ref)'s bounds, the AMG hierarchy (strength-of-connection,
-aggregation, interpolation) is built from those values, so it has to be rebuilt every solve (see
-[`update_amg!`](@ref)), not just once at construction.
+aggregation, interpolation) is built from those values, so by default it's rebuilt every solve
+(see [`update_amg!`](@ref)), not just once at construction. `refresh_every` (default `1`, i.e.
+every solve) opts into the lagged-hierarchy amortization described in the module note above --
+pass e.g. `refresh_every = 5` to rebuild only every 5th `update_amg!` call.
 """
-AMGPreconditioner(M::SparseMatrixCSC) = AMGPreconditioner(aspreconditioner(ruge_stuben(M)))
+AMGPreconditioner(M::SparseMatrixCSC; refresh_every::Int = 1) = AMGPreconditioner(aspreconditioner(ruge_stuben(M)), refresh_every, 0)
 
 """
 $(TYPEDSIGNATURES)
 
-Rebuilds `P`'s AMG hierarchy in place from `M`'s current values (not free -- see
-[`AMGPreconditioner`](@ref)'s docstring for why this can't just be done once at construction).
+Advances `P`'s refresh counter and rebuilds `P`'s AMG hierarchy in place from `M`'s current
+values only once every `P.refresh_every` calls (every call, if `P.refresh_every == 1`, the
+default -- see [`AMGPreconditioner`](@ref)'s docstring for why this can't just be done once at
+construction, and the module-level note above for why skipping a rebuild is still safe/sensible,
+not merely cheap).
 """
 function update_amg!(P::AMGPreconditioner, M::SparseMatrixCSC)
-    P.precond = aspreconditioner(ruge_stuben(M))
+    P.calls_since_refresh += 1
+    if P.calls_since_refresh >= P.refresh_every
+        P.precond = aspreconditioner(ruge_stuben(M))
+        P.calls_since_refresh = 0
+    end
     return P
 end
 

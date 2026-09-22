@@ -123,7 +123,7 @@ export solve_b_diffusion!
 
 # preconditioner.jl
 export ChebyshevPreconditioner
-export update_chebyshev_bounds!, estimate_eigenvalue_bounds
+export update_chebyshev_bounds!, estimate_eigenvalue_bounds!
 export AMGPreconditioner
 export update_amg!
 
@@ -143,7 +143,7 @@ export compute_shear!, compute_potential!, compute_sensible!, compute_mdot!
 export compute_D!
 
 # elliptic_solver.jl
-export AbstractHeadRelaxation, NoHeadRelaxation, UnderHeadRelaxation
+export AbstractHeadRelaxation, NoHeadRelaxation, UnderHeadRelaxation, AndersonHeadRelaxation
 export relax_h!
 export PicardSolver
 export elliptic_solver!, Picard_loop!, Picard_iteration!, refresh_head_dependents!

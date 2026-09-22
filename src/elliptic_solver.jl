@@ -1,10 +1,11 @@
 """
 $(TYPEDSIGNATURES)
 
-Whether/how the raw Picard update to `state.h` is damped before the next iteration -- multiple
-dispatch on the concrete subtype ([`NoHeadRelaxation`](@ref)/[`UnderHeadRelaxation`](@ref)) picks
-whether [`relax_h!`](@ref) is a no-op or an under-relaxation blend with the previous iteration's
-head.
+Whether/how the raw Picard update to `state.h` is damped (or extrapolated) before the next
+iteration -- multiple dispatch on the concrete subtype ([`NoHeadRelaxation`](@ref)/
+[`UnderHeadRelaxation`](@ref)/[`AndersonHeadRelaxation`](@ref)) picks whether [`relax_h!`](@ref) is
+a no-op, an under-relaxation blend with the previous iteration's head, or an Anderson-accelerated
+extrapolation using several previous iterations' history.
 """
 abstract type AbstractHeadRelaxation end
 
@@ -42,6 +43,164 @@ with the relaxed `h`. Alpha should be between 0 and 1 and usually taken closer t
 function relax_h!(hr::UnderHeadRelaxation, state::State, h_prev)
     alpha = hr.alpha
     @. state.h = alpha * state.h + (1 - alpha) * h_prev
+    return state
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Anderson acceleration (depth `depth`, mixing/damping `beta`) of the Picard fixed-point map
+`h -> solve_elliptic_linear_system!(...)`. Instead of blending the new head with just the
+immediately preceding iterate (as [`UnderHeadRelaxation`](@ref) does, with a fixed weight), Anderson
+acceleration keeps the last `depth` (iterate, residual) pairs and, each iteration, solves a small
+(at most `depth`x`depth`) least-squares problem for the linear combination of past residuals that
+comes closest to canceling the current one, then extrapolates the next iterate using those same
+weights. This is the standard "Type-I" formulation (residual-difference least squares -- Walker &
+Ni, SIAM J. Numer. Anal. 49(4), 1715-1735, 2011; Fang & Saad, Numer. Linear Algebra Appl. 16(3),
+2009), reformulated in terms of increments (`ΔX`/`ΔF`) rather than the equivalent
+constrained-weights form, since increments avoid needing to explicitly enforce `sum(alpha) = 1`.
+
+`beta = 1` recovers "pure" Anderson extrapolation (no extra damping beyond what the least-squares
+step itself provides); `beta < 1` mixes in some of [`UnderHeadRelaxation`](@ref)'s damping on top,
+which may help stability on stiff problems at the cost of some acceleration.
+
+Uses the normal equations (`(ΔF'ΔF) \\ (ΔF'f_k)`) rather than a QR-based least-squares solve, for
+simplicity -- the well-known less-robust choice (normal equations square `ΔF`'s condition number,
+a real risk once consecutive residual differences become nearly collinear, typically once the
+residual is already small) but acceptable for the small `depth` tested here, since a `depth x
+depth` solve is negligible either way next to the O(n) linear solve it's accelerating. A
+QR-with-column-dropping implementation would be needed for a fully robust production version; as a
+cheap stopgap, `gamma_clip` catches the specific failure mode actually observed empirically
+(`linear_solver_benchmarks.tex`/`beyond_solver_choice.tex`: depth 5-8 sometimes extrapolated in the
+wrong direction, making convergence *worse* than plain Picard) by discarding the extrapolation and
+falling back to a plain beta-damped step whenever the solved weights blow up
+(`maximum(abs, gamma) > gamma_clip`) -- a solved weight of that magnitude means the normal-equations
+solve is numerically unreliable for this iteration, and the safe thing is to skip the extrapolation
+for just that one iteration rather than apply a wild, unreliable correction to the head field.
+
+History is reset once per Picard loop (see [`reset_relaxation!`](@ref)/[`Picard_loop!`](@ref)):
+different timesteps solve a different fixed-point map (the Newton-linearization point and boundary
+data both change), so carrying history across timesteps would extrapolate against a stale map.
+"""
+mutable struct AndersonHeadRelaxation{F <: AbstractFloat, M <: AbstractMatrix{F}, V <: AbstractVector{F}} <: AbstractHeadRelaxation
+    depth::Int
+    beta::F
+    gamma_clip::F # discard the extrapolation and fall back to a plain step if maximum(abs, gamma) exceeds this
+    Xhist::M   # n x (depth+1): past x_k (pre-relaxation iterates), oldest first, newest in the last column
+    Fhist::M   # n x (depth+1): past f_k = g(x_k) - x_k, same column convention as Xhist
+    dX::M      # n x depth workspace: consecutive columns of Xhist, differenced
+    dF::M      # n x depth workspace: consecutive columns of Fhist, differenced
+    gram::Matrix{F}  # depth x depth workspace for dF'dF
+    rhs::V     # depth workspace for dF'f_k
+    gamma::V   # depth workspace, the solved least-squares weights
+    fk::V      # n workspace for the current residual g(x_k) - x_k
+    count::Int # how many valid raw (x, f) columns are currently held, 0..depth+1
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Builds an [`AndersonHeadRelaxation`](@ref) for grid `g`. Defaults (`depth=3`, `beta=1.0`) are the
+empirically best-performing setting found for Shakti's Picard loop
+(`beyond_solver_choice.tex`: 18.5% fewer Picard iterations and 15.3% less wall time than plain
+Picard at 256x256 with `CholeskyDirectSolver`, combined with `-t 8`) -- depth 5 and 8 were
+tested and are both *worse* than depth 3, non-monotonically, so raising `depth` "for more history"
+is not a safe assumption here. `gamma_clip` (default `10.0`) bounds the fallback-triggering
+threshold described in [`AndersonHeadRelaxation`](@ref)'s docstring.
+"""
+function AndersonHeadRelaxation(g::Grid{F}; depth::Int = 3, beta = 1.0, gamma_clip = 10.0) where F
+    n = g.nx * g.ny
+    Xhist = @zeros(n, depth + 1)
+    Fhist = @zeros(n, depth + 1)
+    dX    = @zeros(n, depth)
+    dF    = @zeros(n, depth)
+    gram  = zeros(F, depth, depth)
+    rhs   = zeros(F, depth)
+    gamma = zeros(F, depth)
+    fk    = @zeros(n)
+    return AndersonHeadRelaxation(depth, F(beta), F(gamma_clip), Xhist, Fhist, dX, dF, gram, rhs, gamma, fk, 0)
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+No-op for relaxation schemes with no history to reset (everything except
+[`AndersonHeadRelaxation`](@ref)).
+"""
+reset_relaxation!(::AbstractHeadRelaxation) = nothing
+
+"""
+$(TYPEDSIGNATURES)
+
+Clears [`AndersonHeadRelaxation`](@ref)'s history -- called once at the start of every
+[`Picard_loop!`](@ref) (i.e. once per timestep), since a new timestep means a new fixed-point map
+and old (iterate, residual) pairs are no longer valid extrapolation data for it.
+"""
+reset_relaxation!(hr::AndersonHeadRelaxation) = (hr.count = 0; nothing)
+
+"""
+$(TYPEDSIGNATURES)
+
+Anderson-accelerated update: see [`AndersonHeadRelaxation`](@ref) for the derivation. `state.h`
+holds `g(x_k)` (the raw, just-solved Picard update) on entry; `h_prev` is `x_k`.
+"""
+function relax_h!(hr::AndersonHeadRelaxation, state::State, h_prev)
+
+    depth = hr.depth
+    hvec = vec(state.h)    # g(x_k) on entry (read below into hr.fk); reused in place as the write-target
+                            # for the new iterate further down, since it's a reshape (no copy) of state.h --
+                            # writing through hvec IS writing into state.h, just with a flat (n,) shape that
+                            # matches hprev_v/hr.fk/dX/dF for broadcasting and mul!.
+    hprev_v = vec(h_prev)  # x_k
+
+    @. hr.fk = hvec - hprev_v # f_k = g(x_k) - x_k, computed before hvec (aliasing state.h) is overwritten below
+
+    # Shift history one column left (drop the oldest), append (x_k, f_k) as the newest column.
+    @views hr.Xhist[:, 1:depth] .= hr.Xhist[:, 2:depth+1]
+    @views hr.Fhist[:, 1:depth] .= hr.Fhist[:, 2:depth+1]
+    hr.Xhist[:, depth+1] .= hprev_v
+    hr.Fhist[:, depth+1] .= hr.fk
+    hr.count = min(hr.count + 1, depth + 1)
+
+    mk = min(hr.count - 1, depth) # usable DIFFERENCE columns (need >= 2 raw columns for 1 difference)
+
+    if mk <= 0
+        # First iteration of this Picard loop: no history yet, fall back to a plain beta-damped Picard step.
+        @. hvec = hprev_v + hr.beta * hr.fk
+        return state
+    end
+
+    lo = depth + 1 - mk # first raw column index among the mk+1 most recent ones
+    @views begin
+        X = hr.Xhist[:, lo:depth+1]
+        F = hr.Fhist[:, lo:depth+1]
+        dX = hr.dX[:, 1:mk]
+        dF = hr.dF[:, 1:mk]
+        for j in 1:mk
+            @. dX[:, j] = X[:, j+1] - X[:, j]
+            @. dF[:, j] = F[:, j+1] - F[:, j]
+        end
+
+        gram = hr.gram[1:mk, 1:mk]
+        rhs  = hr.rhs[1:mk]
+        mul!(gram, dF', dF)
+        mul!(rhs, dF', hr.fk)
+        gamma = hr.gamma[1:mk]
+        gamma .= gram \ rhs # small mk x mk dense solve -- negligible next to the O(n) elliptic solve this accelerates
+
+        if maximum(abs, gamma) > hr.gamma_clip
+            # Normal-equations solve is numerically unreliable this iteration (near-collinear
+            # ΔF columns) -- discard the extrapolation rather than risk moving h in the wrong
+            # direction; fall back to a plain beta-damped step for just this one iteration.
+            @. hvec = hprev_v + hr.beta * hr.fk
+            return state
+        end
+
+        @. hvec = hprev_v + hr.beta * hr.fk
+        mul!(hvec, dX, gamma, -1.0, 1.0)
+        mul!(hvec, dF, gamma, -hr.beta, 1.0)
+    end
+
     return state
 end
 
@@ -145,6 +304,7 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
     # Initialize PicardSolver state
     ps.converged = false
     ps.last_iter = 0
+    reset_relaxation!(ps.hr) # no-op except for AndersonHeadRelaxation, whose history is only valid within one timestep's fixed-point map
 
     @inbounds for iter in 1:ps.iters # start the Picard loop
 
