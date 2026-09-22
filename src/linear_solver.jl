@@ -248,13 +248,27 @@ construction time (rather than deeper in the solve) under any other backend.
 `ordering` picks the fill-reducing permutation used for the ONE-TIME initial factorization (every
 subsequent solve reuses it via `cholesky!`, since the sparsity pattern never changes -- see
 [`solve_elliptic_linear_system!`](@ref)): `:amd` (default) lets CHOLMOD pick its own ordering;
-`:metis` computes an explicit METIS nested-dissection permutation instead (`Metis.jl`). Measured
-on real assembled matrices (`beyond_solver_choice.tex`): `:metis` cuts fill-in ~37% and factorize
-time 19-27% on this problem's specific 2D-stencil-plus-boundary-rows sparsity pattern, at the cost
-of a one-time few-second permutation computation (worth it once amortized over a real
-multi-timestep run's many subsequent `cholesky!` calls, but NOT worth it for a single one-shot
-solve). Opt-in rather than the new default pending that amortized-benefit check on a real
-multi-timestep run (see `metis_ordering_amortized_check.jl`).
+`:metis` computes an explicit METIS nested-dissection permutation instead (`Metis.jl`). Correctness
+is confirmed identical to `:amd` (a permutation cannot change the mathematical solution, only
+factorization internals -- verified directly, not just assumed).
+
+**Performance is NOT a universal win -- highly grid-dependent, verified on two very different
+cases:**
+- On large, regular synthetic grids (256x256, 1024x1024; `beyond_solver_choice.tex`):
+  `:metis` cuts fill-in ~37% and one-shot factorize time 19-27%, at the cost of a one-time
+  multi-second permutation computation (worth it once amortized over a real multi-timestep run's
+  many subsequent `cholesky!` calls, not worth it for a single one-shot solve).
+- On the real Drang Drung v2 dataset (102x200, an order of magnitude smaller and with a
+  real, irregular grounded/ocean/basin mask rather than a uniform rectangle;
+  `test/drangdrung/drangdrung_metis_compare.jl`): `:metis` was a clear net LOSS over a real
+  30-timestep run -- **2x slower overall**, not faster, despite the identical correct answer.
+  METIS's nested-dissection advantage is asymptotic and tied to grid regularity; neither holds as
+  cleanly at this smaller, irregular scale.
+
+**Do not enable `:metis` by default or without checking on the specific grid size/shape you
+actually care about first** -- it is opt-in for exactly this reason, kept for the case where a
+future run's grid is large and regular enough to match the synthetic benchmark's regime, not as a
+general recommendation.
 """
 function CholeskyDirectSolver(g::Grid{F}; ordering::Symbol = :amd) where F
 
