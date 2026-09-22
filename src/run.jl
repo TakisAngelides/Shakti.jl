@@ -199,13 +199,17 @@ single fastest-relaxing cell). `UsePercentile=true`: one bulk `copyto!` of `rate
 per grounded cell would be illegal/catastrophically slow on a GPU backend), then a plain CPU loop
 gathers the `GROUNDED`-cell values (precomputed indices) into `ts.scratch`, sorts it in place, and
 indexes the `ts.percentile`-th entry. None of this allocates -- every buffer is preallocated once
-by [`AdaptiveTimeStep`](@ref)'s constructor.
+by [`AdaptiveTimeStep`](@ref)'s constructor. Returns `0` outright if there are no `GROUNDED` cells
+at all (an empty `ts.grounded_indices`, fixed at construction) -- `ts.scratch` would be empty too,
+so indexing it would otherwise throw; `0` feeds the same `stat <= 0 -> dt_max` fallback
+[`update_dt!`](@ref) already uses for "no cell has a positive rate" under `UsePercentile=false`.
 """
 rate_statistic(rate, ts::AdaptiveTimeStep{false}) = maximum(rate)
 
 function rate_statistic(rate, ts::AdaptiveTimeStep{true})
-    copyto!(ts.host_rate, rate)
     n = length(ts.grounded_indices)
+    n == 0 && return zero(eltype(ts.scratch))
+    copyto!(ts.host_rate, rate)
     for i in 1:n
         ts.scratch[i] = ts.host_rate[ts.grounded_indices[i]]
     end

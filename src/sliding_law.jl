@@ -58,19 +58,19 @@ struct PrescribedSlidingLaw <: AbstractSlidingLaw end
 # which genuinely change every Picard iteration, so it's staggered onto
 # faces and squared once here (LinearSlidingLaw(grid, C)) rather than redone
 # in the hot path.
-struct LinearSlidingLaw{A <: AbstractArray} <: AbstractSlidingLaw
-    Cx2::A # C^2 staggered onto x-faces (Nx+1, Ny)
-    Cy2::A # C^2 staggered onto y-faces (Nx, Ny+1)
-end
-
 """
 $(TYPEDSIGNATURES)
 
-Builds a [`LinearSlidingLaw`](@ref) on grid `g` from a drag coefficient `C` given at cell centers
-(an `(nx, ny)` array, e.g. an inverted per-cell field) or as a uniform scalar, staggering it onto
-faces and squaring it once here rather than in the per-iteration hot path.
+Stages a cell-centered drag/friction coefficient `C` (an `(nx, ny)` array, e.g. an inverted
+per-cell field, or a uniform scalar) onto x-/y-faces: boundary faces take the value of the nearest
+cell center, interior faces the arithmetic mean of their two neighbours -- same convention as
+[`compute_b_x!`](@ref)/[`compute_b_y!`](@ref) (`gap_height.jl`). Shared by every sliding law that
+stores its own coefficient staggered onto faces once at construction rather than in the
+per-iteration hot path ([`LinearSlidingLaw`](@ref), [`RegularizedCoulombFieldSlidingLaw`](@ref),
+[`RegularizedCoulombV0SlidingLaw`](@ref)). Returns plain host `F`-typed arrays `(Cx, Cy)`; callers
+apply their own `Data.Array` conversion (and squaring, for [`LinearSlidingLaw`](@ref)) on top.
 """
-function LinearSlidingLaw(g::Grid, C)
+function stagger_to_faces(g::Grid, C)
     nx, ny = g.nx, g.ny
     F = eltype(g.x)
     C_cc = C isa AbstractArray ? F.(C) : fill(F(C), nx, ny) # promote a scalar to a uniform field so the staggering below is one code path either way
@@ -86,6 +86,23 @@ function LinearSlidingLaw(g::Grid, C)
     Cy[:, ny+1] .= C_cc[:, ny]
     Cy[:, 2:ny] .= (C_cc[:, 1:ny-1] .+ C_cc[:, 2:ny]) ./ 2
 
+    return Cx, Cy
+end
+
+struct LinearSlidingLaw{A <: AbstractArray} <: AbstractSlidingLaw
+    Cx2::A # C^2 staggered onto x-faces (Nx+1, Ny)
+    Cy2::A # C^2 staggered onto y-faces (Nx, Ny+1)
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Builds a [`LinearSlidingLaw`](@ref) on grid `g` from a drag coefficient `C` given at cell centers
+(an `(nx, ny)` array, e.g. an inverted per-cell field) or as a uniform scalar, staggering it onto
+faces and squaring it once here rather than in the per-iteration hot path.
+"""
+function LinearSlidingLaw(g::Grid, C)
+    Cx, Cy = stagger_to_faces(g, C)
     return LinearSlidingLaw(Data.Array(Cx .^ 2), Data.Array(Cy .^ 2))
 end
 
@@ -282,21 +299,7 @@ scalar, staggering it onto faces once here rather than in the per-iteration hot 
 enters `taub` linearly, not as `C^2`).
 """
 function RegularizedCoulombFieldSlidingLaw(g::Grid, C)
-    nx, ny = g.nx, g.ny
-    F = eltype(g.x)
-    C_cc = C isa AbstractArray ? F.(C) : fill(F(C), nx, ny) # promote a scalar to a uniform field so the staggering below is one code path either way
-
-    # Edge faces take the value of the center, otherwise we use the arithmetic mean of the two centers next to a face
-    Cx = zeros(F, nx + 1, ny)
-    Cx[1, :]    .= C_cc[1, :]
-    Cx[nx+1, :] .= C_cc[nx, :]
-    Cx[2:nx, :] .= (C_cc[1:nx-1, :] .+ C_cc[2:nx, :]) ./ 2
-
-    Cy = zeros(F, nx, ny + 1)
-    Cy[:, 1]    .= C_cc[:, 1]
-    Cy[:, ny+1] .= C_cc[:, ny]
-    Cy[:, 2:ny] .= (C_cc[:, 1:ny-1] .+ C_cc[:, 2:ny]) ./ 2
-
+    Cx, Cy = stagger_to_faces(g, C)
     return RegularizedCoulombFieldSlidingLaw(Data.Array(Cx), Data.Array(Cy))
 end
 
@@ -434,21 +437,8 @@ constant velocity threshold `v0` (m/s). Staggers `C` onto faces once here rather
 per-iteration hot path, same as [`RegularizedCoulombFieldSlidingLaw(::Grid, C)`](@ref).
 """
 function RegularizedCoulombV0SlidingLaw(g::Grid, C, v0)
-    nx, ny = g.nx, g.ny
-    F = eltype(g.x)
-    C_cc = C isa AbstractArray ? F.(C) : fill(F(C), nx, ny) # promote a scalar to a uniform field so the staggering below is one code path either way
-
-    Cx = zeros(F, nx + 1, ny)
-    Cx[1, :]    .= C_cc[1, :]
-    Cx[nx+1, :] .= C_cc[nx, :]
-    Cx[2:nx, :] .= (C_cc[1:nx-1, :] .+ C_cc[2:nx, :]) ./ 2
-
-    Cy = zeros(F, nx, ny + 1)
-    Cy[:, 1]    .= C_cc[:, 1]
-    Cy[:, ny+1] .= C_cc[:, ny]
-    Cy[:, 2:ny] .= (C_cc[:, 1:ny-1] .+ C_cc[:, 2:ny]) ./ 2
-
-    return RegularizedCoulombV0SlidingLaw(Data.Array(Cx), Data.Array(Cy), F(v0))
+    Cx, Cy = stagger_to_faces(g, C)
+    return RegularizedCoulombV0SlidingLaw(Data.Array(Cx), Data.Array(Cy), eltype(g.x)(v0))
 end
 
 initialize_taub!(::RegularizedCoulombV0SlidingLaw, state::State, taub_x::AbstractArray, taub_y::AbstractArray) = state # recomputed every Picard iteration, same as the other two regularized-Coulomb laws

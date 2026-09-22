@@ -59,16 +59,33 @@ struct NoObserver <: AbstractObserver end
 """
 $(TYPEDSIGNATURES)
 
+Maps each value of `tracked_times` to the first index it appears at (`Dict{Int, Int}`) -- same
+"first match wins" semantics as `findfirst(==(t), tracked_times)`, just computed once here rather
+than rescanned by [`observe!`](@ref) every real timestep. Shared by [`IOObserver`](@ref)'s and
+[`LiveObserver`](@ref)'s own convenience constructors.
+"""
+function tracked_times_index(tracked_times)
+    idx = Dict{Int, Int}()
+    for (i, t) in enumerate(tracked_times)
+        get!(idx, t, i)
+    end
+    return idx
+end
+
+"""
+$(TYPEDSIGNATURES)
+
 Writes `tracked_obs` (names of `State` fields) at each of `tracked_times` (timestep indices) to
 `path`, in the file format given by `fr`. `handle` is set by [`prepare!`](@ref)/[`resume!`](@ref)
 and holds the open file/dataset handle.
 """
 struct IOObserver{FR <: AbstractFileWriter} <: AbstractObserver
-    tracked_obs::Vector{String}        # names of State fields to record
-    tracked_times::AbstractVector{Int} # time step indices at which to record
-    fr::FR                             # file format
-    path::String                       # where to write
-    handle::Ref{Any}                   # set by prepare!; holds the open file/dataset handle
+    tracked_obs::Vector{String}          # names of State fields to record
+    tracked_times::AbstractVector{Int}   # time step indices at which to record
+    fr::FR                               # file format
+    path::String                         # where to write
+    handle::Ref{Any}                     # set by prepare!; holds the open file/dataset handle
+    tracked_times_index::Dict{Int, Int}  # tracked_times[i] -> i, see tracked_times_index(...) above; observe!'s O(1) lookup
 end
 
 """
@@ -76,7 +93,7 @@ $(TYPEDSIGNATURES)
 
 Builds an [`IOObserver`](@ref) with an unopened handle (set later by [`prepare!`](@ref)).
 """
-IOObserver(tracked_obs, tracked_times, fr, path) = IOObserver(tracked_obs, tracked_times, fr, path, Ref{Any}(nothing))
+IOObserver(tracked_obs, tracked_times, fr, path) = IOObserver(tracked_obs, tracked_times, fr, path, Ref{Any}(nothing), tracked_times_index(tracked_times))
 
 """
 $(TYPEDSIGNATURES)
@@ -85,9 +102,10 @@ Keeps `tracked_obs` (names of `State` fields) at each of `tracked_times` (timest
 memory (`history`, one preallocated array per tracked observable) rather than writing to disk.
 """
 struct LiveObserver <: AbstractObserver # no writing to files, just arrays kept in RAM
-    tracked_obs::Vector{String}   # names of State fields to record
-    tracked_times::AbstractVector{Int}      # time step indices at which to record
-    history::Dict{String, Array}  # set by prepare!; one preallocated array per tracked observable
+    tracked_obs::Vector{String}          # names of State fields to record
+    tracked_times::AbstractVector{Int}   # time step indices at which to record
+    history::Dict{String, Array}         # set by prepare!; one preallocated array per tracked observable
+    tracked_times_index::Dict{Int, Int}  # tracked_times[i] -> i, see tracked_times_index(...) above; observe!'s O(1) lookup
 end
 
 """
@@ -95,7 +113,7 @@ $(TYPEDSIGNATURES)
 
 Builds a [`LiveObserver`](@ref) with an empty `history` (populated later by [`prepare!`](@ref)).
 """
-LiveObserver(tracked_obs, tracked_times) = LiveObserver(tracked_obs, tracked_times, Dict{String, Array}())
+LiveObserver(tracked_obs, tracked_times) = LiveObserver(tracked_obs, tracked_times, Dict{String, Array}(), tracked_times_index(tracked_times))
 
 """
 $(TYPEDSIGNATURES)
@@ -261,7 +279,7 @@ once per timestep from `run!` (`run.jl`).
 observe!(observer::NoObserver, state::State, t, total_time) = nothing
 
 function observe!(observer::LiveObserver, state::State, t, total_time)
-    idx = findfirst(==(t), observer.tracked_times)
+    idx = get(observer.tracked_times_index, t, nothing)
     idx === nothing && return nothing
     for name in observer.tracked_obs
         hist = observer.history[name]
@@ -271,7 +289,7 @@ function observe!(observer::LiveObserver, state::State, t, total_time)
 end
 
 function observe!(observer::IOObserver, state::State, t, total_time)
-    idx = findfirst(==(t), observer.tracked_times)
+    idx = get(observer.tracked_times_index, t, nothing)
     idx === nothing && return nothing
     write2file!(observer.fr, observer, state, idx, total_time)
     return nothing

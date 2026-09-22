@@ -176,12 +176,14 @@ end
 #
 # Both faces in one launch (ParallelStencil infers the launch range from the union of every
 # argument's size, see compute_dhdxy_kernel!'s own note, field_gradients.jl); D_x/D_y are left
-# exactly zero (their @zeros default, never written) at domain-boundary faces and at any face
-# touching OTHER_BASIN/FROZEN_BED -- not via an explicit boundary branch, but because they're built
-# from q_x/dhdx/dpwdx (and the y-face equivalents), which are themselves already exactly zero
-# there (see compute_dhdx_kernel!'s docstring, field_gradients.jl): D_x = f(q_x, dhdx, dpwdx), and
-# q_x itself comes out to 0 wherever dhdx=0 (compute_q_and_Re_x_kernel!, water_flux.jl), so the
-# zero propagates through automatically.
+# exactly zero (their @zeros default, never written) at domain-boundary faces -- via this kernel's
+# own explicit `ix > 1 && ix < size(D_x, 1)` / `iy > 1 && iy < size(D_y, 2)` guard, same convention
+# as compute_dhdx_kernel!/compute_dhdy_kernel! (field_gradients.jl) -- and at any face touching
+# OTHER_BASIN/FROZEN_BED, but there NOT via an explicit mask branch: those faces are built from
+# q_x/dhdx/dpwdx (and the y-face equivalents), which are themselves already exactly zero there
+# (see compute_dhdx_kernel!'s docstring): D_x = f(q_x, dhdx, dpwdx), and q_x itself comes out to 0
+# wherever dhdx=0 (compute_q_and_Re_x_kernel!, water_flux.jl), so the zero propagates through
+# automatically.
 @parallel_indices (ix, iy) function compute_D_kernel!(D_x, D_y, b_x, b_y, q_x, q_y, dhdx, dhdy, dpwdx, dpwdy, Linv, rho_w, rho_i, ggrav, ct, cw,
                                                         ::MeltTerms{Geothermal,Frictional,Potential,Sensible,Conductive}) where {Geothermal,Frictional,Potential,Sensible,Conductive}
     if ix > 1 && ix < size(D_x, 1) && iy <= size(D_x, 2)
