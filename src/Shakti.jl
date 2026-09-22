@@ -76,6 +76,7 @@ include("observer.jl")
 include("sliding_law.jl")
 include("melt_rate.jl")
 include("elliptic_solver.jl")
+include("newton_solver.jl")
 include("parabolic_solver.jl")
 include("gap_height.jl")
 include("cell_gap_clamping.jl")
@@ -147,6 +148,8 @@ export compute_D!
 export AbstractHeadRelaxation, NoHeadRelaxation, UnderHeadRelaxation, AndersonHeadRelaxation
 export relax_h!
 export PicardSolver
+export AbstractEllipticSolver
+export NewtonJFNKSolver, newton_status
 export elliptic_solver!, Picard_loop!, Picard_iteration!, refresh_head_dependents!
 
 # parabolic_solver.jl
