@@ -20,6 +20,7 @@ using SparseArrays
 using LinearAlgebra
 using Krylov
 using AlgebraicMultigrid
+using Metis
 using Base.Threads
 using Statistics
 using NetCDF

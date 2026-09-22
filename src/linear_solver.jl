@@ -244,18 +244,52 @@ $(TYPEDSIGNATURES)
 
 Builds a [`CholeskyDirectSolver`](@ref) on grid `g`. CPU (`"Threads"` backend) only -- errors at
 construction time (rather than deeper in the solve) under any other backend.
+
+`ordering` picks the fill-reducing permutation used for the ONE-TIME initial factorization (every
+subsequent solve reuses it via `cholesky!`, since the sparsity pattern never changes -- see
+[`solve_elliptic_linear_system!`](@ref)): `:amd` (default) lets CHOLMOD pick its own ordering;
+`:metis` computes an explicit METIS nested-dissection permutation instead (`Metis.jl`). Correctness
+is confirmed identical to `:amd` (a permutation cannot change the mathematical solution, only
+factorization internals -- verified directly, not just assumed).
+
+**Performance is NOT a universal win -- highly grid-dependent, verified on two very different
+cases:**
+- On large, regular synthetic grids (256x256, 1024x1024; `beyond_solver_choice.tex`):
+  `:metis` cuts fill-in ~37% and one-shot factorize time 19-27%, at the cost of a one-time
+  multi-second permutation computation (worth it once amortized over a real multi-timestep run's
+  many subsequent `cholesky!` calls, not worth it for a single one-shot solve).
+- On the real Drang Drung v2 dataset (102x200, an order of magnitude smaller and with a
+  real, irregular grounded/ocean/basin mask rather than a uniform rectangle;
+  `test/drangdrung/drangdrung_metis_compare.jl`): `:metis` was a clear net LOSS over a real
+  30-timestep run -- **2x slower overall**, not faster, despite the identical correct answer.
+  METIS's nested-dissection advantage is asymptotic and tied to grid regularity; neither holds as
+  cleanly at this smaller, irregular scale.
+
+**Do not enable `:metis` by default or without checking on the specific grid size/shape you
+actually care about first** -- it is opt-in for exactly this reason, kept for the case where a
+future run's grid is large and regular enough to match the synthetic benchmark's regime, not as a
+general recommendation.
 """
-function CholeskyDirectSolver(g::Grid{F}) where F
+function CholeskyDirectSolver(g::Grid{F}; ordering::Symbol = :amd) where F
 
     # Fail here, at construction time, rather than let a GPU-resident array reach it deeper in the solve
     backend != "Threads" && error("CholeskyDirectSolver is CPU-only (SparseArrays/CHOLMOD has no GPU path); choose an iterative solver under the $backend backend.")
+    ordering in (:amd, :metis) || error("Unknown ordering: $ordering (use :amd or :metis)")
 
     sals = SparseAssembledLinearSystem(g)
     # Symmetric(...) tells CHOLMOD to read only one triangle -- valid now that
     # sals.M is exactly symmetric (Dirichlet neighbours are eliminated
     # symmetrically, see update_SALS_elliptic_kernel!) and symmetric positive-definite SPD (diffusion + strictly
     # positive diagonal reaction term from the Newton-linearized creep closure).
-    fact = cholesky(Symmetric(sals.M)) # CHOLMOD is SuiteSparse's sparse Cholesky factorization library, exposed in Julia through SparseArrays/LinearAlgebra's cholesky function. In linear_solver.jl, cholesky(Symmetric(sals.M)) calls into CHOLMOD to factorize the sparse SPD matrix from the assembled linear system
+    fact = if ordering == :metis
+        # Metis.permutation returns (perm, iperm) as Int32 vectors regardless of F's index type;
+        # cholesky's perm keyword needs a concrete Vector{<:Integer} matching M's own Ti, hence the
+        # explicit Vector{Int} conversion (SparseAssembledLinearSystem always uses Int for indices).
+        perm, _ = Metis.permutation(sals.M)
+        cholesky(Symmetric(sals.M); perm = Vector{Int}(perm))
+    else
+        cholesky(Symmetric(sals.M)) # CHOLMOD is SuiteSparse's sparse Cholesky factorization library, exposed in Julia through SparseArrays/LinearAlgebra's cholesky function. In linear_solver.jl, cholesky(Symmetric(sals.M)) calls into CHOLMOD to factorize the sparse SPD matrix from the assembled linear system
+    end
     h_vec = zeros(F, g.nx * g.ny)
 
     return CholeskyDirectSolver(sals, fact, h_vec)
