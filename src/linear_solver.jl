@@ -244,18 +244,38 @@ $(TYPEDSIGNATURES)
 
 Builds a [`CholeskyDirectSolver`](@ref) on grid `g`. CPU (`"Threads"` backend) only -- errors at
 construction time (rather than deeper in the solve) under any other backend.
+
+`ordering` picks the fill-reducing permutation used for the ONE-TIME initial factorization (every
+subsequent solve reuses it via `cholesky!`, since the sparsity pattern never changes -- see
+[`solve_elliptic_linear_system!`](@ref)): `:amd` (default) lets CHOLMOD pick its own ordering;
+`:metis` computes an explicit METIS nested-dissection permutation instead (`Metis.jl`). Measured
+on real assembled matrices (`beyond_solver_choice.tex`): `:metis` cuts fill-in ~37% and factorize
+time 19-27% on this problem's specific 2D-stencil-plus-boundary-rows sparsity pattern, at the cost
+of a one-time few-second permutation computation (worth it once amortized over a real
+multi-timestep run's many subsequent `cholesky!` calls, but NOT worth it for a single one-shot
+solve). Opt-in rather than the new default pending that amortized-benefit check on a real
+multi-timestep run (see `metis_ordering_amortized_check.jl`).
 """
-function CholeskyDirectSolver(g::Grid{F}) where F
+function CholeskyDirectSolver(g::Grid{F}; ordering::Symbol = :amd) where F
 
     # Fail here, at construction time, rather than let a GPU-resident array reach it deeper in the solve
     backend != "Threads" && error("CholeskyDirectSolver is CPU-only (SparseArrays/CHOLMOD has no GPU path); choose an iterative solver under the $backend backend.")
+    ordering in (:amd, :metis) || error("Unknown ordering: $ordering (use :amd or :metis)")
 
     sals = SparseAssembledLinearSystem(g)
     # Symmetric(...) tells CHOLMOD to read only one triangle -- valid now that
     # sals.M is exactly symmetric (Dirichlet neighbours are eliminated
     # symmetrically, see update_SALS_elliptic_kernel!) and symmetric positive-definite SPD (diffusion + strictly
     # positive diagonal reaction term from the Newton-linearized creep closure).
-    fact = cholesky(Symmetric(sals.M)) # CHOLMOD is SuiteSparse's sparse Cholesky factorization library, exposed in Julia through SparseArrays/LinearAlgebra's cholesky function. In linear_solver.jl, cholesky(Symmetric(sals.M)) calls into CHOLMOD to factorize the sparse SPD matrix from the assembled linear system
+    fact = if ordering == :metis
+        # Metis.permutation returns (perm, iperm) as Int32 vectors regardless of F's index type;
+        # cholesky's perm keyword needs a concrete Vector{<:Integer} matching M's own Ti, hence the
+        # explicit Vector{Int} conversion (SparseAssembledLinearSystem always uses Int for indices).
+        perm, _ = Metis.permutation(sals.M)
+        cholesky(Symmetric(sals.M); perm = Vector{Int}(perm))
+    else
+        cholesky(Symmetric(sals.M)) # CHOLMOD is SuiteSparse's sparse Cholesky factorization library, exposed in Julia through SparseArrays/LinearAlgebra's cholesky function. In linear_solver.jl, cholesky(Symmetric(sals.M)) calls into CHOLMOD to factorize the sparse SPD matrix from the assembled linear system
+    end
     h_vec = zeros(F, g.nx * g.ny)
 
     return CholeskyDirectSolver(sals, fact, h_vec)
