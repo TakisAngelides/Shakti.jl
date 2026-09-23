@@ -54,11 +54,28 @@ const floattype = floattype_str == "Float64" ? Float64 :
     @init_parallel_stencil(Metal, floattype, 2)
 elseif backend == "CUDA"
     using CUDA
+    using CUDA.CUSPARSE
+    using CUDSS
     @init_parallel_stencil(CUDA, floattype, 2)
 elseif backend == "Threads"
     @init_parallel_stencil(Threads, floattype, 2)
 else
     error("Unknown backend preference: $backend (expected \"Threads\", \"Metal\", or \"CUDA\")")
+end
+
+# CUDA/CUDSS are ALSO loaded under "Threads" backend (separately from the dispatch above, which
+# only governs ParallelStencil's own field-array backend -- State/Grid/assembly stay CPU-resident
+# either way here): CUDSSDirectSolver (gpu_direct_solver.jl) uses CUDA purely as an accelerator
+# library for its own private GPU arrays, decoupled from which backend ParallelStencil's field
+# kernels use, exactly mirroring how CholeskyDirectSolver already requires "Threads" for its
+# CPU-only SparseArrays/CHOLMOD assembly regardless of what a *different* solver elsewhere might
+# want. Loading CUDA.jl without a GPU present is safe (it degrades gracefully -- only *using* a
+# GPU function would error), already confirmed working this same session on a driver-less login
+# node.
+@static if backend == "Threads"
+    using CUDA
+    using CUDA.CUSPARSE
+    using CUDSS
 end
 
 export backend, floattype # defined above, from the Preferences-backed backend/floattype constants
@@ -72,6 +89,9 @@ include("melt_input.jl")
 include("k_face_scheme.jl")
 include("preconditioner.jl")
 include("linear_solver.jl")
+@static if backend == "Threads" || backend == "CUDA"
+    include("gpu_direct_solver.jl") # CUDSSDirectSolver -- requires CUDA/CUDSS to be loaded, true under either of these two backends (see above); NOT available under Metal
+end
 include("observer.jl")
 include("sliding_law.jl")
 include("melt_rate.jl")
@@ -119,6 +139,9 @@ export AbstractKFaceScheme, Arithmetic, Harmonic, compute_K_face
 export AbstractLinearSolver, AbstractDirectSolver, AbstractIterativeSolver
 export AbstractLinearSystem, SparseAssembledLinearSystem, MatrixFreeLinearSystem
 export CholeskyDirectSolver, CGIterativeSolver
+@static if backend == "Threads" || backend == "CUDA"
+    export CUDSSDirectSolver
+end
 export solve_elliptic_linear_system!, solve_parabolic_linear_system!
 export AbstractDiffusionScheme, NoDiffusion, WithDiffusion
 export solve_b_diffusion!
