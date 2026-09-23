@@ -39,14 +39,14 @@ function make_mp4_mid(hist::AbstractArray, tracked_times, j, moulin_ij; filename
     moulin_i = show_moulins ? [mi for (mi, mj) in moulin_ij if mj == j] : Int[] # going to put red dots at the x locations where the moulin was during the simulation or if we dont print the moulins we set this to an empty Int vector Int[]
     if !isempty(moulin_i) # if we had moulins, i.e. somewhere a non-zero in the ieb field 
         moulin_vals = Observable(selectdim(hist, ndims(hist), 1)[moulin_i, j])
-        scatter!(ax, moulin_i, moulin_vals; color = :red, markersize = 8) # sets the red dot scatter point to signal in the plotting where each moulin was
-        record(fig, filename, 1:ntimes; framerate = 20) do idx
+        Makie.scatter!(ax, moulin_i, moulin_vals; color = :red, markersize = 8) # sets the red dot scatter point to signal in the plotting where each moulin was -- explicitly qualified: CUDSS.jl's SciMLBase dependency activates SciMLBaseMakieExt once Makie is also loaded, which makes the bare `scatter!` name ambiguous
+        Makie.record(fig, filename, 1:ntimes; framerate = 20) do idx # explicitly qualified -- CUDA.jl's own `record` (stream/event recording) collides with Makie's once both are loaded
             data[] = selectdim(hist, ndims(hist), idx)[:, j] # auto-updates the fig since data was wrapped in the Makie Observable struct
             moulin_vals[] = selectdim(hist, ndims(hist), idx)[moulin_i, j]
             ax.title = "t_iter = $(tracked_times[idx])"
         end
     else
-        record(fig, filename, 1:ntimes; framerate = 20) do idx
+        Makie.record(fig, filename, 1:ntimes; framerate = 20) do idx
             data[] = selectdim(hist, ndims(hist), idx)[:, j]
             ax.title = "t_iter = $(tracked_times[idx])"
         end
@@ -76,12 +76,12 @@ function make_mp4_2d(hist::AbstractArray, tracked_times, moulin_ij; filename, sh
     if show_moulins
         mx = Float32[mi for (mi, mj) in moulin_ij]
         my = Float32[mj for (mi, mj) in moulin_ij]
-        scatter!(ax, mx, my; color = :red, markersize = 8)
+        Makie.scatter!(ax, mx, my; color = :red, markersize = 8) # explicitly qualified -- see the other scatter! call site's comment above for why
     end
 
     title !== nothing && (ax.title = title)
 
-    record(fig, filename, 1:ntimes; framerate = framerate) do idx
+    Makie.record(fig, filename, 1:ntimes; framerate = framerate) do idx # explicitly qualified -- see make_mp4_mid's own comment for why
         data[] = selectdim(hist, ndims(hist), idx)
         title === nothing && (ax.title = "t_iter = $(tracked_times[idx])")
     end
