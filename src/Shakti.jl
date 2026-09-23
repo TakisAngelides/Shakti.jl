@@ -189,7 +189,7 @@ export AbstractHeadScheme, ParabolicHeadScheme, EllipticHeadScheme
 export AbstractGapScheme, ExplicitGapScheme, ImplicitGapScheme, FullyImplicitGapScheme
 export AbstractTimeStepScheme, FixedTimeStep, AdaptiveTimeStep, target_time
 export AbstractCellGapClamping, NoCellGapClamping, CellGapClamping, apply_cell_gap_clamping!
-export AbstractCellNClamping, NoCellNClamping, CellNClamping, apply_cell_N_clamping!
+export AbstractCellNClamping, NoCellNClamping, CellNClamping, SmoothCellNClamping, apply_cell_N_clamping!
 export Simulation
 
 # static_fields.jl
