@@ -191,6 +191,11 @@ robustness work (trust-region-style step control instead of plain backtracking, 
 """
 mutable struct NewtonJFNKSolver{F <: AbstractFloat, SALS <: SparseAssembledLinearSystem, FACT, WS, V <: AbstractVector{F}} <: AbstractEllipticSolver
     iters::Int
+    min_iters::Int # forces this many real Newton steps before the residual-based convergence check
+                   # is even consulted -- see the constructor docstring for why this is needed on
+                   # real datasets with CellNClamping active, and why the default (0) is kept for
+                   # every other use (Drang Drung/synthetic), where the 0-iteration shortcut this
+                   # would otherwise skip is a genuine, validated fast path, not a bug.
     tol::F
     gmres_rtol::F
     gmres_itmax::Int
@@ -219,8 +224,27 @@ $(TYPEDSIGNATURES)
 Builds a [`NewtonJFNKSolver`](@ref) on grid `g`. `iters`/`tol` mirror [`PicardSolver`](@ref)'s
 (max outer Newton iterations, convergence tolerance on the relative residual norm).
 `gmres_memory` sets the GMRES Krylov subspace size before a restart.
+
+**`min_iters` (default `0`, i.e. today's original behavior)**: forces at least this many real
+Newton steps before [`Newton_loop!`](@ref) will even consult the residual-based convergence check
+-- exists specifically to work around a confirmed false-convergence failure mode on real datasets
+with `CellNClamping` active (see the struct's own field comment, and `project_shakti_performance_
+findings.md`/session notes for the full experimental trail): the residual there can be near-zero,
+in any norm, at a point that is NOT actually converged, because the clamped cells' Jacobian is
+locally ill-conditioned -- no purely residual-based check, however normalized, can detect this
+BEFORE at least one real step has been taken with real Jacobian/GMRES information. Empirically (real
+Greenland dataset, 30-timestep smoke test), `min_iters=5` combined with a tighter `gmres_rtol=1e-4`
+(the default `1e-2` is too loose to resolve the same delicate cells accurately) and
+[`SmoothCellNClamping`](@ref) (instead of Picard's own hard [`CellNClamping`](@ref)) together
+brought Newton's final state to an almost exact match with Cholesky's reference (`N` mean within
+0.1%, `K`/`b` max within ~1-2%) -- a real fix, not just a mitigation, PROVIDED all three pieces are
+used together (any one alone was insufficient, see the docstring history in git blame / session
+notes). **Leave `min_iters=0` for Drang Drung/synthetic-benchmark use** (or anywhere `CellNClamping`
+is not active) -- forcing extra iterations there would give up the genuine, already-validated
+0-iteration fast path for a timestep whose previous solution already satisfies the new timestep's
+tolerance, at a real, unnecessary wall-time cost.
 """
-function NewtonJFNKSolver(g::Grid{F}; iters::Int = 50, tol = 1e-6, gmres_rtol = 1e-2,
+function NewtonJFNKSolver(g::Grid{F}; iters::Int = 50, min_iters::Int = 0, tol = 1e-6, gmres_rtol = 1e-2,
                            gmres_itmax::Int = 30, damping_min = 1e-3, gmres_memory::Int = 20) where F
     n = g.nx * g.ny
     sals = SparseAssembledLinearSystem(g)
@@ -231,7 +255,7 @@ function NewtonJFNKSolver(g::Grid{F}; iters::Int = 50, tol = 1e-6, gmres_rtol = 
     neg_r   = @zeros(n)
     h_trial = @zeros(n)
     r_trial = @zeros(n)
-    return NewtonJFNKSolver(iters, F(tol), F(gmres_rtol), gmres_itmax, F(damping_min), sals, fact, ws,
+    return NewtonJFNKSolver(iters, min_iters, F(tol), F(gmres_rtol), gmres_itmax, F(damping_min), sals, fact, ws,
                              false, 0, h0, r, neg_r, h_trial, r_trial)
 end
 
@@ -250,15 +274,17 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Repeatedly takes inexact, line-searched Newton steps (up to `ns.iters` times), checking
-convergence via the relative residual norm (`norm(F(h)) / (norm(b(h)) + eps) < ns.tol`, `b(h)` =
-`sals.rhs` = the current RHS of `F(h) = A(h)h - b(h)` -- dimensionally the correct thing to
-normalize against, unlike an earlier version that normalized by `norm(h)` instead), and sets
-`ns.converged`/`ns.last_iter` accordingly. **This fixes a dimensional bug but NOT the deeper known
-false-convergence failure mode on real, `CellNClamping`-active datasets** -- see the constructor's
-docstring above for the full experimental trail (residual-only convergence checks, in any norm,
-cannot detect non-convergence at the near-singular near-flotation cells this clamping introduces).
-See the module-level notes for the full method.
+Repeatedly takes inexact, line-searched Newton steps (up to `ns.iters` times, but never fewer than
+`ns.min_iters` -- see the constructor's docstring for why that exists), checking convergence via
+the relative residual norm (`norm(F(h)) / (norm(b(h)) + eps) < ns.tol`, `b(h)` = `sals.rhs` = the
+current RHS of `F(h) = A(h)h - b(h)` -- dimensionally the correct thing to normalize against, unlike
+an earlier version that normalized by `norm(h)` instead), and sets `ns.converged`/`ns.last_iter`
+accordingly. The `norm(b(h))` normalization alone fixes a dimensional bug but NOT the deeper
+false-convergence failure mode on real, `CellNClamping`-active datasets (residual-only checks, in
+any norm, cannot detect non-convergence at the near-singular near-flotation cells that clamping
+introduces) -- `min_iters` (together with a tighter `gmres_rtol` and switching to
+[`SmoothCellNClamping`](@ref)) is the combination that empirically fixes it; see the constructor's
+docstring for the full story. See the module-level notes for the full method.
 """
 function Newton_loop!(ns::NewtonJFNKSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms,
                        kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping(),
@@ -276,7 +302,7 @@ function Newton_loop!(ns::NewtonJFNKSolver, state::State, grid::Grid, p::ModelPa
 
         r_norm = norm(ns.r)
         b_norm = norm(ns.sals.rhs) # dimensionally matches r_norm (both live in F(h)=A(h)h-b(h)'s units); norm(h) does not
-        if r_norm / (b_norm + eps(eltype(h_vec))) < ns.tol
+        if iter > ns.min_iters && r_norm / (b_norm + eps(eltype(h_vec))) < ns.tol
             ns.converged = true
             ns.last_iter = iter - 1
             return
