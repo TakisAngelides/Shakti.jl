@@ -137,12 +137,20 @@ especially early on, rather than to full precision. `damping_min` is the smalles
 line-search step-length factor tried before giving up and accepting whatever step was found (never
 skipping the line search entirely -- pure undamped Newton is not safe on Shakti's real, sometimes
 stiff problems). Convergence is checked on the residual directly (`norm(F(h))`, relative to
-`norm(h)`), unlike [`PicardSolver`](@ref)'s update-based check, since Newton's own step size is not
-otherwise available before the first step is taken -- one consequence, seen directly in real
-testing (below): a timestep whose previous solution ALREADY satisfies the new timestep's tolerance
-converges in 0 outer iterations under this check, something Picard's own convergence criterion
-structurally cannot report (it requires at least one completed iteration before it can measure an
-update size at all), so raw outer-iteration counts between the two are not perfectly apples-to-apples.
+`norm(b(h))`, i.e. the current RHS `sals.rhs` -- NOT `norm(h)`, an earlier version of this check
+that turned out to be dimensionally wrong: `F(h) = A(h)h - b(h)` lives in the same units as `b(h)`,
+not in `h`'s own units, and on the real Greenland dataset (much larger `h`/coefficient magnitudes
+than the synthetic/Drang-Drung grids this was first validated on) that mismatch let the check pass
+trivially, at timestep 1, against the raw un-relaxed initial condition -- a silent false positive:
+Newton never took a single real step for the entire run, while Cholesky needed 39 genuine Picard
+iterations from that same starting point. See `project_shakti_performance_findings.md`/session
+notes for the full failure analysis this fix responds to) unlike [`PicardSolver`](@ref)'s
+update-based check, since Newton's own step size is not otherwise available before the first step
+is taken -- one consequence, seen directly in real testing (below): a timestep whose previous
+solution ALREADY satisfies the new timestep's tolerance converges in 0 outer iterations under this
+check, something Picard's own convergence criterion structurally cannot report (it requires at
+least one completed iteration before it can measure an update size at all), so raw outer-iteration
+counts between the two are not perfectly apples-to-apples.
 
 **Empirical results (first validation pass, `beyond_solver_choice.tex`/session notes)**: on the
 synthetic benchmark (uniform slope/coefficients, `test/benchmarks/newton_vs_picard.jl`) at
@@ -225,8 +233,12 @@ end
 $(TYPEDSIGNATURES)
 
 Repeatedly takes inexact, line-searched Newton steps (up to `ns.iters` times), checking
-convergence via the relative residual norm (`norm(F(h)) / (max|h| + eps) < ns.tol`), and sets
-`ns.converged`/`ns.last_iter` accordingly. See the module-level notes for the full method.
+convergence via the relative residual norm (`norm(F(h)) / (norm(b(h)) + eps) < ns.tol`, `b(h)` =
+`sals.rhs` = the current RHS of `F(h) = A(h)h - b(h)` -- dimensionally the correct thing to
+normalize against, unlike an earlier version of this check that normalized by `norm(h)` instead;
+see the constructor's docstring above for why that was a real, silently-wrong-answer bug on the
+real Greenland dataset), and sets `ns.converged`/`ns.last_iter` accordingly. See the module-level
+notes for the full method.
 """
 function Newton_loop!(ns::NewtonJFNKSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms,
                        kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping(),
@@ -243,8 +255,8 @@ function Newton_loop!(ns::NewtonJFNKSolver, state::State, grid::Grid, p::ModelPa
     for iter in 1:ns.iters
 
         r_norm = norm(ns.r)
-        h_norm = mapreduce(abs, max, h_vec; init = zero(eltype(h_vec)))
-        if r_norm / (h_norm + eps(eltype(h_vec))) < ns.tol
+        b_norm = norm(ns.sals.rhs) # dimensionally matches r_norm (both live in F(h)=A(h)h-b(h)'s units); norm(h) does not
+        if r_norm / (b_norm + eps(eltype(h_vec))) < ns.tol
             ns.converged = true
             ns.last_iter = iter - 1
             return
