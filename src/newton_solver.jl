@@ -137,20 +137,38 @@ especially early on, rather than to full precision. `damping_min` is the smalles
 line-search step-length factor tried before giving up and accepting whatever step was found (never
 skipping the line search entirely -- pure undamped Newton is not safe on Shakti's real, sometimes
 stiff problems). Convergence is checked on the residual directly (`norm(F(h))`, relative to
-`norm(b(h))`, i.e. the current RHS `sals.rhs` -- NOT `norm(h)`, an earlier version of this check
-that turned out to be dimensionally wrong: `F(h) = A(h)h - b(h)` lives in the same units as `b(h)`,
-not in `h`'s own units, and on the real Greenland dataset (much larger `h`/coefficient magnitudes
-than the synthetic/Drang-Drung grids this was first validated on) that mismatch let the check pass
-trivially, at timestep 1, against the raw un-relaxed initial condition -- a silent false positive:
-Newton never took a single real step for the entire run, while Cholesky needed 39 genuine Picard
-iterations from that same starting point. See `project_shakti_performance_findings.md`/session
-notes for the full failure analysis this fix responds to) unlike [`PicardSolver`](@ref)'s
-update-based check, since Newton's own step size is not otherwise available before the first step
-is taken -- one consequence, seen directly in real testing (below): a timestep whose previous
-solution ALREADY satisfies the new timestep's tolerance converges in 0 outer iterations under this
-check, something Picard's own convergence criterion structurally cannot report (it requires at
-least one completed iteration before it can measure an update size at all), so raw outer-iteration
-counts between the two are not perfectly apples-to-apples.
+`norm(b(h))`, i.e. the current RHS `sals.rhs` -- corrected from an earlier version that normalized
+by `norm(h)` instead, which was dimensionally wrong (`F(h) = A(h)h - b(h)` lives in `b(h)`'s units,
+not `h`'s), unlike [`PicardSolver`](@ref)'s update-based check, since Newton's own step size is not
+otherwise available before the first step is taken -- one consequence, seen directly in real
+testing (below): a timestep whose previous solution ALREADY satisfies the new timestep's tolerance
+converges in 0 outer iterations under this check, something Picard's own convergence criterion
+structurally cannot report (it requires at least one completed iteration before it can measure an
+update size at all), so raw outer-iteration counts between the two are not perfectly apples-to-apples.
+
+**IMPORTANT, KNOWN LIMITATION (real Greenland dataset, `CellNClamping` active)**: the `norm(h)`
+normalization above was originally suspected to be THE bug behind a real false-convergence failure
+on Greenland (Newton reporting `converged=true, 0 iterations` from timestep 1, using the raw
+initial condition, while [`PicardSolver`](@ref) needs 39 genuine iterations from that same start)
+-- but switching to `norm(b(h))`, and separately trying a max-norm (`maximum(abs, ·)`) version of
+the SAME check, both left the reported convergence and final physical state completely unchanged.
+Direct instrumentation showed why: the raw residual `norm(F(h_init))` genuinely is tiny in an
+ABSOLUTE sense (not just "small relative to a big denominator"), by BOTH L2 and max norm, at the
+un-relaxed initial condition -- no rescaling of this check, in any norm, can fix that. The real
+cause is Jacobian ILL-CONDITIONING at the handful of `CellNClamping`-affected near-flotation cells:
+the discretized residual there is near-zero over a wide neighborhood of `h` values, not only at the
+true solution, so a small residual does not imply a small solution error -- a classic small-
+residual/large-error pathology of near-singular systems that no residual-only stopping test can
+detect. Forcing at least one real Newton step (bypassing the pre-loop check entirely) recovers MOST
+of the correct physics (bulk statistics, e.g. domain-mean `N`, matched Cholesky's reference almost
+exactly) but still left `b`/`K` off by 1-2 orders of magnitude at the worst-conditioned cells --
+Picard's 39 iterations of full re-linearize-and-resolve apparently do a more thorough job at those
+specific cells than a single (even Jacobian-based) Newton-GMRES correction. **Net effect: Newton-
+JFNK remains excluded from any real dataset needing `CellNClamping` (currently both Greenland and
+Antarctica) until a real algorithmic fix is designed (e.g. a hybrid Newton-then-Picard-polish
+scheme, or forcing enough real iterations plus a per-cell rather than global convergence check) --
+not a one-line tolerance patch.** See `project_shakti_performance_findings.md`/session notes for
+the full experimental trail.
 
 **Empirical results (first validation pass, `beyond_solver_choice.tex`/session notes)**: on the
 synthetic benchmark (uniform slope/coefficients, `test/benchmarks/newton_vs_picard.jl`) at
@@ -235,10 +253,12 @@ $(TYPEDSIGNATURES)
 Repeatedly takes inexact, line-searched Newton steps (up to `ns.iters` times), checking
 convergence via the relative residual norm (`norm(F(h)) / (norm(b(h)) + eps) < ns.tol`, `b(h)` =
 `sals.rhs` = the current RHS of `F(h) = A(h)h - b(h)` -- dimensionally the correct thing to
-normalize against, unlike an earlier version of this check that normalized by `norm(h)` instead;
-see the constructor's docstring above for why that was a real, silently-wrong-answer bug on the
-real Greenland dataset), and sets `ns.converged`/`ns.last_iter` accordingly. See the module-level
-notes for the full method.
+normalize against, unlike an earlier version that normalized by `norm(h)` instead), and sets
+`ns.converged`/`ns.last_iter` accordingly. **This fixes a dimensional bug but NOT the deeper known
+false-convergence failure mode on real, `CellNClamping`-active datasets** -- see the constructor's
+docstring above for the full experimental trail (residual-only convergence checks, in any norm,
+cannot detect non-convergence at the near-singular near-flotation cells this clamping introduces).
+See the module-level notes for the full method.
 """
 function Newton_loop!(ns::NewtonJFNKSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms,
                        kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping(),
