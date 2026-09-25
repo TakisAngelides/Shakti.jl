@@ -150,13 +150,23 @@
 
             @test_throws ArgumentError ModelParameters(T_hysteresis = -0.1)
 
-            # Thawing with b_min <= 0 must refuse up front (reseeding a region at b=0 makes the system singular),
-            # leaving the state untouched.
+            # b_min <= 0: a lone cell thawing next to wet GROUNDED neighbours is fine (reseeded at b = 0, coupled
+            # through its neighbours' K); the interior of a thawing block has no wet neighbour and must refuse
+            # up front, leaving the state untouched.
             p0 = ModelParameters(e_v = 0.0, p_atm = 1000.0, b_min = 0.0)
-            update_frozen_mask!(state, pt, T_cold_again(T)) # freeze the (3,3) cell again
+            update_frozen_mask!(state, pt, T_cold_again(T)) # (3,3) freezes again
             @test state.mask[3, 3] == FROZEN_BED
-            @test_throws ArgumentError update_frozen_mask!(state, p0, zeros(nx, ny)) # everything warm -> (3,3) due to thaw
-            @test state.mask[3, 3] == FROZEN_BED
+            r = update_frozen_mask!(state, p0, zeros(nx, ny)) # warm: (3,3) thaws, neighbours are wet GROUNDED
+            @test r.n_thawed == 1
+            @test state.mask[3, 3] == GROUNDED
+            @test state.b[3, 3] == 0.0
+
+            block = falses(nx, ny); block[2:4, 3:5] .= true # centre (3,4) has only block cells around it
+            freeze_cells!(state, p0, block)
+            @test count(==(FROZEN_BED), Array(state.mask)) == 9
+            @test_throws ArgumentError update_frozen_mask!(state, p0, zeros(nx, ny))
+            @test count(==(FROZEN_BED), Array(state.mask)) == 9 # nothing changed
+            @test update_frozen_mask!(state, pt, zeros(nx, ny)).n_thawed == 9 # b_min > 0: whole block thaws fine
         end
 
     end

@@ -89,9 +89,12 @@ using `p.T_freeze` and `p.T_hysteresis`:
   - a `FROZEN_BED` cell with `T_prime_b >= T_freeze + T_hysteresis` thaws ([`thaw_cells!`](@ref));
   - anything else keeps its current state (this band is the hysteresis that prevents flicker).
 
-Throws an `ArgumentError` (before changing anything) if cells are due to thaw while `p.b_min <= 0`:
-thawed cells restart at `b_min`, and a thawed region at `b = 0` makes the head system singular (see
-[`thaw_cells!`](@ref)) -- silently so under [`CUDSSDirectSolver`](@ref), which does not check.
+With `p.b_min <= 0`, thawed cells restart at `b = 0` and only stay solvable if each has a `GROUNDED`
+neighbour already holding water (a lone cell, or the rim of a region, thawing next to wet cells is
+fine; the interior of a thawing block is not -- its rows would be all zero and the head system
+singular). Throws an `ArgumentError`, before changing anything, if some thawing cell has no such
+neighbour -- otherwise [`CholeskyDirectSolver`](@ref) throws `PosDefException` and
+[`CUDSSDirectSolver`](@ref) silently returns garbage. `Harmonic` K-faces need `b_min > 0` regardless.
 
 Cells that are not `GROUNDED`/`FROZEN_BED` (`OCEAN`/`LAND`/`OTHER_BASIN`) are never touched. The
 refresh work in `freeze_cells!`/`thaw_cells!` only runs on calls where a transition actually
@@ -108,7 +111,23 @@ function update_frozen_mask!(s::State, p::ModelParameters, T_prime_b::AbstractMa
     thaw_mask   = (s.mask .== FROZEN_BED) .& (T_prime_b .>= T_thaw)
     n_frozen = count(freeze_mask) # one reduction each (a device sync on GPU); called once per thermodynamic update, so negligible next to a solve
     n_thawed = count(thaw_mask)
-    n_thawed > 0 && p.b_min <= 0 && throw(ArgumentError("update_frozen_mask! would thaw $n_thawed cell(s) but p.b_min = $(p.b_min) <= 0: thawed cells are reseeded at b_min, and a region reseeded at b = 0 gives all-zero matrix rows (K = 0 and no creep-closure term), i.e. a singular system -- CholeskyDirectSolver throws PosDefException and CUDSSDirectSolver silently returns garbage. Build ModelParameters with b_min > 0 (e.g. 1e-3)."))
+    if n_thawed > 0 && p.b_min <= 0
+        # Thawed cells restart at b = b_min = 0, so K = 0 and the creep-closure term (lc = b) is 0 too: such a
+        # cell's row is only non-singular through an Arithmetic K-face to a GROUNDED neighbour that already holds
+        # water (K > 0). A FROZEN_BED/OTHER_BASIN/just-thawed neighbour gives a zero face, and OCEAN/LAND reuse the
+        # cell's own K = 0. So refuse only when some thawing cell has no such neighbour. (Harmonic K-faces are 0
+        # against a K = 0 cell whatever the neighbour, so they need b_min > 0 regardless; not checkable here.)
+        wet = (s.mask .== GROUNDED) .& (s.b .> 0) # thawing cells are still FROZEN_BED here, so excluded automatically
+        coupled = fill!(similar(thaw_mask), false)
+        @views begin
+            coupled[2:end, :]   .|= wet[1:end-1, :]
+            coupled[1:end-1, :] .|= wet[2:end, :]
+            coupled[:, 2:end]   .|= wet[:, 1:end-1]
+            coupled[:, 1:end-1] .|= wet[:, 2:end]
+        end
+        n_isolated = count(thaw_mask .& .!coupled)
+        n_isolated > 0 && throw(ArgumentError("update_frozen_mask!: $n_isolated of the $n_thawed cell(s) due to thaw have no GROUNDED neighbour holding water, and p.b_min = $(p.b_min) <= 0 would reseed them at b = 0: all-zero matrix rows, i.e. a singular system (CholeskyDirectSolver throws PosDefException, CUDSSDirectSolver silently returns garbage). Build ModelParameters with b_min > 0 (e.g. 1e-3)."))
+    end
     discarded_b = zero(eltype(s.b))
     if n_frozen > 0
         discarded_b = sum(s.b .* freeze_mask) # read before freeze_cells! zeroes b
