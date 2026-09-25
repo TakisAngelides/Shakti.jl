@@ -426,6 +426,7 @@ struct RegularizedCoulombV0SlidingLaw{A <: AbstractArray, F <: AbstractFloat} <:
     Cx::A # C staggered onto x-faces (Nx+1, Ny)
     Cy::A # C staggered onto y-faces (Nx, Ny+1)
     v0::F # constant velocity threshold, same units as ub_x/ub_y (m/s)
+    q::F  # velocity exponent (1/m in K24; Yelmo's beta_q), independent of Glen's n. Default 1/3 == old p.inv_n_exp at n=3
 end
 
 """
@@ -436,9 +437,10 @@ at cell centers (an `(nx, ny)` array, e.g. an inverted per-cell field) or as a u
 constant velocity threshold `v0` (m/s). Staggers `C` onto faces once here rather than in the
 per-iteration hot path, same as [`RegularizedCoulombFieldSlidingLaw(::Grid, C)`](@ref).
 """
-function RegularizedCoulombV0SlidingLaw(g::Grid, C, v0)
+function RegularizedCoulombV0SlidingLaw(g::Grid, C, v0; q = 1/3)
     Cx, Cy = stagger_to_faces(g, C)
-    return RegularizedCoulombV0SlidingLaw(Data.Array(Cx), Data.Array(Cy), eltype(g.x)(v0))
+    F = eltype(g.x)
+    return RegularizedCoulombV0SlidingLaw(Data.Array(Cx), Data.Array(Cy), F(v0), F(q))
 end
 
 initialize_taub!(::RegularizedCoulombV0SlidingLaw, state::State, taub_x::AbstractArray, taub_y::AbstractArray) = state # recomputed every Picard iteration, same as the other two regularized-Coulomb laws
@@ -467,7 +469,7 @@ $(TYPEDSIGNATURES)
 
 Updates `s.taub_x` under [`RegularizedCoulombV0SlidingLaw`](@ref) from the current `s.N`/`s.ub_x`.
 """
-compute_taub_x!(s::State, p::ModelParameters, sl::RegularizedCoulombV0SlidingLaw) = (@parallel compute_taub_x_v0_kernel!(s.taub_x, s.N, s.ub_x, s.abs_ub, sl.Cx, sl.v0, p.inv_n_exp); s)
+compute_taub_x!(s::State, p::ModelParameters, sl::RegularizedCoulombV0SlidingLaw) = (@parallel compute_taub_x_v0_kernel!(s.taub_x, s.N, s.ub_x, s.abs_ub, sl.Cx, sl.v0, sl.q); s)
 
 @parallel_indices (ix, iy) function compute_taub_y_v0_kernel!(taub_y, N, ub_y, abs_ub, Cy, v0, inv_n)
     ny1 = size(taub_y, 2) # ny + 1
@@ -494,7 +496,7 @@ $(TYPEDSIGNATURES)
 Updates `s.taub_y` under [`RegularizedCoulombV0SlidingLaw`](@ref), the y-face counterpart of the
 `compute_taub_x!` method above.
 """
-compute_taub_y!(s::State, p::ModelParameters, sl::RegularizedCoulombV0SlidingLaw) = (@parallel compute_taub_y_v0_kernel!(s.taub_y, s.N, s.ub_y, s.abs_ub, sl.Cy, sl.v0, p.inv_n_exp); s)
+compute_taub_y!(s::State, p::ModelParameters, sl::RegularizedCoulombV0SlidingLaw) = (@parallel compute_taub_y_v0_kernel!(s.taub_y, s.N, s.ub_y, s.abs_ub, sl.Cy, sl.v0, sl.q); s)
 
 @parallel_indices (ix, iy) function compute_taub_xy_v0_kernel!(taub_x, taub_y, N, ub_x, ub_y, abs_ub, Cx, Cy, v0, inv_n)
     nx1 = size(taub_x, 1) # nx + 1
@@ -537,7 +539,7 @@ $(TYPEDSIGNATURES)
 Fused version of `compute_taub_x!` + `compute_taub_y!` under [`RegularizedCoulombV0SlidingLaw`](@ref):
 one `@parallel` launch instead of two.
 """
-compute_taub_xy!(s::State, p::ModelParameters, sl::RegularizedCoulombV0SlidingLaw) = (@parallel compute_taub_xy_v0_kernel!(s.taub_x, s.taub_y, s.N, s.ub_x, s.ub_y, s.abs_ub, sl.Cx, sl.Cy, sl.v0, p.inv_n_exp); s)
+compute_taub_xy!(s::State, p::ModelParameters, sl::RegularizedCoulombV0SlidingLaw) = (@parallel compute_taub_xy_v0_kernel!(s.taub_x, s.taub_y, s.N, s.ub_x, s.ub_y, s.abs_ub, sl.Cx, sl.Cy, sl.v0, sl.q); s)
 
 # taub = C^2*N*u_b (LinearSlidingLaw, see its struct docstring above): N
 # staggered onto the face with the same boundary-duplicate/interior-average
