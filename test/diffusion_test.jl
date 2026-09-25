@@ -255,7 +255,7 @@
         D_x    = [1e-8 2e-8 0.0; 1.5e-8 2.5e-8 0.5e-8; 0.8e-8 1.2e-8 0.3e-8; 0.0 0.0 0.0] # (nx+1, ny)
         D_y    = [1e-8 2e-8 1.5e-8 0.0; 2e-8 3e-8 2.5e-8 0.5e-8; 0.5e-8 1e-8 0.8e-8 0.0]  # (nx, ny+1)
 
-        p = ModelParameters(e_v = 0.0, n = 3.0)
+        p = ModelParameters(e_v = 0.0, n = 3.0, b_min = 0.0) # the hand-built reference below has no b floor (solve_b_diffusion! clamps every cell to [b_min, b_max])
         n_minus_1 = Int(p.n - 1) # match p.n_minus_1_exp's own canonical_exponent path exactly (model_parameters.jl):
                                   # x^2 (Int exponent, power-by-squaring) and x^2.0 (Float exponent, exp(y*log(x)))
                                   # aren't guaranteed bit-identical, so this avoids a spurious ULP-level mismatch
