@@ -27,8 +27,17 @@ Sets `b:=0` and `pw:=0` on those cells, then refreshes everything that depends o
 deliberately -- they're recomputed from the current `h`/`pw` at the top of every Picard iteration
 during the next [`step_h!`](@ref) anyway, so refreshing them now would just be redone.
 
-Not yet wired to any automatic per-timestep driver -- call this directly with whatever
-`freeze_mask` your own driving logic computes (e.g. from an ice-thermal-state field).
+For a threshold-based driver on a basal-temperature field, see [`update_frozen_mask!`](@ref),
+which calls this (and [`thaw_cells!`](@ref)) for you.
+
+# Limitation
+
+Freezing is a cutoff, not a phase-change model: any water still held in a freezing cell (`b`) is
+discarded, not refrozen onto the ice base, and no latent heat is applied. Gradual refreezing is
+the job of the energy balance already in [`compute_mdot!`](@ref) (the `q_T` conductive-loss term
+drives `mdot < 0` and shrinks `b` on cold ice), so a more negative `T_freeze` lets that dry the
+cell out first and leaves less to discard. [`update_frozen_mask!`](@ref) reports the discarded
+amount so the size of this mass loss can be checked.
 """
 function freeze_cells!(s::State, p::ModelParameters, freeze_mask::AbstractMatrix{Bool})
     do_freeze = freeze_mask .& (s.mask .== GROUNDED)
@@ -67,4 +76,39 @@ function thaw_cells!(s::State, p::ModelParameters, thaw_mask::AbstractMatrix{Boo
     apply_mask_to_sliding!(s)
     compute_N!(s, p)
     return s
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Updates `s.mask` between `GROUNDED` and `FROZEN_BED` from the basal temperature relative to
+pressure melting `T_prime_b` (K, an array the same shape as `s.mask`, e.g. Yelmo's `T_prime_b`),
+using `p.T_freeze` and `p.T_hysteresis`:
+
+  - a `GROUNDED` cell with `T_prime_b < T_freeze` freezes ([`freeze_cells!`](@ref));
+  - a `FROZEN_BED` cell with `T_prime_b >= T_freeze + T_hysteresis` thaws ([`thaw_cells!`](@ref));
+  - anything else keeps its current state (this band is the hysteresis that prevents flicker).
+
+Cells that are not `GROUNDED`/`FROZEN_BED` (`OCEAN`/`LAND`/`OTHER_BASIN`) are never touched. The
+refresh work in `freeze_cells!`/`thaw_cells!` only runs on calls where a transition actually
+happens. Intended to be called whenever the basal temperature is refreshed (thermodynamic
+timescale), not every hydrology step.
+
+Returns `(n_frozen, n_thawed, discarded_b)`: the number of cells that changed each way and the sum
+of the gap height `b` (m) over the freezing cells, i.e. the water thickness discarded by freezing
+(multiply by `dx*dy` for a volume, see the limitation note in [`freeze_cells!`](@ref)).
+"""
+function update_frozen_mask!(s::State, p::ModelParameters, T_prime_b::AbstractMatrix)
+    T_thaw = p.T_freeze + p.T_hysteresis
+    freeze_mask = (s.mask .== GROUNDED)   .& (T_prime_b .< p.T_freeze)
+    thaw_mask   = (s.mask .== FROZEN_BED) .& (T_prime_b .>= T_thaw)
+    n_frozen = count(freeze_mask) # one reduction each (a device sync on GPU); called once per thermodynamic update, so negligible next to a solve
+    n_thawed = count(thaw_mask)
+    discarded_b = zero(eltype(s.b))
+    if n_frozen > 0
+        discarded_b = sum(s.b .* freeze_mask) # read before freeze_cells! zeroes b
+        freeze_cells!(s, p, freeze_mask)
+    end
+    n_thawed > 0 && thaw_cells!(s, p, thaw_mask)
+    return (n_frozen = n_frozen, n_thawed = n_thawed, discarded_b = discarded_b)
 end

@@ -49,9 +49,9 @@ this cell is zeroed. Distinct from `OTHER_BASIN` (which is a domain-restriction 
 ice just outside the region being solved, `pw` held at whatever `p_atm` happens to be) precisely
 in that `N` is computed here rather than reported as `0`, and its own `pw` is pinned to exactly
 `0` regardless of `p_atm`. Transition a cell to/from `FROZEN_BED` at runtime with
-[`freeze_cells!`](@ref)/[`thaw_cells!`](@ref) (`frozen_bed.jl`) -- not yet wired to any automatic
-driver (e.g. an ice-thermal-state coupling), so call them directly with whatever mask your own
-driving logic computes.
+[`freeze_cells!`](@ref)/[`thaw_cells!`](@ref) (`frozen_bed.jl`), or let
+[`update_frozen_mask!`](@ref) drive them from a basal-temperature field and the `T_freeze`/
+`T_hysteresis` parameters.
 """
 const FROZEN_BED = 4.0
 
