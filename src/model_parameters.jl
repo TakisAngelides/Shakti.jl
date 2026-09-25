@@ -52,6 +52,13 @@ law's steepest, hardest-to-converge transitional band (`omega*Re ~ O(1)-O(10)`),
 pushes the same range into the flatter, near-linear part of the curve where Picard iteration
 actually converges.
 
+`b_min` defaults to `1e-6` (m), not `0`: with `b = 0` both the transmissivity `K` and the creep-closure term
+(`l_c = b`) are exactly zero, so a cell whose neighbours are all dry has an all-zero matrix row
+([`CholeskyDirectSolver`](@ref) throws `PosDefException`; [`CUDSSDirectSolver`](@ref) does not check and silently
+returns garbage), and thawed `FROZEN_BED` cells (reseeded at `b_min`, see [`thaw_cells!`](@ref)) need a positive
+value. Pass `b_min = 0.0` explicitly to recover the old behaviour. Every existing driver/example that sets `b_min`
+itself is unaffected.
+
 `b_max` defaults to `Inf` (no cap), unlike `b_min` -- capping gap height guards against a real,
 recognized SHAKTI failure mode (a local `b -> K -> q -> mdot -> b` positive feedback that blows up
 where `N` approaches zero, since creep closure -- which depends on `N` -- vanishes there too;
@@ -122,7 +129,7 @@ function ModelParameters(;
     ct = 7.5e-8,
     cw = 4.22e3,
     p_atm = 0.0,
-    b_min = 0.0,
+    b_min = 1e-6, # small positive floor: at b = 0 K and the creep-closure term vanish, so a region of zero-b cells gives an all-zero (singular) matrix row, and thawing FROZEN_BED cells (reseeded at b_min) needs b_min > 0. Runs on real pan-Antarctica data converged at 1e-3/1e-4/1e-6; smaller values are untested
     b_max = Inf,
     N_min = -Inf,
     N_max = Inf,
