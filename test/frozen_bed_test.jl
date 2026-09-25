@@ -113,6 +113,8 @@
             @test state.N[3, 3] ≈ state.po[3, 3] # still reads as full overburden after solving
         end
 
+        T_cold_again(T) = (T2 = copy(T); T2[3, 3] = -2.0; T2)
+
         @testset "update_frozen_mask!: threshold, hysteresis, discarded water" begin
             pt = ModelParameters(e_v = 0.0, p_atm = 1000.0, b_min = 1e-3, T_freeze = -1.0, T_hysteresis = 0.5) # thaw threshold = -0.5
             mask = base_mask()
@@ -147,6 +149,14 @@
             @test state.b[3, 3] == pt.b_min
 
             @test_throws ArgumentError ModelParameters(T_hysteresis = -0.1)
+
+            # Thawing with b_min <= 0 must refuse up front (reseeding a region at b=0 makes the system singular),
+            # leaving the state untouched.
+            p0 = ModelParameters(e_v = 0.0, p_atm = 1000.0, b_min = 0.0)
+            update_frozen_mask!(state, pt, T_cold_again(T)) # freeze the (3,3) cell again
+            @test state.mask[3, 3] == FROZEN_BED
+            @test_throws ArgumentError update_frozen_mask!(state, p0, zeros(nx, ny)) # everything warm -> (3,3) due to thaw
+            @test state.mask[3, 3] == FROZEN_BED
         end
 
     end

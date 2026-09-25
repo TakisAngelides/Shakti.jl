@@ -89,6 +89,10 @@ using `p.T_freeze` and `p.T_hysteresis`:
   - a `FROZEN_BED` cell with `T_prime_b >= T_freeze + T_hysteresis` thaws ([`thaw_cells!`](@ref));
   - anything else keeps its current state (this band is the hysteresis that prevents flicker).
 
+Throws an `ArgumentError` (before changing anything) if cells are due to thaw while `p.b_min <= 0`:
+thawed cells restart at `b_min`, and a thawed region at `b = 0` makes the head system singular (see
+[`thaw_cells!`](@ref)) -- silently so under [`CUDSSDirectSolver`](@ref), which does not check.
+
 Cells that are not `GROUNDED`/`FROZEN_BED` (`OCEAN`/`LAND`/`OTHER_BASIN`) are never touched. The
 refresh work in `freeze_cells!`/`thaw_cells!` only runs on calls where a transition actually
 happens. Intended to be called whenever the basal temperature is refreshed (thermodynamic
@@ -104,6 +108,7 @@ function update_frozen_mask!(s::State, p::ModelParameters, T_prime_b::AbstractMa
     thaw_mask   = (s.mask .== FROZEN_BED) .& (T_prime_b .>= T_thaw)
     n_frozen = count(freeze_mask) # one reduction each (a device sync on GPU); called once per thermodynamic update, so negligible next to a solve
     n_thawed = count(thaw_mask)
+    n_thawed > 0 && p.b_min <= 0 && throw(ArgumentError("update_frozen_mask! would thaw $n_thawed cell(s) but p.b_min = $(p.b_min) <= 0: thawed cells are reseeded at b_min, and a region reseeded at b = 0 gives all-zero matrix rows (K = 0 and no creep-closure term), i.e. a singular system -- CholeskyDirectSolver throws PosDefException and CUDSSDirectSolver silently returns garbage. Build ModelParameters with b_min > 0 (e.g. 1e-3)."))
     discarded_b = zero(eltype(s.b))
     if n_frozen > 0
         discarded_b = sum(s.b .* freeze_mask) # read before freeze_cells! zeroes b
