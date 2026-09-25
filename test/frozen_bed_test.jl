@@ -69,6 +69,7 @@
             @test state.mask[3, 3] == FROZEN_BED
             @test state.mask[end, 3] == OCEAN # untouched
             @test state.b[3, 3] == 0.0
+            @test state.lc[3, 3] == 0.0 # lc follows b
             @test state.pw[3, 3] == 0.0
             @test state.h[3, 3] ≈ state.zb[3, 3] # h = pw/(rho_w*g) + zb, pw=0 => h=zb
             @test state.K[3, 3] == 0.0
@@ -88,6 +89,7 @@
             @test state.mask[3, 3] == GROUNDED
             @test state.mask[1, 3] == LAND # untouched
             @test state.b[3, 3] == p.b_min # reseeded, not left at the frozen 0.0
+            @test state.lc[3, 3] == p.b_min # lagged creep length refreshed with b (StandardCreep: lc = b), not left at the frozen 0.0
             @test state.pw[3, 3] == 0.0 # thaw does NOT touch pw -- no water magically appears
             @test state.valid_x[3, 3] == 1.0
         end

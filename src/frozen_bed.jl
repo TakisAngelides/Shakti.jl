@@ -13,6 +13,20 @@
 """
 $(TYPEDSIGNATURES)
 
+Refreshes the fields that are lagged functions of `s.b` -- `s.beta` ([`compute_beta!`](@ref)) and `s.lc`
+([`compute_lc!`](@ref)) -- which [`step_b!`](@ref) and [`set_initial_conditions!`](@ref) always update right
+after `b` changes. The schemes are chosen from `p` exactly as those two do (`StandardCreep` iff `p.b_c == 0`,
+`NoOpenBySliding` iff `p.br == 0`).
+"""
+function refresh_b_dependents!(s::State, p::ModelParameters)
+    compute_beta!(s, p, iszero(p.br) ? NoOpenBySliding() : WithOpenBySliding())
+    compute_lc!(s, p, iszero(p.b_c) ? StandardCreep() : CreepCutoff())
+    return s
+end
+
+"""
+$(TYPEDSIGNATURES)
+
 Freezes every cell where `freeze_mask` is `true` and currently `GROUNDED` to
 [`FROZEN_BED`](@ref) (cells `freeze_mask` marks that are already something else -- `OCEAN`/
 `LAND`/`OTHER_BASIN`/already `FROZEN_BED` -- are left untouched, so passing an overly broad mask
@@ -44,6 +58,7 @@ function freeze_cells!(s::State, p::ModelParameters, freeze_mask::AbstractMatrix
     @. s.mask = ifelse(do_freeze, FROZEN_BED, s.mask)
     @. s.b = ifelse(do_freeze, zero(eltype(s.b)), s.b)
     @. s.pw = ifelse(do_freeze, zero(eltype(s.pw)), s.pw)
+    refresh_b_dependents!(s, p) # lc/beta are lagged fields derived from b (normally refreshed in step_b!): keep them consistent with the b just set
     compute_h!(s, p)
     compute_K!(s, p)
     compute_face_masks!(s)
@@ -71,6 +86,7 @@ function thaw_cells!(s::State, p::ModelParameters, thaw_mask::AbstractMatrix{Boo
     do_thaw = thaw_mask .& (s.mask .== FROZEN_BED)
     @. s.mask = ifelse(do_thaw, GROUNDED, s.mask)
     @. s.b = ifelse(do_thaw, p.b_min, s.b)
+    refresh_b_dependents!(s, p) # without this a thawed cell keeps lc = 0 (from its frozen b = 0) until the next step_b!, i.e. no creep-closure term in the first head solve
     compute_K!(s, p)
     compute_face_masks!(s)
     apply_mask_to_sliding!(s)
