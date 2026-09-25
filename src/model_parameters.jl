@@ -26,6 +26,8 @@ struct ModelParameters{F <: AbstractFloat, NE1, NE2, NE3}
     N_min::F   # minimum effective pressure (-Inf by default, i.e. no floor -- see docstring below)
     N_max::F   # maximum effective pressure (Inf by default, i.e. no cap -- see docstring below)
     e_v::F     # englacial storage void ratio
+    T_freeze::F       # basal temperature relative to pressure melting (K): T_prime_b < T_freeze freezes a GROUNDED cell, used by update_frozen_mask! (frozen_bed.jl)
+    T_hysteresis::F   # thaw threshold sits this far (K, >= 0) above T_freeze: a FROZEN_BED cell thaws once T_prime_b >= T_freeze + T_hysteresis; 0 => single threshold, no hysteresis
     mdot_includes_G::Bool           # include the geothermal-flux term in compute_mdot! (see MeltTerms, melt_rate.jl)
     mdot_includes_frictional::Bool  # include the frictional (sliding) heating term in compute_mdot!
     mdot_includes_potential::Bool   # include the potential-energy-dissipation term in compute_mdot!
@@ -85,6 +87,13 @@ real dataset) triggered by cells with a deep negative-`N` excursion while `b` is
 `b_c`; it is not a solved problem and needs checking for per dataset, not something safe to enable
 by default.
 
+`T_freeze` (default `-1.0` K) and `T_hysteresis` (default `0.5` K) parameterize
+[`update_frozen_mask!`](@ref) (`frozen_bed.jl`): a `GROUNDED` cell freezes when its basal
+temperature relative to pressure melting (`T_prime_b`) drops below `T_freeze`, and a `FROZEN_BED`
+cell thaws once `T_prime_b >= T_freeze + T_hysteresis`; in between, a cell keeps its current state,
+so noise around a single threshold can't make it flicker. `T_hysteresis = 0` recovers a single
+threshold. Unused unless `update_frozen_mask!` is called.
+
 `mdot_includes_G`/`mdot_includes_frictional`/`mdot_includes_potential`/`mdot_includes_sensible`/
 `mdot_includes_qT` each independently switch one term of [`compute_mdot!`](@ref) on or off --
 geothermal flux `s.G`, frictional (sliding) heating, potential-energy dissipation, the sensible-heat
@@ -118,11 +127,15 @@ function ModelParameters(;
     N_min = -Inf,
     N_max = Inf,
     e_v = 0.0,
+    T_freeze = -1.0, # K below pressure melting, the same cutoff the pan_antarctica/Greenland drivers hard-coded (T_prime_b < -1)
+    T_hysteresis = 0.5, # K; 0 disables hysteresis (a cell hovering at the threshold can then freeze/thaw repeatedly, resetting b/pw each time)
     mdot_includes_G = true,
     mdot_includes_frictional = true,
     mdot_includes_potential = true,
     mdot_includes_sensible = true,
     mdot_includes_qT = true)
+
+    T_hysteresis >= 0 || throw(ArgumentError("T_hysteresis must be >= 0 (got $T_hysteresis): the thaw threshold T_freeze + T_hysteresis may not lie below the freeze threshold"))
 
     n_F = F(n)
     n_exp = canonical_exponent(n_F)
@@ -130,7 +143,7 @@ function ModelParameters(;
     inv_n_exp = canonical_exponent(1 / n_F)
 
     return ModelParameters(
-        F(rho_w), F(rho_sw), F(rho_i), F(g), F(nu), n_F, F(omega), F(L), F(br), F(lr), F(b_c), F(ct), F(cw), F(p_atm), F(b_min), F(b_max), F(N_min), F(N_max), F(e_v),
+        F(rho_w), F(rho_sw), F(rho_i), F(g), F(nu), n_F, F(omega), F(L), F(br), F(lr), F(b_c), F(ct), F(cw), F(p_atm), F(b_min), F(b_max), F(N_min), F(N_max), F(e_v), F(T_freeze), F(T_hysteresis),
         mdot_includes_G, mdot_includes_frictional, mdot_includes_potential, mdot_includes_sensible, mdot_includes_qT,
         n_exp, n_minus_1_exp, inv_n_exp
     )

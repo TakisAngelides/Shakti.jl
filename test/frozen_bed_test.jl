@@ -113,4 +113,55 @@
             @test state.N[3, 3] ≈ state.po[3, 3] # still reads as full overburden after solving
         end
 
+        T_cold_again(T) = (T2 = copy(T); T2[3, 3] = -2.0; T2)
+
+        @testset "update_frozen_mask!: threshold, hysteresis, discarded water" begin
+            pt = ModelParameters(e_v = 0.0, p_atm = 1000.0, b_min = 1e-3, T_freeze = -1.0, T_hysteresis = 0.5) # thaw threshold = -0.5
+            mask = base_mask()
+            state = State(grid)
+            set_initial_conditions!(state, grid, pt, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
+
+            T = zeros(nx, ny)
+            T[3, 3]   = -2.0 # GROUNDED, well below T_freeze -> freezes
+            T[end, 3] = -2.0 # OCEAN, also cold -> must be untouched and excluded from the counts
+            T[3, 4]   = -0.7 # GROUNDED, inside the hysteresis band -> must stay GROUNDED
+
+            r = update_frozen_mask!(state, pt, T)
+            @test r.n_frozen == 1
+            @test r.n_thawed == 0
+            @test r.discarded_b ≈ 0.01 # only the freezing cell's b, read before freeze_cells! zeroes it
+            @test state.mask[3, 3] == FROZEN_BED
+            @test state.b[3, 3] == 0.0
+            @test state.mask[end, 3] == OCEAN
+            @test state.mask[3, 4] == GROUNDED
+
+            # Inside the band the frozen cell stays frozen (no flicker) and nothing else changes.
+            T[3, 3] = -0.7
+            r = update_frozen_mask!(state, pt, T)
+            @test (r.n_frozen, r.n_thawed) == (0, 0)
+            @test state.mask[3, 3] == FROZEN_BED
+
+            # Above T_freeze + T_hysteresis it thaws, reseeded at b_min like thaw_cells!.
+            T[3, 3] = -0.4
+            r = update_frozen_mask!(state, pt, T)
+            @test (r.n_frozen, r.n_thawed) == (0, 1)
+            @test state.mask[3, 3] == GROUNDED
+            @test state.b[3, 3] == pt.b_min
+
+            @test_throws ArgumentError ModelParameters(T_hysteresis = -0.1)
+
+            # b_min = 0 is allowed (no guard): thawed cells simply restart at b = 0, whether a lone cell or a block.
+            p0 = ModelParameters(e_v = 0.0, p_atm = 1000.0, b_min = 0.0)
+            update_frozen_mask!(state, pt, T_cold_again(T)) # (3,3) freezes again
+            r = update_frozen_mask!(state, p0, zeros(nx, ny))
+            @test r.n_thawed == 1
+            @test state.mask[3, 3] == GROUNDED
+            @test state.b[3, 3] == 0.0
+
+            block = falses(nx, ny); block[2:4, 3:5] .= true
+            freeze_cells!(state, p0, block)
+            @test update_frozen_mask!(state, p0, zeros(nx, ny)).n_thawed == 9
+            @test all(==(0.0), Array(state.b)[2:4, 3:5])
+        end
+
     end
