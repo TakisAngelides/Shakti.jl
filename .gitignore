@@ -1,4 +1,5 @@
 /Manifest*.toml
+/docs/Manifest.toml
 /LocalPreferences.toml
 
 # Only the maintained test suite is tracked under test/ (runtests.jl plus the
