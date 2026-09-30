@@ -118,7 +118,7 @@ function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, sl::Abst
     # Picard_iteration! uses each iteration, so q_x/q_y/Re start already
     # consistent with the initial b_x/b_y/dhdx/dhdy, instead of the first
     # real Picard iteration having to correct an arbitrary Re guess.
-    compute_q_and_Re_xy!(s, p)
+    compute_face_flux!(s, p) # face transmissivity K_x/K_y, q and Re on faces (water_flux.jl); the Simulation's own k-face scheme is applied from the first step's refresh on
     compute_Re!(s) # cell-centered average of Re_x/Re_y, feeds compute_K! below
 
     # Basal shear stress

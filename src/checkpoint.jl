@@ -59,7 +59,9 @@ function load_checkpoint!(sim::Simulation, path::String)
             # Metal.jl's actual supported host->device transfer instead of a
             # kernel launch, and is exactly equivalent to `.=` for same-backend
             # (Threads/Array) fields.
-            copyto!(getfield(state, name), file[String(name)])
+            # A checkpoint written before a field existed (e.g. K_x/K_y) simply lacks it; every such
+            # field is derived, and is rebuilt from b/h by the refresh at the start of the next step.
+            haskey(file, String(name)) && copyto!(getfield(state, name), file[String(name)])
         end
         return file["t"], file["total_time"], (haskey(file, "dt") ? file["dt"] : nothing)
     end

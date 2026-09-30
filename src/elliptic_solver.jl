@@ -375,14 +375,14 @@ function refresh_head_dependents!(s::State, g::Grid, p::ModelParameters, mt::Mel
     compute_dpwdxy!(s, g) # update the water pressure gradient in both x and y in one kernel, feeds compute_sensible!'s sensible-heat term (via compute_mdot! below)
     compute_N!(s, p, cnc) # update effective pressure (ice overburden pressure - pw)
 
-    compute_q_and_Re_xy!(s, p) # update water flux qx, qy and Reynold's number on faces so Re_x, Re_y all in one kernel to reduce kernel - the Reynold's number is calculated based on the solution of the quadratic equation that defines it (Eq. 5 and 7 combined from https://gmd.copernicus.org/articles/11/2955/2018/)
+    compute_face_flux!(s, p, kfs) # face transmissivity K_x/K_y, flux q and Reynolds number Re on faces, lag-free and in one kernel -- K_x/K_y are exactly what the next linear solve assembles, so the solve and every flux diagnostic see the same flux (water_flux.jl)
     compute_Re!(s) # update the Reynold's number based on the Re_x and Re_y doing an average over the four faces of a grid cell
 
     compute_taub_xy!(s, p, sl) # update the basal shear stress based on the sliding law `sl` chosen
 
     compute_mdot!(s, p, mt) # update the melt rate, including/excluding each term per `mt`
 
-    compute_K!(s, p) # update the transmissivity
+    compute_cell_K!(s, p) # cell-centred transmissivity (diagnostic; the solve reads the face values K_x/K_y set above)
 
     compute_D!(s, p, mt, ds) # update the channel-wall diffusion coefficient (no-op under NoDiffusion)
 
