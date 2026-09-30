@@ -174,6 +174,8 @@ mutable struct ChebyshevPreconditioner{Op, V <: AbstractVector, T <: AbstractFlo
     r::V
     p::V
     Ap::V
+    gershgorin::Bool # true (default): fixed bounds from Gershgorin's theorem, see update_chebyshev_bounds!; false: the Lanczos estimate
+    eig_ratio::T     # lambda_min = lambda_max/eig_ratio under gershgorin = true
 end
 
 """
@@ -184,13 +186,15 @@ Builds a [`ChebyshevPreconditioner`](@ref) wrapping operator `A` with Jacobi dia
 `lambda_min`/`lambda_max` start at placeholder value `1` (degenerates to plain Jacobi) until the
 first real [`update_chebyshev_bounds!`](@ref) call.
 """
-function ChebyshevPreconditioner(A, d::V, degree::Int; nsteps_estimate::Int = 15) where V <: AbstractVector
+function ChebyshevPreconditioner(A, d::V, degree::Int; nsteps_estimate::Int = 15, bounds::Symbol = :gershgorin, eig_ratio = 30) where V <: AbstractVector
     T = eltype(d)
+    bounds in (:gershgorin, :lanczos) || error("ChebyshevPreconditioner: bounds must be :gershgorin or :lanczos (got $bounds)")
+    eig_ratio > 1 || error("ChebyshevPreconditioner: eig_ratio must be > 1 (got $eig_ratio)")
     degree >= 1 || error("ChebyshevPreconditioner: degree must be >= 1 (got $degree)")
     nsteps_estimate >= 2 || error("ChebyshevPreconditioner: nsteps_estimate must be >= 2 (got $nsteps_estimate)")
     op = JacobiScaledOperator(A, d)
     r, p, Ap = similar(d), similar(d), similar(d)
-    return ChebyshevPreconditioner(op, degree, nsteps_estimate, one(T), one(T), r, p, Ap) # placeholder bounds, overwritten before first use
+    return ChebyshevPreconditioner(op, degree, nsteps_estimate, one(T), one(T), r, p, Ap, bounds == :gershgorin, T(eig_ratio)) # placeholder bounds, overwritten before first use
 end
 
 """
@@ -203,6 +207,23 @@ operator's spectrum shifts between Picard iterations/timesteps. Falls back to th
 that can happen and why the fallback is always safe).
 """
 function update_chebyshev_bounds!(P::ChebyshevPreconditioner, rhs::AbstractVector)
+
+    # Default: bounds straight from Gershgorin's theorem, no matvecs at all. Every assembled row
+    # has a diagonal at least as large as the sum of its off-diagonal magnitudes (diffusion +
+    # non-negative reaction; Dirichlet/frozen rows are identity rows), so every eigenvalue of the
+    # Jacobi-scaled operator D^-1*A lies in (0, 2] -- lambda_max = 2 is a guaranteed upper bound.
+    # That guarantee is what matters: an interval whose top lies BELOW the true lambda_max makes
+    # the Chebyshev polynomial blow up on the top of the spectrum, the preconditioner indefinite,
+    # and CG stall -- which the short Lanczos estimate below (started from the smooth rhs, so it
+    # can miss the high end) was measured to cause on real glacier grids (Helheim, Drang Drung:
+    # wrong final N by 3-59%). lambda_min = lambda_max/eig_ratio is the standard Chebyshev
+    # choice; CG itself resolves the modes below it.
+    if P.gershgorin
+        T = typeof(P.lambda_max)
+        P.lambda_max = T(2)
+        P.lambda_min = T(2) / P.eig_ratio
+        return P
+    end
 
     # The short, unreorthogonalized Lanczos recurrence in estimate_eigenvalue_bounds!
     # is only exact in infinite precision -- on more ill-conditioned problems

@@ -212,7 +212,7 @@
         n = 36
         M = spdiagm(0 => fill(4.0, n), 1 => fill(-1.0, n - 1), -1 => fill(-1.0, n - 1))
         d = fill(4.0, n)
-        cheb = ChebyshevPreconditioner(M, d, 4)
+        cheb = ChebyshevPreconditioner(M, d, 4; bounds = :lanczos) # the Lanczos-estimate path this test exercises (the default, :gershgorin, never estimates)
         @test cheb.lambda_min == 1.0 && cheb.lambda_max == 1.0 # construction-time placeholder
 
         bad_rhs = zeros(n)

@@ -1198,7 +1198,7 @@ plain Jacobi. CPU-only, same reasoning as [`CholeskyDirectSolver`](@ref). `amg_r
 and the module-level note in `preconditioner.jl` for the lagged-hierarchy amortization this opts
 into when set above `1`.
 """
-function CGIterativeSolver(g::Grid{F}, ::Type{SparseAssembledLinearSystem}; chebyshev_degree::Union{Nothing, Int} = nothing, chebyshev_nsteps_estimate::Int = 15, amg::Bool = true, amg_refresh_every::Int = 1) where F
+function CGIterativeSolver(g::Grid{F}, ::Type{SparseAssembledLinearSystem}; chebyshev_degree::Union{Nothing, Int} = nothing, chebyshev_nsteps_estimate::Int = 15, chebyshev_bounds::Symbol = :gershgorin, chebyshev_eig_ratio = 30, amg::Bool = true, amg_refresh_every::Int = 1) where F
 
     # Krylov.jl's sparse matvec (SparseArrays.mul!) is CPU-only, same reasoning as CholeskyDirectSolver.
     backend != "Threads" && error("CGIterativeSolver(g, SparseAssembledLinearSystem) is CPU-only; use CGIterativeSolver(g, MatrixFreeLinearSystem) under the $backend backend.")
@@ -1211,7 +1211,7 @@ function CGIterativeSolver(g::Grid{F}, ::Type{SparseAssembledLinearSystem}; cheb
     precond = if amg
         AMGPreconditioner(sals.M; refresh_every = amg_refresh_every)
     elseif chebyshev_degree !== nothing
-        ChebyshevPreconditioner(sals.M, precond_diag, chebyshev_degree; nsteps_estimate = chebyshev_nsteps_estimate)
+        ChebyshevPreconditioner(sals.M, precond_diag, chebyshev_degree; nsteps_estimate = chebyshev_nsteps_estimate, bounds = chebyshev_bounds, eig_ratio = chebyshev_eig_ratio)
     else
         nothing
     end
@@ -1229,14 +1229,14 @@ Builds a [`CGIterativeSolver`](@ref) over a [`MatrixFreeLinearSystem`](@ref) on 
 `SparseMatrixCSC`, use the [`CGIterativeSolver`](@ref) constructor over
 [`SparseAssembledLinearSystem`](@ref) instead.
 """
-function CGIterativeSolver(g::Grid{F}, ::Type{MatrixFreeLinearSystem}; chebyshev_degree::Union{Nothing, Int} = nothing, chebyshev_nsteps_estimate::Int = 15, amg::Bool = false) where F
+function CGIterativeSolver(g::Grid{F}, ::Type{MatrixFreeLinearSystem}; chebyshev_degree::Union{Nothing, Int} = nothing, chebyshev_nsteps_estimate::Int = 15, chebyshev_bounds::Symbol = :gershgorin, chebyshev_eig_ratio = 30, amg::Bool = false) where F
 
     amg && error("AMGPreconditioner is CPU/SparseMatrixCSC-only (AlgebraicMultigrid.jl has no GPU array support); use CGIterativeSolver(g, SparseAssembledLinearSystem; amg = true) instead, or chebyshev_degree here for a GPU-capable accelerated preconditioner.")
 
     mfls = MatrixFreeLinearSystem(g)
     ws = CgWorkspace(g.nx * g.ny, g.nx * g.ny, typeof(mfls.rhs)) # storage type matches mfls.rhs, so it lands on the active backend (Array under Threads, MtlArray under Metal)
     precond_diag = @zeros(g.nx * g.ny)
-    precond = chebyshev_degree === nothing ? nothing : ChebyshevPreconditioner(StencilOperator(mfls), precond_diag, chebyshev_degree; nsteps_estimate = chebyshev_nsteps_estimate)
+    precond = chebyshev_degree === nothing ? nothing : ChebyshevPreconditioner(StencilOperator(mfls), precond_diag, chebyshev_degree; nsteps_estimate = chebyshev_nsteps_estimate, bounds = chebyshev_bounds, eig_ratio = chebyshev_eig_ratio)
 
     return CGIterativeSolver(mfls, ws, precond_diag, precond)
 
