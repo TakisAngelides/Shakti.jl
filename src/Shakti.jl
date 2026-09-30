@@ -100,6 +100,7 @@ include("newton_solver.jl")
 include("parabolic_solver.jl")
 include("gap_height.jl")
 include("cell_gap_clamping.jl")
+include("head_extrapolation.jl")
 include("simulation.jl")
 include("static_fields.jl")
 include("pressure.jl")
@@ -191,6 +192,9 @@ export AbstractTimeStepScheme, FixedTimeStep, AdaptiveTimeStep, target_time
 export AbstractCellGapClamping, NoCellGapClamping, CellGapClamping, apply_cell_gap_clamping!
 export AbstractCellNClamping, NoCellNClamping, CellNClamping, SmoothCellNClamping, apply_cell_N_clamping!
 export Simulation
+
+# head_extrapolation.jl
+export AbstractHeadExtrapolation, NoHeadExtrapolation, HeadExtrapolation, reset_head_history!
 
 # static_fields.jl
 export compute_H!, compute_po!, compute_h!, compute_abs_ub!

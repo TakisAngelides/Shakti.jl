@@ -129,6 +129,10 @@ AbstractGapScheme
 ExplicitGapScheme
 ImplicitGapScheme
 Simulation
+AbstractHeadExtrapolation
+NoHeadExtrapolation
+HeadExtrapolation
+reset_head_history!
 ```
 
 ## Derived fields
