@@ -263,7 +263,8 @@
                                   # aren't guaranteed bit-identical, so this avoids a spurious ULP-level mismatch
                                   # against the kernel's own fast integer-exponent path
 
-        # Independent reference build: dense (I - dt*div(D*grad(.))) operator and Eq. 17's own RHS.
+        # Independent reference build: dense (I - dt*div(D*grad(.))) operator and Eq. 17's RHS, with
+        # the closure and opening-by-sliding terms implicit (on the diagonal) rather than explicit.
         Nc = nx * ny
         Aref = zeros(Nc, Nc)
         rhsref = zeros(Nc)
@@ -275,13 +276,18 @@
                 aW = (i > 1  && mask[i-1, j] == GROUNDED) ? dt * D_x[i, j]   / dx2 : 0.0
                 aN = (j < ny && mask[i, j+1] == GROUNDED) ? dt * D_y[i, j+1] / dy2 : 0.0
                 aS = (j > 1  && mask[i, j-1] == GROUNDED) ? dt * D_y[i, j]   / dy2 : 0.0
-                Aref[r, r] = 1 + aE + aW + aN + aS
+                # Local terms linear in the new b sit on the diagonal (b_diffusion_local_terms):
+                # closure C*l_c for C > 0 (l_c/b = 1 here, StandardCreep), and opening by sliding
+                # gamma*(br - b) while beta > 0.
+                C = A_visc[i, j] * abs(N[i, j])^n_minus_1 * N[i, j]
+                gamma = abs_ub[i, j] / p.lr
+                @assert C > 0 && beta[i, j] > 0 # both implicit branches are what this reference builds
+                Aref[r, r] = 1 + aE + aW + aN + aS + dt * C * (lc[i, j] / b[i, j]) + dt * gamma
                 i < nx && (Aref[r, row(i+1, j)] = -aE)
                 i > 1  && (Aref[r, row(i-1, j)] = -aW)
                 j < ny && (Aref[r, row(i, j+1)] = -aN)
                 j > 1  && (Aref[r, row(i, j-1)] = -aS)
-                rhsref[r] = b[i, j] + dt * (mdot[i, j] / p.rho_i + beta[i, j] * abs_ub[i, j] -
-                                A_visc[i, j] * abs(N[i, j])^n_minus_1 * N[i, j] * lc[i, j])
+                rhsref[r] = b[i, j] + dt * (mdot[i, j] / p.rho_i + gamma * p.br)
             else
                 Aref[r, r] = 1.0
                 rhsref[r] = b[i, j]

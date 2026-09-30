@@ -802,13 +802,46 @@ end
 """
 $(TYPEDSIGNATURES)
 
+The local (non-diffusive) part of `b`'s diffusion solve for one `GROUNDED` cell: returns the
+extra diagonal entry and the full right-hand side. Felden et al. (2023)'s Eq. 17 evaluates melt,
+opening-by-sliding and creep closure all explicitly at the old `b`; here the two terms linear in
+the new `b` are moved onto the diagonal instead, matching the stability of
+[`ImplicitGapScheme`](@ref)/[`FullyImplicitGapScheme`](@ref) (it only ever adds non-negative
+diagonal entries, so the operator stays SPD):
+
+- creep closure `C*l_c` with `C > 0`: `dt*C*(l_c/b)` on the diagonal (`l_c/b` from the lagged
+  `lc`, `1` under [`StandardCreep`](@ref)). With `C <= 0` (`N <= 0`) the term opens the gap, and
+  stays explicit on the right-hand side, where it can only add a non-negative amount;
+- opening by sliding while `b < br` (`beta > 0`): `beta*|u_b| = gamma*(br - b)` with
+  `gamma = |u_b|/lr`, i.e. `dt*gamma` on the diagonal and `dt*gamma*br` on the right-hand side.
+"""
+@inline function b_diffusion_local_terms(b, mdot, beta, abs_ub, A_visc, N, lc, rho_i, n_minus_1, dt, br, lr)
+    C = A_visc * pow(abs(N), n_minus_1) * N
+    diag = zero(b)
+    src = mdot / rho_i
+    if C > zero(C)
+        diag += dt * C * (b > zero(b) ? lc / b : one(b))
+    else
+        src -= C * lc
+    end
+    if beta > zero(beta)
+        gamma = abs_ub / lr
+        diag += dt * gamma
+        src += gamma * br
+    end
+    return diag, b + dt * src
+end
+
+"""
+$(TYPEDSIGNATURES)
+
 Builds `b`'s own diffusion operator `(I - dt*∇·D∇)` and RHS (SUHMO Eq. 17) into `sals` -- see the
 module-level note just above for the boundary convention and the local-term treatment. `aP = 1 +
 dt*(D_E+D_W)/dx2 + dt*(D_N+D_S)/dy2` (the `1` is the equation's own "`I`"), each face coupling
 `dt*D_face/dx2_or_dy2` if that neighbour is `GROUNDED`, else `0` -- symmetric by construction (a
 shared face's `D` value is read identically from both sides, same reasoning as `h`'s own operator).
 """
-@parallel_indices (ix, iy) function update_SALS_b_diffusion_kernel!(mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, b, mdot, beta, abs_ub, A_visc, N, lc, D_x, D_y, rho_i, n_minus_1, dx2, dy2, dt)
+@parallel_indices (ix, iy) function update_SALS_b_diffusion_kernel!(mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, b, mdot, beta, abs_ub, A_visc, N, lc, D_x, D_y, rho_i, n_minus_1, dx2, dy2, dt, br, lr)
 
     nx, ny = size(mask, 1), size(mask, 2)
 
@@ -824,14 +857,14 @@ shared face's `D` value is read identically from both sides, same reasoning as `
             aN = (iy < ny && mask[ix, iy+1] == GROUNDED) ? dt * D_y[ix, iy+1] / dy2 : zero(dt)
             aS = (iy > 1  && mask[ix, iy-1] == GROUNDED) ? dt * D_y[ix, iy]   / dy2 : zero(dt)
 
-            nzval[idxP[ix, iy]] = one(aE) + aE + aW + aN + aS
+            local_diag, local_rhs = b_diffusion_local_terms(b[ix, iy], mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], N[ix, iy], lc[ix, iy], rho_i, n_minus_1, dt, br, lr)
+            nzval[idxP[ix, iy]] = one(aE) + aE + aW + aN + aS + local_diag
             ix < nx && (nzval[idxE[ix, iy]] = -aE)
             ix > 1  && (nzval[idxW[ix, iy]] = -aW)
             iy < ny && (nzval[idxN[ix, iy]] = -aN)
             iy > 1  && (nzval[idxS[ix, iy]] = -aS)
 
-            rhs[row] = b[ix, iy] + dt * (mdot[ix, iy] / rho_i + beta[ix, iy] * abs_ub[ix, iy] -
-                            A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy] * lc[ix, iy])
+            rhs[row] = local_rhs
 
         else # not evolved: frozen at its current value, same convention as compute_b_implicit_kernel!'s own GROUNDED-only guard
 
@@ -860,7 +893,7 @@ function update_SALS_b_diffusion!(sals::SparseAssembledLinearSystem, s::State, g
     fill!(nzval, 0)
     fill!(rhs, 0)
 
-    @parallel (1:g.nx, 1:g.ny) update_SALS_b_diffusion_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.b, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, s.lc, s.D_x, s.D_y, p.rho_i, p.n_minus_1_exp, g.dx2, g.dy2, dt)
+    @parallel (1:g.nx, 1:g.ny) update_SALS_b_diffusion_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.b, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, s.lc, s.D_x, s.D_y, p.rho_i, p.n_minus_1_exp, g.dx2, g.dy2, dt, p.br, p.lr)
 
     return
 
@@ -868,7 +901,7 @@ end
 
 # MatrixFreeLinearSystem counterpart of update_SALS_b_diffusion_kernel! -- same per-cell logic, no
 # sparse matrix to address into (see update_MFLS_elliptic_kernel!'s own note on this pairing).
-@parallel_indices (ix, iy) function update_MFLS_b_diffusion_kernel!(mask, aP, aE, aW, aN, aS, rhs, b, mdot, beta, abs_ub, A_visc, N, lc, D_x, D_y, rho_i, n_minus_1, dx2, dy2, dt)
+@parallel_indices (ix, iy) function update_MFLS_b_diffusion_kernel!(mask, aP, aE, aW, aN, aS, rhs, b, mdot, beta, abs_ub, A_visc, N, lc, D_x, D_y, rho_i, n_minus_1, dx2, dy2, dt, br, lr)
 
     nx, ny = size(mask, 1), size(mask, 2)
 
@@ -884,14 +917,14 @@ end
             aN_ij = (iy < ny && mask[ix, iy+1] == GROUNDED) ? dt * D_y[ix, iy+1] / dy2 : zero(dt)
             aS_ij = (iy > 1  && mask[ix, iy-1] == GROUNDED) ? dt * D_y[ix, iy]   / dy2 : zero(dt)
 
-            aP[ix, iy] = one(aE_ij) + aE_ij + aW_ij + aN_ij + aS_ij
+            local_diag, local_rhs = b_diffusion_local_terms(b[ix, iy], mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], N[ix, iy], lc[ix, iy], rho_i, n_minus_1, dt, br, lr)
+            aP[ix, iy] = one(aE_ij) + aE_ij + aW_ij + aN_ij + aS_ij + local_diag
             ix < nx && (aE[ix, iy] = aE_ij)
             ix > 1  && (aW[ix, iy] = aW_ij)
             iy < ny && (aN[ix, iy] = aN_ij)
             iy > 1  && (aS[ix, iy] = aS_ij)
 
-            rhs[row] = b[ix, iy] + dt * (mdot[ix, iy] / rho_i + beta[ix, iy] * abs_ub[ix, iy] -
-                            A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy] * lc[ix, iy])
+            rhs[row] = local_rhs
 
         else
 
@@ -920,7 +953,7 @@ function update_MFLS_b_diffusion!(mfls::MatrixFreeLinearSystem, s::State, g::Gri
     fill!(mfls.aS, 0)
     fill!(mfls.rhs, 0)
 
-    @parallel (1:g.nx, 1:g.ny) update_MFLS_b_diffusion_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.b, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, s.lc, s.D_x, s.D_y, p.rho_i, p.n_minus_1_exp, g.dx2, g.dy2, dt)
+    @parallel (1:g.nx, 1:g.ny) update_MFLS_b_diffusion_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.b, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, s.lc, s.D_x, s.D_y, p.rho_i, p.n_minus_1_exp, g.dx2, g.dy2, dt, p.br, p.lr)
 
     return
 

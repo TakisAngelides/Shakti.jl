@@ -270,8 +270,9 @@ $(TYPEDSIGNATURES)
 Evolves the gap height `sim.state.b` by one timestep. Dispatches on `sim.ds` first: under
 [`WithDiffusion`](@ref), `sim.gs` is **not consulted at all** -- [`solve_b_diffusion!`](@ref) solves
 the coupled diffusion system (SUHMO Eq. 17) directly, since that equation only defines one way to
-combine diffusion with the local opening/closure terms (evaluated explicitly, at the lagged `b`/`N`
--- see `update_SALS_b_diffusion_kernel!`'s own module-level note, `linear_solver.jl`), not one per
+combine diffusion with the local opening/closure terms (closure with `N > 0` and
+opening-by-sliding implicit on the diagonal, melt explicit -- see [`b_diffusion_local_terms`](@ref),
+`linear_solver.jl`), not one per
 [`AbstractGapScheme`](@ref). Under [`NoDiffusion`](@ref) (the default), behaves exactly as before,
 dispatching on `sim.gs` (`ImplicitGapScheme()`/`ExplicitGapScheme()`/`FullyImplicitGapScheme()`) to
 [`compute_b!(sim, sim.gs)`](@ref) below.
