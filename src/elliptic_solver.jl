@@ -214,6 +214,20 @@ end
 """
 $(TYPEDSIGNATURES)
 
+Largest head change the linear solve itself asked for in the last iteration -- what the Picard
+convergence test must measure. `delta_h` is the change actually applied, i.e. after
+[`relax_h!`](@ref): under [`UnderHeadRelaxation`](@ref) that is `alpha` times the raw update, so
+testing it against `tol` would stop `1/alpha` times too early (and, since a damped iteration
+contracts slowly, further still from the fixed point). [`AndersonHeadRelaxation`](@ref) keeps the
+raw residual `g(x_k) - x_k` itself (`hr.fk`).
+"""
+raw_update_max(::AbstractHeadRelaxation, delta_h) = mapreduce(abs, max, delta_h; init = zero(eltype(delta_h)))
+raw_update_max(hr::UnderHeadRelaxation, delta_h) = mapreduce(abs, max, delta_h; init = zero(eltype(delta_h))) / hr.alpha
+raw_update_max(hr::AndersonHeadRelaxation, delta_h) = mapreduce(abs, max, hr.fk; init = zero(eltype(delta_h)))
+
+"""
+$(TYPEDSIGNATURES)
+
 Common supertype for anything [`EllipticHeadScheme`](@ref) can drive to solve the nonlinear
 elliptic head equation each timestep -- [`PicardSolver`](@ref) (Picard iteration) or
 [`NewtonJFNKSolver`](@ref) (Jacobian-Free Newton-Krylov, `newton_solver.jl`). Any concrete subtype
@@ -340,7 +354,7 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
             # call -- confirmed via Profile.Allocs to allocate ~1.3MB/call at a ~200x400 grid, pure waste since check_every=1's own comment already establishes there's no GPU sync to
             # amortize on the Threads backend. NOT the cause of a separate, much larger long-run memory leak also found on this workload (traced instead to a Julia SparseArrays/CHOLMOD
             # ldiv! bug, JuliaSparse/SparseArrays.jl#726, unrelated to this call) -- this fix reduces allocation/GC pressure, nothing more.
-            delta_h_max = mapreduce(abs, max, ps.delta_h; init = zero(eltype(s.h)))
+            delta_h_max = raw_update_max(ps.hr, ps.delta_h) # the UNrelaxed update, see raw_update_max
             h_max = mapreduce(abs, max, s.h; init = zero(eltype(s.h)))
             if delta_h_max / (h_max + eps(eltype(s.h))) < ps.tol
                 ps.converged = true

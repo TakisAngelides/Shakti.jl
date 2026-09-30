@@ -160,7 +160,7 @@ function Parabolic_loop!(pps::ParabolicPicardSolver, state::State, grid::Grid, p
         @. pps.delta_h = s.h - pps.h_prev
 
         if iter % pps.check_every == 0 || iter == pps.iters
-            delta_h_max = mapreduce(abs, max, pps.delta_h; init = zero(eltype(s.h)))
+            delta_h_max = raw_update_max(pps.hr, pps.delta_h) # the UNrelaxed update, see raw_update_max (elliptic_solver.jl)
             h_max = mapreduce(abs, max, s.h; init = zero(eltype(s.h)))
             if delta_h_max / (h_max + eps(eltype(s.h))) < pps.tol
                 pps.converged = true
