@@ -67,10 +67,6 @@ fields above are written to `output.nc` as the run progresses.
 > [All options](https://TakisAngelides.github.io/Shakti.jl/dev/examples/AllOptions/) example.**
 > The reader is advised to start there to see the full range of what Shakti can do.
 
-> **Which linear solver?** Direct solvers (`CUDSSDirectSolver` on a GPU, `CholeskyDirectSolver`
-> on CPU) for mountain/outlet glaciers; matrix-free CG on the `CUDA` backend (or Chebyshev CG on
-> CPU) for ice sheets -- see [Choosing a linear solver](https://TakisAngelides.github.io/Shakti.jl/dev/SolverChoice/).
-
 See the [online documentation](https://TakisAngelides.github.io/Shakti.jl/dev/) for the full API
 reference and a gallery of complete, runnable examples (seasonal melt input, mask geometries, the
 parabolic head scheme, and a real-data reproduction of Sommers and others (2023)'s Helheim Glacier

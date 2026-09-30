@@ -24,7 +24,6 @@ example_pages = [
 PAGES = [
     "index.md",
     "Examples" => example_pages,
-    "SolverChoice.md",
     "API.md",
 ]
 
