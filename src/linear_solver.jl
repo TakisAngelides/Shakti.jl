@@ -1122,6 +1122,20 @@ end
 """
 $(TYPEDSIGNATURES)
 
+Warns (at most 20 times per session) when Krylov.jl's `cg!` stopped without reaching its
+tolerance -- the Picard loop cannot tell an unconverged linear solve from a converged one, so
+without this it silently iterates to a wrong fixed point. Costs a single `Bool` read when the solve
+converged; the warning itself sits in a separate `@noinline` function so it adds no code to the
+hot path.
+"""
+@inline check_cg_converged(ws) = (ws.stats.solved || _warn_cg_not_converged(ws.stats); nothing)
+
+@noinline _warn_cg_not_converged(stats) =
+    @warn "CGIterativeSolver: CG stopped before converging -- the head solution is inaccurate (check the preconditioner or raise itmax)" niter = stats.niter status = stats.status maxlog = 20
+
+"""
+$(TYPEDSIGNATURES)
+
 Iterative solve via preconditioned conjugate gradient (Krylov.jl's `cg!`) -- valid because the
 assembled operator is symmetric positive definite (diffusion with reciprocal face fluxes plus a
 strictly positive diagonal reaction term from the Newton-linearized creep closure, Dirichlet
@@ -1265,6 +1279,7 @@ function solve_elliptic_linear_system!(ls::CGIterativeSolver{<:SparseAssembledLi
     # smaller once h is already close to converged (late Picard iterations, or consecutive
     # time steps), so it typically needs fewer Krylov iterations.
     cg!(ls.ws, ls.lsy.M, ls.lsy.rhs, vec(s.h); M = precond_matrix, ldiv = true) # solves in place, storing the result in the preallocated workspace ls.ws
+    check_cg_converged(ls.ws)
 
     s.h .= reshape(ls.ws.x, g.nx, g.ny) # update h
 
@@ -1286,6 +1301,7 @@ function solve_parabolic_linear_system!(ls::CGIterativeSolver{<:SparseAssembledL
     precond_matrix = _cg_precond!(ls)
 
     cg!(ls.ws, ls.lsy.M, ls.lsy.rhs, vec(s.h); M = precond_matrix, ldiv = true)
+    check_cg_converged(ls.ws)
 
     s.h .= reshape(ls.ws.x, g.nx, g.ny)
 
@@ -1305,6 +1321,7 @@ function solve_b_diffusion!(ls::CGIterativeSolver{<:SparseAssembledLinearSystem}
     precond_matrix = _cg_precond!(ls)
 
     cg!(ls.ws, ls.lsy.M, ls.lsy.rhs, vec(s.b); M = precond_matrix, ldiv = true)
+    check_cg_converged(ls.ws)
 
     s.b .= clamp.(reshape(ls.ws.x, g.nx, g.ny), p.b_min, p.b_max)
 
@@ -1324,6 +1341,7 @@ function solve_elliptic_linear_system!(ls::CGIterativeSolver{<:MatrixFreeLinearS
     precond_matrix = _cg_precond!(ls)
 
     cg!(ls.ws, StencilOperator(ls.lsy), ls.lsy.rhs, vec(s.h); M = precond_matrix, ldiv = true)
+    check_cg_converged(ls.ws)
 
     s.h .= reshape(ls.ws.x, g.nx, g.ny) # update h
 
@@ -1344,6 +1362,7 @@ function solve_parabolic_linear_system!(ls::CGIterativeSolver{<:MatrixFreeLinear
     precond_matrix = _cg_precond!(ls)
 
     cg!(ls.ws, StencilOperator(ls.lsy), ls.lsy.rhs, vec(s.h); M = precond_matrix, ldiv = true)
+    check_cg_converged(ls.ws)
 
     s.h .= reshape(ls.ws.x, g.nx, g.ny)
 
@@ -1363,6 +1382,7 @@ function solve_b_diffusion!(ls::CGIterativeSolver{<:MatrixFreeLinearSystem}, s::
     precond_matrix = _cg_precond!(ls)
 
     cg!(ls.ws, StencilOperator(ls.lsy), ls.lsy.rhs, vec(s.b); M = precond_matrix, ldiv = true)
+    check_cg_converged(ls.ws)
 
     s.b .= clamp.(reshape(ls.ws.x, g.nx, g.ny), p.b_min, p.b_max)
 
