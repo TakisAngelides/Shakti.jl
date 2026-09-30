@@ -190,6 +190,13 @@ end
 # because p.ct/p.cw happen to be nonzero -- same rationale as ModelParameters' own docstring note
 # on mdot_includes_sensible not being inferred from ct/cw.
 #
+# D is floored at 0. D models channel walls melted by *surplus* dissipated heat; with the
+# sensible-heat (pressure-melting) term on, water flowing up a steep adverse bed slope can have a
+# net heat deficit (supercooling), which would make D negative -- a backward-diffusion operator,
+# ill-posed and no longer SPD. The deficit is already represented locally by mdot going negative
+# (freeze-on), so walls just stop melting there. A no-op whenever ct == 0 (SUHMO's own choice in
+# nearly all of Felden et al. 2023's experiments).
+#
 # Both faces in one launch (ParallelStencil infers the launch range from the union of every
 # argument's size, see compute_dhdxy_kernel!'s own note, field_gradients.jl); D_x/D_y are left
 # exactly zero (their @zeros default, never written) at domain-boundary faces -- via this kernel's
@@ -210,7 +217,7 @@ end
         if Sensible
             acc += ct * cw * rho_w * q_x[ix, iy] * dpwdx[ix, iy]
         end
-        D_x[ix, iy] = (b_x[ix, iy] / rho_i) * Linv * acc
+        D_x[ix, iy] = max(zero(acc), (b_x[ix, iy] / rho_i) * Linv * acc) # floored at 0, see below
     end
     if iy > 1 && iy < size(D_y, 2) && ix <= size(D_y, 1)
         acc = zero(eltype(D_y))
@@ -220,7 +227,7 @@ end
         if Sensible
             acc += ct * cw * rho_w * q_y[ix, iy] * dpwdy[ix, iy]
         end
-        D_y[ix, iy] = (b_y[ix, iy] / rho_i) * Linv * acc
+        D_y[ix, iy] = max(zero(acc), (b_y[ix, iy] / rho_i) * Linv * acc)
     end
     return
 end

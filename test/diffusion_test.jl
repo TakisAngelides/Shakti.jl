@@ -70,8 +70,10 @@
             s2.b_x .= state.b_x; s2.q_x .= state.q_x; s2.dhdx .= state.dhdx; s2.dpwdx .= state.dpwdx
             mt_sens_only = MeltTerms{true, true, false, true, true}()
             compute_D!(s2, p, mt_sens_only, WithDiffusion(CholeskyDirectSolver(grid)))
-            expected_sens_only = (s2.b_x[2, 1] / p.rho_i) * (1 / p.L) * (p.ct * p.cw * p.rho_w * s2.q_x[2, 1] * s2.dpwdx[2, 1])
+            raw_sens_only = (s2.b_x[2, 1] / p.rho_i) * (1 / p.L) * (p.ct * p.cw * p.rho_w * s2.q_x[2, 1] * s2.dpwdx[2, 1])
+            expected_sens_only = max(0.0, raw_sens_only) # D is floored at 0 (a net heat deficit is freeze-on, handled by mdot, not backward diffusion)
             @test s2.D_x[2, 1] ≈ expected_sens_only
+            @test all(>=(0), Array(s2.D_x)) && all(>=(0), Array(s2.D_y))
 
             # ct/cw left nonzero (ModelParameters' own default) but Sensible off should NOT leak
             # the sensible contribution back in -- the exact concern that motivated gating D by
