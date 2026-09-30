@@ -338,7 +338,13 @@ function Newton_loop!(ns::NewtonJFNKSolver, state::State, grid::Grid, p::ModelPa
 
     end
 
+    # The in-loop check runs at the top of an iteration, so a step that converges on the very last
+    # iteration would otherwise be reported as not converged. ns.r and ns.sals.rhs both belong to
+    # the accepted iterate (the last elliptic_residual! call was at h_trial, which was accepted).
     ns.last_iter = ns.iters
+    if ns.iters > ns.min_iters && norm(ns.r) / (norm(ns.sals.rhs) + eps(eltype(h_vec))) < ns.tol
+        ns.converged = true
+    end
     return
 end
 
