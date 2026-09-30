@@ -20,4 +20,5 @@ using CSV
     include("frozen_bed_test.jl")
     include("gap_height_test.jl")
     include("diffusion_test.jl")
+    include("consistency_test.jl")
 end

@@ -70,8 +70,10 @@
             s2.b_x .= state.b_x; s2.q_x .= state.q_x; s2.dhdx .= state.dhdx; s2.dpwdx .= state.dpwdx
             mt_sens_only = MeltTerms{true, true, false, true, true}()
             compute_D!(s2, p, mt_sens_only, WithDiffusion(CholeskyDirectSolver(grid)))
-            expected_sens_only = (s2.b_x[2, 1] / p.rho_i) * (1 / p.L) * (p.ct * p.cw * p.rho_w * s2.q_x[2, 1] * s2.dpwdx[2, 1])
+            raw_sens_only = (s2.b_x[2, 1] / p.rho_i) * (1 / p.L) * (p.ct * p.cw * p.rho_w * s2.q_x[2, 1] * s2.dpwdx[2, 1])
+            expected_sens_only = max(0.0, raw_sens_only) # D is floored at 0 (a net heat deficit is freeze-on, handled by mdot, not backward diffusion)
             @test s2.D_x[2, 1] ≈ expected_sens_only
+            @test all(>=(0), Array(s2.D_x)) && all(>=(0), Array(s2.D_y))
 
             # ct/cw left nonzero (ModelParameters' own default) but Sensible off should NOT leak
             # the sensible contribution back in -- the exact concern that motivated gating D by
@@ -261,7 +263,8 @@
                                   # aren't guaranteed bit-identical, so this avoids a spurious ULP-level mismatch
                                   # against the kernel's own fast integer-exponent path
 
-        # Independent reference build: dense (I - dt*div(D*grad(.))) operator and Eq. 17's own RHS.
+        # Independent reference build: dense (I - dt*div(D*grad(.))) operator and Eq. 17's RHS, with
+        # the closure and opening-by-sliding terms implicit (on the diagonal) rather than explicit.
         Nc = nx * ny
         Aref = zeros(Nc, Nc)
         rhsref = zeros(Nc)
@@ -273,13 +276,18 @@
                 aW = (i > 1  && mask[i-1, j] == GROUNDED) ? dt * D_x[i, j]   / dx2 : 0.0
                 aN = (j < ny && mask[i, j+1] == GROUNDED) ? dt * D_y[i, j+1] / dy2 : 0.0
                 aS = (j > 1  && mask[i, j-1] == GROUNDED) ? dt * D_y[i, j]   / dy2 : 0.0
-                Aref[r, r] = 1 + aE + aW + aN + aS
+                # Local terms linear in the new b sit on the diagonal (b_diffusion_local_terms):
+                # closure C*l_c for C > 0 (l_c/b = 1 here, StandardCreep), and opening by sliding
+                # gamma*(br - b) while beta > 0.
+                C = A_visc[i, j] * abs(N[i, j])^n_minus_1 * N[i, j]
+                gamma = abs_ub[i, j] / p.lr
+                @assert C > 0 && beta[i, j] > 0 # both implicit branches are what this reference builds
+                Aref[r, r] = 1 + aE + aW + aN + aS + dt * C * (lc[i, j] / b[i, j]) + dt * gamma
                 i < nx && (Aref[r, row(i+1, j)] = -aE)
                 i > 1  && (Aref[r, row(i-1, j)] = -aW)
                 j < ny && (Aref[r, row(i, j+1)] = -aN)
                 j > 1  && (Aref[r, row(i, j-1)] = -aS)
-                rhsref[r] = b[i, j] + dt * (mdot[i, j] / p.rho_i + beta[i, j] * abs_ub[i, j] -
-                                A_visc[i, j] * abs(N[i, j])^n_minus_1 * N[i, j] * lc[i, j])
+                rhsref[r] = b[i, j] + dt * (mdot[i, j] / p.rho_i + gamma * p.br)
             else
                 Aref[r, r] = 1.0
                 rhsref[r] = b[i, j]

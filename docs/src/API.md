@@ -54,6 +54,7 @@ AbstractKFaceScheme
 Arithmetic
 Harmonic
 compute_K_face
+face_conductance
 ```
 
 ## Sliding laws and melt rate
@@ -128,6 +129,10 @@ AbstractGapScheme
 ExplicitGapScheme
 ImplicitGapScheme
 Simulation
+AbstractHeadExtrapolation
+NoHeadExtrapolation
+HeadExtrapolation
+reset_head_history!
 ```
 
 ## Derived fields
@@ -161,6 +166,7 @@ compute_K!
 compute_q_and_Re_x!
 compute_q_and_Re_y!
 compute_q_and_Re_xy!
+compute_face_flux!
 ```
 
 ## Gap height

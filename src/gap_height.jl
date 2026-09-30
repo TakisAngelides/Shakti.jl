@@ -224,6 +224,25 @@ compute_b_y!(s::State) = (@parallel compute_b_y_kernel!(s.b_y, s.b); s)
 """
 $(TYPEDSIGNATURES)
 
+One step of the linear relaxation ODE `db/dt = S - R*b` over `dt`, from `b0`. `R >= 0` (closure
+and/or opening-by-sliding damping the gap): backward Euler, `(b0 + dt*S)/(1 + dt*R)` -- the
+formula every gap scheme has always used, unchanged. `R < 0` (`N < 0`, so the "closure" term
+`C*b` is really an opening term, and the equation describes genuine exponential growth):
+backward Euler would divide by `1 - dt*|R|`, blowing up at `dt = 1/|R|` and turning `b` negative
+beyond it, so the exact solution with `S`/`R` frozen over the step is used instead,
+`b0*e^{|R|dt} + S*(e^{|R|dt} - 1)/|R|` (via `expm1`, accurate as `|R|*dt -> 0`) -- finite and
+non-negative for every `dt`, so neither branch imposes a time-step limit.
+"""
+@inline function relax_update(b0, S, R, dt)
+    R >= zero(R) && return (b0 + dt * S) / (1 + dt * R)
+    x = -R * dt
+    em = expm1(x)
+    return b0 + em * b0 + S * dt * (em / x)
+end
+
+"""
+$(TYPEDSIGNATURES)
+
 Closed-form backward-Euler update of the closure-only ODE `b_{k+1} = b_k + dt*(opening -
 C*l_c(b_{k+1}))`, dispatched on `cls` (see [`AbstractCreepLengthScheme`](@ref)):
 [`StandardCreep`](@ref) is the plain linear solve `compute_b_implicit_kernel!` always used before
@@ -238,7 +257,7 @@ is self-consistent" idea as [`compute_b_fully_implicit_kernel!`](@ref)'s `beta` 
   - Branch "`b_{k+1} > b_c`" (`l_c = b_{k+1}`): reduces to the same linear solve as
     [`StandardCreep`](@ref).
 """
-@inline implicit_creep_update(::StandardCreep, b_old, opening, C, dt, b_c) = (b_old + dt * opening) / (1 + dt * C)
+@inline implicit_creep_update(::StandardCreep, b_old, opening, C, dt, b_c) = relax_update(b_old, opening, C, dt)
 
 @inline function implicit_creep_update(::CreepCutoff, b_old, opening, C, dt, b_c)
     rhs = b_old + dt * opening
@@ -248,11 +267,12 @@ is self-consistent" idea as [`compute_b_fully_implicit_kernel!`](@ref)'s `beta` 
     # instead. Fall back to the StandardCreep-equivalent form (same formula the b_below>b_c branch
     # below already uses) rather than skipping the (1+dt*C) closure-feedback term entirely, which
     # is what caused a real, confirmed runaway (see CreepCutoff's own docstring/project notes).
-    b_below = a > 0 ? (-one(a) + sqrt(max(zero(a), one(a) + 4 * a * rhs))) / (2 * a) : rhs / (1 + dt * C)
+    # (relax_update: backward Euler for C >= 0, the exact exponential solution for C < 0.)
+    b_below = a > 0 ? (-one(a) + sqrt(max(zero(a), one(a) + 4 * a * rhs))) / (2 * a) : relax_update(b_old, opening, C, dt)
     if b_below <= b_c
         return b_below
     else # branch 1's own assumption (b_{k+1} <= b_c) failed -- l_c(b_{k+1}) is actually b_{k+1}
-        return rhs / (1 + dt * C)
+        return relax_update(b_old, opening, C, dt)
     end
 end
 
@@ -309,35 +329,45 @@ and returning the first self-consistent one is correct either way, at the cost o
 (cheap) candidate evaluation per cell. Under [`StandardCreep`](@ref) this collapses back to the
 original two branches (`l_c` linear everywhere, so only the `beta`-threshold matters).
 
-Every branch has amplification factor `1/(1+dt*(...))` (the quadratic branches too, via the
-positive root of the quadratic formula) with only non-negative rates in the denominator --
-unconditionally stable for any `dt`, unlike [`compute_b_implicit_kernel!`](@ref) (which inherits a
+Every linear branch goes through [`relax_update`](@ref): backward Euler while its rate (`C` or
+`gamma + C`) is non-negative, and the exact exponential solution when it is negative (`N < 0`,
+where "closure" is really opening) -- so no branch ever divides by a vanishing or negative
+`1 + dt*rate`. The quadratic branches only run for `C > 0`. Unconditionally stable for any `dt`,
+unlike [`compute_b_implicit_kernel!`](@ref) (which inherits a
 `dt` cap from evaluating `beta` at the lagged `b`; see its own docstring).
 """
-@inline function fully_implicit_creep_update(::StandardCreep, opening0, gamma, C, dt, br, b_c)
-    b_below = (opening0 + dt * gamma * br) / (1 + dt * (gamma + C))
-    return b_below < br ? b_below : opening0 / (1 + dt * C)
+# `b0` is the old gap height and `m` the melt-opening rate mdot/rho_i (opening0 = b0 + dt*m); they
+# are passed separately because relax_update's exponential branch needs them apart.
+@inline function fully_implicit_creep_update(::StandardCreep, b0, m, gamma, C, dt, br, b_c)
+    b_below = relax_update(b0, m + gamma * br, gamma + C, dt)
+    return b_below < br ? b_below : relax_update(b0, m, C, dt)
 end
 
-@inline function fully_implicit_creep_update(::CreepCutoff, opening0, gamma, C, dt, br, b_c)
+# Original (opening0, ...) form, kept for existing callers: identical to the above whenever the
+# rates are non-negative (backward Euler only ever sees b0 + dt*m).
+@inline fully_implicit_creep_update(cls::AbstractCreepLengthScheme, opening0, gamma, C, dt, br, b_c) =
+    fully_implicit_creep_update(cls, opening0, zero(opening0), gamma, C, dt, br, b_c)
+
+@inline function fully_implicit_creep_update(::CreepCutoff, b0, m, gamma, C, dt, br, b_c)
+    opening0 = b0 + dt * m
     a = dt * C / b_c
 
     # Branch (i): beta active (b_{k+1} < br) AND l_c cutoff (b_{k+1} <= b_c)
     beta_coef = 1 + dt * gamma
     rhs_i = opening0 + dt * gamma * br
-    b1 = a > 0 ? (-beta_coef + sqrt(max(zero(a), beta_coef^2 + 4 * a * rhs_i))) / (2 * a) : rhs_i / beta_coef
+    b1 = a > 0 ? (-beta_coef + sqrt(max(zero(a), beta_coef^2 + 4 * a * rhs_i))) / (2 * a) : relax_update(b0, m + gamma * br, gamma + C, dt)
     if b1 < br && b1 <= b_c
         return b1
     end
 
     # Branch (ii): beta active (b_{k+1} < br) AND l_c linear (b_{k+1} > b_c)
-    b2 = rhs_i / (1 + dt * (gamma + C))
+    b2 = relax_update(b0, m + gamma * br, gamma + C, dt)
     if b2 < br && b2 > b_c
         return b2
     end
 
     # Branch (iii): beta zero (b_{k+1} >= br) AND l_c cutoff (b_{k+1} <= b_c)
-    b3 = a > 0 ? (-one(a) + sqrt(max(zero(a), one(a) + 4 * a * opening0))) / (2 * a) : opening0
+    b3 = a > 0 ? (-one(a) + sqrt(max(zero(a), one(a) + 4 * a * opening0))) / (2 * a) : relax_update(b0, m, C, dt)
     if b3 >= br && b3 <= b_c
         return b3
     end
@@ -345,15 +375,14 @@ end
     # Branch (iv): beta zero (b_{k+1} >= br) AND l_c linear (b_{k+1} > b_c) -- always
     # self-consistent as the final fallback (exactly one of the four branches must be, since
     # beta/l_c are continuous and together partition the b_{k+1} axis into non-overlapping pieces).
-    return opening0 / (1 + dt * C)
+    return relax_update(b0, m, C, dt)
 end
 
 @parallel_indices (ix, iy) function compute_b_fully_implicit_kernel!(b, mask, mdot, abs_ub, A_visc, N, rho_i, n_minus_1, dt, b_min, b_max, br, lr, cls::AbstractCreepLengthScheme, b_c)
     if ix <= size(b, 1) && iy <= size(b, 2) && mask[ix, iy] == GROUNDED
         C = A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy]
         gamma = abs_ub[ix, iy] / lr
-        opening0 = b[ix, iy] + dt * mdot[ix, iy] / rho_i
-        b[ix, iy] = clamp(fully_implicit_creep_update(cls, opening0, gamma, C, dt, br, b_c), b_min, b_max)
+        b[ix, iy] = clamp(fully_implicit_creep_update(cls, b[ix, iy], mdot[ix, iy] / rho_i, gamma, C, dt, br, b_c), b_min, b_max)
     end
     return
 end

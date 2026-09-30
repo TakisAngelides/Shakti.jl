@@ -28,9 +28,14 @@ global `ModelParameters.b_min`/`b_max` clamp already gave them that step. `bound
 `(i, j)` grid index to its `(bmin, bmax)` pair, e.g. `CellGapClamping(Dict((81, 175) => (0.0, 5.0)))`
 caps just that one cell at 5m regardless of the global `b_max`.
 """
-struct CellGapClamping{F <: AbstractFloat} <: AbstractCellGapClamping
+struct CellGapClamping{F <: AbstractFloat, I <: AbstractVector, V <: AbstractVector} <: AbstractCellGapClamping
     bounds::Dict{Tuple{Int, Int}, Tuple{F, F}}
+    idx::I # the cells of `bounds` on the active backend, see clamp_cells (cell_N_clamping.jl)
+    lo::V
+    hi::V
 end
+
+CellGapClamping(bounds::Dict{Tuple{Int, Int}, Tuple{F, F}}) where F <: AbstractFloat = CellGapClamping(bounds, clamp_cells(bounds)...)
 
 """
 $(TYPEDSIGNATURES)
@@ -40,17 +45,9 @@ a no-op under [`NoCellGapClamping`](@ref).
 """
 apply_cell_gap_clamping!(s::State, ::NoCellGapClamping) = s
 
-# A host round-trip (Array(s.b) ... Data.Array(...)) rather than scalar getindex!/setindex! directly
-# on s.b: GPUArrays.jl disallows element-by-element indexing on GPU-resident arrays by default (same
-# constraint noted in initial_conditions.jl), and `bounds` is expected to be a short, user-curated
-# list (a handful of known-problem cells, not a per-cell field), so the round-trip's cost is
-# negligible against a whole timestep -- there's no need for a GPU kernel over what's really a sparse,
-# occasional override.
+# In place through a view of just the listed cells, same as apply_cell_N_clamping! (cell_N_clamping.jl).
 function apply_cell_gap_clamping!(s::State, cgc::CellGapClamping)
-    b = Array(s.b)
-    for ((i, j), (bmin, bmax)) in cgc.bounds
-        b[i, j] = clamp(b[i, j], bmin, bmax)
-    end
-    s.b .= Data.Array(b)
+    bv = view(s.b, cgc.idx)
+    bv .= clamp.(bv, cgc.lo, cgc.hi)
     return s
 end

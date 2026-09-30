@@ -214,6 +214,20 @@ end
 """
 $(TYPEDSIGNATURES)
 
+Largest head change the linear solve itself asked for in the last iteration -- what the Picard
+convergence test must measure. `delta_h` is the change actually applied, i.e. after
+[`relax_h!`](@ref): under [`UnderHeadRelaxation`](@ref) that is `alpha` times the raw update, so
+testing it against `tol` would stop `1/alpha` times too early (and, since a damped iteration
+contracts slowly, further still from the fixed point). [`AndersonHeadRelaxation`](@ref) keeps the
+raw residual `g(x_k) - x_k` itself (`hr.fk`).
+"""
+raw_update_max(::AbstractHeadRelaxation, delta_h) = mapreduce(abs, max, delta_h; init = zero(eltype(delta_h)))
+raw_update_max(hr::UnderHeadRelaxation, delta_h) = mapreduce(abs, max, delta_h; init = zero(eltype(delta_h))) / hr.alpha
+raw_update_max(hr::AndersonHeadRelaxation, delta_h) = mapreduce(abs, max, hr.fk; init = zero(eltype(delta_h)))
+
+"""
+$(TYPEDSIGNATURES)
+
 Common supertype for anything [`EllipticHeadScheme`](@ref) can drive to solve the nonlinear
 elliptic head equation each timestep -- [`PicardSolver`](@ref) (Picard iteration) or
 [`NewtonJFNKSolver`](@ref) (Jacobian-Free Newton-Krylov, `newton_solver.jl`). Any concrete subtype
@@ -340,7 +354,7 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
             # call -- confirmed via Profile.Allocs to allocate ~1.3MB/call at a ~200x400 grid, pure waste since check_every=1's own comment already establishes there's no GPU sync to
             # amortize on the Threads backend. NOT the cause of a separate, much larger long-run memory leak also found on this workload (traced instead to a Julia SparseArrays/CHOLMOD
             # ldiv! bug, JuliaSparse/SparseArrays.jl#726, unrelated to this call) -- this fix reduces allocation/GC pressure, nothing more.
-            delta_h_max = mapreduce(abs, max, ps.delta_h; init = zero(eltype(s.h)))
+            delta_h_max = raw_update_max(ps.hr, ps.delta_h) # the UNrelaxed update, see raw_update_max
             h_max = mapreduce(abs, max, s.h; init = zero(eltype(s.h)))
             if delta_h_max / (h_max + eps(eltype(s.h))) < ps.tol
                 ps.converged = true
@@ -375,14 +389,14 @@ function refresh_head_dependents!(s::State, g::Grid, p::ModelParameters, mt::Mel
     compute_dpwdxy!(s, g) # update the water pressure gradient in both x and y in one kernel, feeds compute_sensible!'s sensible-heat term (via compute_mdot! below)
     compute_N!(s, p, cnc) # update effective pressure (ice overburden pressure - pw)
 
-    compute_q_and_Re_xy!(s, p) # update water flux qx, qy and Reynold's number on faces so Re_x, Re_y all in one kernel to reduce kernel - the Reynold's number is calculated based on the solution of the quadratic equation that defines it (Eq. 5 and 7 combined from https://gmd.copernicus.org/articles/11/2955/2018/)
+    compute_face_flux!(s, p, kfs) # face transmissivity K_x/K_y, flux q and Reynolds number Re on faces, lag-free and in one kernel -- K_x/K_y are exactly what the next linear solve assembles, so the solve and every flux diagnostic see the same flux (water_flux.jl)
     compute_Re!(s) # update the Reynold's number based on the Re_x and Re_y doing an average over the four faces of a grid cell
 
     compute_taub_xy!(s, p, sl) # update the basal shear stress based on the sliding law `sl` chosen
 
     compute_mdot!(s, p, mt) # update the melt rate, including/excluding each term per `mt`
 
-    compute_K!(s, p) # update the transmissivity
+    compute_cell_K!(s, p) # cell-centred transmissivity (diagnostic; the solve reads the face values K_x/K_y set above)
 
     compute_D!(s, p, mt, ds) # update the channel-wall diffusion coefficient (no-op under NoDiffusion)
 

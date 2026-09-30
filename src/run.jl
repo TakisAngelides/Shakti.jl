@@ -60,6 +60,7 @@ function run!(sim::Simulation; checkpoint_every::Union{Nothing, Int} = nothing, 
 
     if restart_path === nothing && extend_path === nothing
         sim.total_time[] = zero(sim.dt[]) # reset so the same Simulation can be run! more than once, e.g. chained runs sharing one state
+        reset_head_history!(sim.he) # a fresh start's history must not include heads from a previous run!
         prepare!(sim.observer, sim.state)
         observe!(sim.observer, sim.state, 0, sim.total_time[])
         start_t = 0
@@ -151,17 +152,48 @@ picard_status(hs::ParabolicHeadScheme) = (hs.pps.converged, hs.pps.last_iter)
 $(TYPEDSIGNATURES)
 
 Advances `sim` by one timestep: recomputes `sim.dt[]` if `sim.ts` is adaptive
-([`update_dt!`](@ref)), refreshes the melt input ([`update_ieb!`](@ref)), solves for the new head
-([`step_h!`](@ref)), then evolves the gap height ([`step_b!`](@ref)).
+([`update_dt!`](@ref)), refreshes the melt input ([`update_ieb!`](@ref)), brings the head solve's
+inputs up to date and sets its initial guess ([`prepare_head_solve!`](@ref)), solves for the new
+head ([`step_h!`](@ref)), records it for the next step's extrapolation (`sim.he`), then evolves the
+gap height ([`step_b!`](@ref)).
 """
 function step!(sim::Simulation)
-
     update_dt!(sim) # no-op under FixedTimeStep; must run before step_h!/step_b! since both read sim.dt[]
     update_ieb!(sim.mi, sim.state, sim.total_time[]) # no-op for ConstantMeltInput; rescales state.ieb for e.g. SeasonalMeltInput -- done once per timestep, before step_h!, since ieb only feeds the head equation (step_b! never reads it)
+    prepare_head_solve!(sim)
     step_h!(sim.hs, sim)
+    record_head!(sim.he, sim.state, sim.dt[], first(picard_status(sim.hs)))
     step_b!(sim)
-
 end
+
+"""
+$(TYPEDSIGNATURES)
+
+Brings everything the head solve reads up to date with the state as the timestep starts -- `b`
+has just been evolved by the previous [`step_b!`](@ref), and an ice-flow model may have changed
+`zs`/`zb`/`u_b` since:
+
+1. `H`/`po` from the current `b` ([`compute_H!`](@ref)/[`compute_po!`](@ref); `H = zs - (zb + b)`),
+   so a large gap (a wide channel at fine resolution) lowers the overburden it sits under. Two
+   elementwise kernels, negligible next to one linear solve.
+2. The initial head guess ([`extrapolate_head!`](@ref), per `sim.he`; a no-op under
+   [`NoHeadExtrapolation`](@ref) or until two converged heads exist).
+3. Every field derived from `h` and `b` ([`refresh_head_dependents!`](@ref): `pw`, `N`, face
+   transmissivities/`q`/`Re`, `taub`, `mdot`, `K`, `D`). The first linear solve of the step
+   assembles from these, so without this refresh it would use transmissivity, melt and `D`
+   computed from the *previous* step's `b`. The solve recomputes them after every iteration anyway;
+   this makes the first iteration consistent too (and hence the result of a solve that converges
+   in one iteration). One refresh per step, a small fraction of a single iteration's cost.
+"""
+function prepare_head_solve!(sim::Simulation)
+    s = sim.state
+    compute_H!(s)
+    compute_po!(s, sim.p)
+    extrapolate_head!(sim.he, s, sim.dt[])
+    refresh_head_dependents!(s, sim.grid, sim.p, sim.mt, sim.kfs, sim.sl; cnc = sim.cnc, ds = sim.ds)
+    return sim
+end
+
 
 """
 $(TYPEDSIGNATURES)
@@ -244,8 +276,9 @@ $(TYPEDSIGNATURES)
 Evolves the gap height `sim.state.b` by one timestep. Dispatches on `sim.ds` first: under
 [`WithDiffusion`](@ref), `sim.gs` is **not consulted at all** -- [`solve_b_diffusion!`](@ref) solves
 the coupled diffusion system (SUHMO Eq. 17) directly, since that equation only defines one way to
-combine diffusion with the local opening/closure terms (evaluated explicitly, at the lagged `b`/`N`
--- see `update_SALS_b_diffusion_kernel!`'s own module-level note, `linear_solver.jl`), not one per
+combine diffusion with the local opening/closure terms (closure with `N > 0` and
+opening-by-sliding implicit on the diagonal, melt explicit -- see [`b_diffusion_local_terms`](@ref),
+`linear_solver.jl`), not one per
 [`AbstractGapScheme`](@ref). Under [`NoDiffusion`](@ref) (the default), behaves exactly as before,
 dispatching on `sim.gs` (`ImplicitGapScheme()`/`ExplicitGapScheme()`/`FullyImplicitGapScheme()`) to
 [`compute_b!(sim, sim.gs)`](@ref) below.

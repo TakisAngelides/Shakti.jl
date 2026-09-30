@@ -60,10 +60,29 @@ itself in a fused kernel rather than calling this function.
 """
 compute_shear!(s::State) = (@parallel compute_shear_kernel!(s.shear, s.ub_x, s.taub_x, s.ub_y, s.taub_y); s)
 
-@parallel_indices (ix, iy) function compute_potential_kernel!(potential, q_x, dhdx, q_y, dhdy)
+# Share of a face's dissipation (q.grad(h) or q.grad(pw) on that face) credited to cell (ix, iy):
+# half, as each interior face is split evenly between its two cells -- except the face between a
+# GROUNDED cell and an OCEAN/LAND (Dirichlet) cell, whose Dirichlet side has no hydrology to
+# receive its half, so the grounded cell takes all of it (otherwise half the heat dissipated by
+# the outlet flow would silently vanish). (jx, jy) is the neighbour across the face; faces on the
+# domain edge carry zero flux, so their share is irrelevant.
+@inline function face_heat_share(mask, ix, iy, jx, jy)
+    inside = (1 <= jx <= size(mask, 1)) & (1 <= jy <= size(mask, 2))
+    full = inside && (mask[ix, iy] == GROUNDED) && is_dirichlet(mask[jx, jy])
+    return full ? one(eltype(mask)) : one(eltype(mask)) / 2
+end
+
+# Face-to-cell sum of a face product f_x*g_x + f_y*g_y, each face weighted by face_heat_share.
+@inline function cell_face_sum(mask, fx, gx, fy, gy, ix, iy)
+    return face_heat_share(mask, ix, iy, ix+1, iy) * fx[ix+1, iy] * gx[ix+1, iy] +
+           face_heat_share(mask, ix, iy, ix-1, iy) * fx[ix, iy]   * gx[ix, iy] +
+           face_heat_share(mask, ix, iy, ix, iy+1) * fy[ix, iy+1] * gy[ix, iy+1] +
+           face_heat_share(mask, ix, iy, ix, iy-1) * fy[ix, iy]   * gy[ix, iy]
+end
+
+@parallel_indices (ix, iy) function compute_potential_kernel!(potential, mask, q_x, dhdx, q_y, dhdy)
     if ix <= size(potential, 1) && iy <= size(potential, 2)
-        potential[ix, iy] = abs((q_x[ix+1, iy]*dhdx[ix+1, iy] + q_x[ix, iy]*dhdx[ix, iy]) / 2 +
-                                (q_y[ix, iy+1]*dhdy[ix, iy+1] + q_y[ix, iy]*dhdy[ix, iy]) / 2)
+        potential[ix, iy] = abs(cell_face_sum(mask, q_x, dhdx, q_y, dhdy, ix, iy))
     end
     return
 end
@@ -74,13 +93,12 @@ Updates `s.potential`: the potential-energy-dissipation contribution to the melt
 flowing down the hydraulic-head gradient), `|q . dhdx|` averaged from faces onto cell centers.
 Standalone/diagnostic use, same caveat as [`compute_shear!`](@ref).
 """
-compute_potential!(s::State) = (@parallel compute_potential_kernel!(s.potential, s.q_x, s.dhdx, s.q_y, s.dhdy); s)
+compute_potential!(s::State) = (@parallel compute_potential_kernel!(s.potential, s.mask, s.q_x, s.dhdx, s.q_y, s.dhdy); s)
 
 # Requires dpwdx/dpwdy (computed above) already current.
-@parallel_indices (ix, iy) function compute_sensible_kernel!(sensible, q_x, dpwdx, q_y, dpwdy)
+@parallel_indices (ix, iy) function compute_sensible_kernel!(sensible, mask, q_x, dpwdx, q_y, dpwdy)
     if ix <= size(sensible, 1) && iy <= size(sensible, 2)
-        sensible[ix, iy] = (q_x[ix+1, iy]*dpwdx[ix+1, iy] + q_x[ix, iy]*dpwdx[ix, iy]) / 2 +
-                            (q_y[ix, iy+1]*dpwdy[ix, iy+1] + q_y[ix, iy]*dpwdy[ix, iy]) / 2
+        sensible[ix, iy] = cell_face_sum(mask, q_x, dpwdx, q_y, dpwdy, ix, iy)
     end
     return
 end
@@ -93,7 +111,7 @@ regions of different pressure-melting-point temperature), `q . dpwdx` averaged f
 cell centers. Requires `s.dpwdx`/`s.dpwdy` already current. Standalone/diagnostic use, same
 caveat as [`compute_shear!`](@ref).
 """
-compute_sensible!(s::State) = (@parallel compute_sensible_kernel!(s.sensible, s.q_x, s.dpwdx, s.q_y, s.dpwdy); s)
+compute_sensible!(s::State) = (@parallel compute_sensible_kernel!(s.sensible, s.mask, s.q_x, s.dpwdx, s.q_y, s.dpwdy); s)
 
 # Fused hot-path kernel: shear/potential/sensible/mdot in one launch instead
 # of four. Duplicates the per-cell math above rather than calling those
@@ -103,7 +121,7 @@ compute_sensible!(s::State) = (@parallel compute_sensible_kernel!(s.sensible, s.
 # corresponding MeltTerms flag is off, in which case that field is left
 # untouched entirely (same "not just multiplied by zero" idiom the
 # sensible-heat term already had, now applied uniformly to every term).
-@parallel_indices (ix, iy) function compute_mdot_kernel!(mdot, shear, potential, sensible, G, q_T, ub_x, taub_x, ub_y, taub_y, q_x, dhdx, q_y, dhdy, dpwdx, dpwdy, Linv, rho_w, ggrav, ct, cw,
+@parallel_indices (ix, iy) function compute_mdot_kernel!(mdot, mask, shear, potential, sensible, G, q_T, ub_x, taub_x, ub_y, taub_y, q_x, dhdx, q_y, dhdy, dpwdx, dpwdy, Linv, rho_w, ggrav, ct, cw,
                                                           ::MeltTerms{Geothermal,Frictional,Potential,Sensible,Conductive}) where {Geothermal,Frictional,Potential,Sensible,Conductive}
     if ix <= size(mdot, 1) && iy <= size(mdot, 2)
         acc = zero(eltype(mdot))
@@ -120,15 +138,13 @@ compute_sensible!(s::State) = (@parallel compute_sensible_kernel!(s.sensible, s.
         end
 
         if Potential
-            pot = abs((q_x[ix+1, iy]*dhdx[ix+1, iy] + q_x[ix, iy]*dhdx[ix, iy]) / 2 +
-                      (q_y[ix, iy+1]*dhdy[ix, iy+1] + q_y[ix, iy]*dhdy[ix, iy]) / 2)
+            pot = abs(cell_face_sum(mask, q_x, dhdx, q_y, dhdy, ix, iy))
             potential[ix, iy] = pot
             acc += rho_w*ggrav*pot
         end
 
         if Sensible
-            sens = (q_x[ix+1, iy]*dpwdx[ix+1, iy] + q_x[ix, iy]*dpwdx[ix, iy]) / 2 +
-                   (q_y[ix, iy+1]*dpwdy[ix, iy+1] + q_y[ix, iy]*dpwdy[ix, iy]) / 2
+            sens = cell_face_sum(mask, q_x, dpwdx, q_y, dpwdy, ix, iy)
             sensible[ix, iy] = sens
             acc += ct*cw*rho_w*sens
         end
@@ -161,7 +177,7 @@ all (e.g. `s.sensible`/`s.dpwdx`/`s.dpwdy` when `Sensible == false`), rather tha
 multiplying by a zero prefactor.
 """
 function compute_mdot!(s::State, p::ModelParameters, mt::MeltTerms)
-    @parallel compute_mdot_kernel!(s.mdot, s.shear, s.potential, s.sensible, s.G, s.q_T, s.ub_x, s.taub_x, s.ub_y, s.taub_y, s.q_x, s.dhdx, s.q_y, s.dhdy, s.dpwdx, s.dpwdy, 1/p.L, p.rho_w, p.g, p.ct, p.cw, mt)
+    @parallel compute_mdot_kernel!(s.mdot, s.mask, s.shear, s.potential, s.sensible, s.G, s.q_T, s.ub_x, s.taub_x, s.ub_y, s.taub_y, s.q_x, s.dhdx, s.q_y, s.dhdy, s.dpwdx, s.dpwdy, 1/p.L, p.rho_w, p.g, p.ct, p.cw, mt)
     return s
 end
 
@@ -173,6 +189,13 @@ end
 # already chose for mdot: a run with Sensible off shouldn't have D silently include it just
 # because p.ct/p.cw happen to be nonzero -- same rationale as ModelParameters' own docstring note
 # on mdot_includes_sensible not being inferred from ct/cw.
+#
+# D is floored at 0. D models channel walls melted by *surplus* dissipated heat; with the
+# sensible-heat (pressure-melting) term on, water flowing up a steep adverse bed slope can have a
+# net heat deficit (supercooling), which would make D negative -- a backward-diffusion operator,
+# ill-posed and no longer SPD. The deficit is already represented locally by mdot going negative
+# (freeze-on), so walls just stop melting there. A no-op whenever ct == 0 (SUHMO's own choice in
+# nearly all of Felden et al. 2023's experiments).
 #
 # Both faces in one launch (ParallelStencil infers the launch range from the union of every
 # argument's size, see compute_dhdxy_kernel!'s own note, field_gradients.jl); D_x/D_y are left
@@ -194,7 +217,7 @@ end
         if Sensible
             acc += ct * cw * rho_w * q_x[ix, iy] * dpwdx[ix, iy]
         end
-        D_x[ix, iy] = (b_x[ix, iy] / rho_i) * Linv * acc
+        D_x[ix, iy] = max(zero(acc), (b_x[ix, iy] / rho_i) * Linv * acc) # floored at 0, see below
     end
     if iy > 1 && iy < size(D_y, 2) && ix <= size(D_y, 1)
         acc = zero(eltype(D_y))
@@ -204,7 +227,7 @@ end
         if Sensible
             acc += ct * cw * rho_w * q_y[ix, iy] * dpwdy[ix, iy]
         end
-        D_y[ix, iy] = (b_y[ix, iy] / rho_i) * Linv * acc
+        D_y[ix, iy] = max(zero(acc), (b_y[ix, iy] / rho_i) * Linv * acc)
     end
     return
 end

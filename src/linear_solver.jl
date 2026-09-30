@@ -350,10 +350,12 @@ than threading the heavy `ds` itself all the way into the hot loop.
     return -acc
 end
 
-# mask is passed first so @parallel infers the (ix,iy) launch range from its
-# shape (nx,ny) -- nzval/rhs are flat length-(nx*ny) Vectors, and using one of
-# those as the first arg would infer a 1D launch instead.
-@parallel_indices (ix, iy) function update_SALS_elliptic_kernel!(mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, zb, h, K, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, kfs, b, D_x, D_y, diffusion_on)
+# Every assembly kernel here is launched with an explicit (1:nx, 1:ny) range
+# (`@parallel (1:g.nx, 1:g.ny) kernel!(...)`): ParallelStencil otherwise infers the
+# range from the elementwise max size over ALL array arguments, and the flat
+# length-(nx*ny) nzval/rhs vectors would make that (nx*ny, ny) -- nx*ny^2
+# iterations, almost all failing the bounds check (measured 19x slower at 512x512).
+@parallel_indices (ix, iy) function update_SALS_elliptic_kernel!(mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, zb, h, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, b, D_x, D_y, diffusion_on)
 
     nx, ny = size(mask, 1), size(mask, 2)
 
@@ -381,13 +383,15 @@ end
         else
             # m == GROUNDED: dynamic hydrology.
 
-            # A face contributes only if the neighbour exists; no neighbour reduces to a natural
-            # zero-flux (Neumann) condition. boundary_K_face handles OTHER_BASIN/FROZEN_BED/OCEAN/LAND neighbours
-            # (see k_face_scheme.jl).
-            aE = (ix < nx) ? boundary_K_face(kfs, K, mask, ix, iy, ix+1, iy) / dx2 : zero(dx2)
-            aW = (ix > 1)  ? boundary_K_face(kfs, K, mask, ix, iy, ix-1, iy) / dx2 : zero(dx2)
-            aN = (iy < ny) ? boundary_K_face(kfs, K, mask, ix, iy, ix, iy+1) / dy2 : zero(dy2)
-            aS = (iy > 1)  ? boundary_K_face(kfs, K, mask, ix, iy, ix, iy-1) / dy2 : zero(dy2)
+            # Face transmissivities from compute_face_flux! (water_flux.jl) -- the same numbers q is
+            # built from, so the solve and every flux diagnostic agree. They are already 0 on a
+            # domain-edge face (natural zero-flux Neumann) and on a face touching OTHER_BASIN/
+            # FROZEN_BED, and at an OCEAN/LAND face carry the grounded cell's own conductance
+            # (face_conductance, k_face_scheme.jl).
+            aE = (ix < nx) ? K_x[ix+1, iy] / dx2 : zero(dx2)
+            aW = (ix > 1)  ? K_x[ix, iy] / dx2 : zero(dx2)
+            aN = (iy < ny) ? K_y[ix, iy+1] / dy2 : zero(dy2)
+            aS = (iy > 1)  ? K_y[ix, iy] / dy2 : zero(dy2)
 
             # Last aP term comes from Newton linearization of the creep closing term - appendix of doi: 10.1017/jog.2018.59.
             # pow(..., n_minus_1) (n_minus_1 = p.n_minus_1_exp, canonicalized once at
@@ -461,7 +465,7 @@ function update_SALS_elliptic!(sals::SparseAssembledLinearSystem, s::State, g::G
     fill!(nzval, 0)
     fill!(rhs, 0)
 
-    @parallel update_SALS_elliptic_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.zb, s.h, s.K, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, kfs, s.b, s.D_x, s.D_y, Val(ds isa WithDiffusion))
+    @parallel (1:g.nx, 1:g.ny) update_SALS_elliptic_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.zb, s.h, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, s.b, s.D_x, s.D_y, Val(ds isa WithDiffusion))
 
     return
 
@@ -494,7 +498,7 @@ end
 # Newton-corrected, same as the elliptic kernel) -- one full Parabolic_loop!
 # call still drives all of them to self-consistency across iterations, same
 # as Picard_loop! does.
-@parallel_indices (ix, iy) function update_SALS_parabolic_kernel!(mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, zb, h, h_old, K, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, kfs, e_v, dt, b, D_x, D_y, diffusion_on)
+@parallel_indices (ix, iy) function update_SALS_parabolic_kernel!(mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, zb, h, h_old, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, e_v, dt, b, D_x, D_y, diffusion_on)
 
     nx, ny = size(mask, 1), size(mask, 2)
 
@@ -517,10 +521,10 @@ end
         else
             # m == GROUNDED: dynamic hydrology.
 
-            aE = (ix < nx) ? boundary_K_face(kfs, K, mask, ix, iy, ix+1, iy) / dx2 : zero(dx2)
-            aW = (ix > 1)  ? boundary_K_face(kfs, K, mask, ix, iy, ix-1, iy) / dx2 : zero(dx2)
-            aN = (iy < ny) ? boundary_K_face(kfs, K, mask, ix, iy, ix, iy+1) / dy2 : zero(dy2)
-            aS = (iy > 1)  ? boundary_K_face(kfs, K, mask, ix, iy, ix, iy-1) / dy2 : zero(dy2)
+            aE = (ix < nx) ? K_x[ix+1, iy] / dx2 : zero(dx2)
+            aW = (ix > 1)  ? K_x[ix, iy] / dx2 : zero(dx2)
+            aN = (iy < ny) ? K_y[ix, iy+1] / dy2 : zero(dy2)
+            aS = (iy > 1)  ? K_y[ix, iy] / dy2 : zero(dy2)
 
             aP = (aE + aW + aN + aS) + e_v / dt + n * rho_w * ggrav * A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * lc[ix, iy] # diffusion + backward-Euler englacial storage reaction term + Newton-linearized creep closure (same term as update_SALS_elliptic_kernel!'s aP)
 
@@ -585,7 +589,7 @@ function update_SALS_parabolic!(sals::SparseAssembledLinearSystem, s::State, g::
     fill!(nzval, 0)
     fill!(rhs, 0)
 
-    @parallel update_SALS_parabolic_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.zb, s.h, h_old, s.K, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, kfs, p.e_v, dt, s.b, s.D_x, s.D_y, Val(ds isa WithDiffusion))
+    @parallel (1:g.nx, 1:g.ny) update_SALS_parabolic_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.zb, s.h, h_old, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, p.e_v, dt, s.b, s.D_x, s.D_y, Val(ds isa WithDiffusion))
 
     return
 
@@ -597,7 +601,7 @@ end
 # stored as the raw positive face conductances -- stencil_matvec_kernel!
 # below applies the minus sign when it uses them, matching the sign
 # convention update_SALS_elliptic_kernel! bakes directly into nzval.
-@parallel_indices (ix, iy) function update_MFLS_elliptic_kernel!(mask, aP, aE, aW, aN, aS, rhs, zb, h, K, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, kfs, b, D_x, D_y, diffusion_on)
+@parallel_indices (ix, iy) function update_MFLS_elliptic_kernel!(mask, aP, aE, aW, aN, aS, rhs, zb, h, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, b, D_x, D_y, diffusion_on)
 
     nx, ny = size(mask, 1), size(mask, 2)
 
@@ -620,10 +624,10 @@ end
         else
             # m == GROUNDED: dynamic hydrology. Same face/aP logic as update_SALS_elliptic_kernel!.
 
-            aE_ij = (ix < nx) ? boundary_K_face(kfs, K, mask, ix, iy, ix+1, iy) / dx2 : zero(dx2)
-            aW_ij = (ix > 1)  ? boundary_K_face(kfs, K, mask, ix, iy, ix-1, iy) / dx2 : zero(dx2)
-            aN_ij = (iy < ny) ? boundary_K_face(kfs, K, mask, ix, iy, ix, iy+1) / dy2 : zero(dy2)
-            aS_ij = (iy > 1)  ? boundary_K_face(kfs, K, mask, ix, iy, ix, iy-1) / dy2 : zero(dy2)
+            aE_ij = (ix < nx) ? K_x[ix+1, iy] / dx2 : zero(dx2)
+            aW_ij = (ix > 1)  ? K_x[ix, iy] / dx2 : zero(dx2)
+            aN_ij = (iy < ny) ? K_y[ix, iy+1] / dy2 : zero(dy2)
+            aS_ij = (iy > 1)  ? K_y[ix, iy] / dy2 : zero(dy2)
 
             aP[ix, iy] = (aE_ij + aW_ij + aN_ij + aS_ij) + n * rho_w * ggrav * A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * lc[ix, iy]
 
@@ -679,7 +683,7 @@ function update_MFLS_elliptic!(mfls::MatrixFreeLinearSystem, s::State, g::Grid, 
     fill!(mfls.aS, 0)
     fill!(mfls.rhs, 0)
 
-    @parallel update_MFLS_elliptic_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.zb, s.h, s.K, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, kfs, s.b, s.D_x, s.D_y, Val(ds isa WithDiffusion))
+    @parallel (1:g.nx, 1:g.ny) update_MFLS_elliptic_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.zb, s.h, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, s.b, s.D_x, s.D_y, Val(ds isa WithDiffusion))
 
     return
 
@@ -691,7 +695,7 @@ end
 # for the storage-term/Newton-linearization reasoning, and for why `h_old`
 # (fixed for the whole real timestep) must be a separate argument from `h`
 # (the current Picard sub-iterate).
-@parallel_indices (ix, iy) function update_MFLS_parabolic_kernel!(mask, aP, aE, aW, aN, aS, rhs, zb, h, h_old, K, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, kfs, e_v, dt, b, D_x, D_y, diffusion_on)
+@parallel_indices (ix, iy) function update_MFLS_parabolic_kernel!(mask, aP, aE, aW, aN, aS, rhs, zb, h, h_old, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, e_v, dt, b, D_x, D_y, diffusion_on)
 
     nx, ny = size(mask, 1), size(mask, 2)
 
@@ -714,10 +718,10 @@ end
         else
             # m == GROUNDED: dynamic hydrology. Same face logic as update_MFLS_elliptic_kernel!.
 
-            aE_ij = (ix < nx) ? boundary_K_face(kfs, K, mask, ix, iy, ix+1, iy) / dx2 : zero(dx2)
-            aW_ij = (ix > 1)  ? boundary_K_face(kfs, K, mask, ix, iy, ix-1, iy) / dx2 : zero(dx2)
-            aN_ij = (iy < ny) ? boundary_K_face(kfs, K, mask, ix, iy, ix, iy+1) / dy2 : zero(dy2)
-            aS_ij = (iy > 1)  ? boundary_K_face(kfs, K, mask, ix, iy, ix, iy-1) / dy2 : zero(dy2)
+            aE_ij = (ix < nx) ? K_x[ix+1, iy] / dx2 : zero(dx2)
+            aW_ij = (ix > 1)  ? K_x[ix, iy] / dx2 : zero(dx2)
+            aN_ij = (iy < ny) ? K_y[ix, iy+1] / dy2 : zero(dy2)
+            aS_ij = (iy > 1)  ? K_y[ix, iy] / dy2 : zero(dy2)
 
             aP[ix, iy] = (aE_ij + aW_ij + aN_ij + aS_ij) + e_v / dt + n * rho_w * ggrav * A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * lc[ix, iy] # diffusion + backward-Euler englacial storage reaction term + Newton-linearized creep closure (same term as update_MFLS_elliptic_kernel!'s aP)
 
@@ -770,7 +774,7 @@ function update_MFLS_parabolic!(mfls::MatrixFreeLinearSystem, s::State, g::Grid,
     fill!(mfls.aS, 0)
     fill!(mfls.rhs, 0)
 
-    @parallel update_MFLS_parabolic_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.zb, s.h, h_old, s.K, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, kfs, p.e_v, dt, s.b, s.D_x, s.D_y, Val(ds isa WithDiffusion))
+    @parallel (1:g.nx, 1:g.ny) update_MFLS_parabolic_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.zb, s.h, h_old, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, p.e_v, dt, s.b, s.D_x, s.D_y, Val(ds isa WithDiffusion))
 
     return
 
@@ -798,13 +802,46 @@ end
 """
 $(TYPEDSIGNATURES)
 
+The local (non-diffusive) part of `b`'s diffusion solve for one `GROUNDED` cell: returns the
+extra diagonal entry and the full right-hand side. Felden et al. (2023)'s Eq. 17 evaluates melt,
+opening-by-sliding and creep closure all explicitly at the old `b`; here the two terms linear in
+the new `b` are moved onto the diagonal instead, matching the stability of
+[`ImplicitGapScheme`](@ref)/[`FullyImplicitGapScheme`](@ref) (it only ever adds non-negative
+diagonal entries, so the operator stays SPD):
+
+- creep closure `C*l_c` with `C > 0`: `dt*C*(l_c/b)` on the diagonal (`l_c/b` from the lagged
+  `lc`, `1` under [`StandardCreep`](@ref)). With `C <= 0` (`N <= 0`) the term opens the gap, and
+  stays explicit on the right-hand side, where it can only add a non-negative amount;
+- opening by sliding while `b < br` (`beta > 0`): `beta*|u_b| = gamma*(br - b)` with
+  `gamma = |u_b|/lr`, i.e. `dt*gamma` on the diagonal and `dt*gamma*br` on the right-hand side.
+"""
+@inline function b_diffusion_local_terms(b, mdot, beta, abs_ub, A_visc, N, lc, rho_i, n_minus_1, dt, br, lr)
+    C = A_visc * pow(abs(N), n_minus_1) * N
+    diag = zero(b)
+    src = mdot / rho_i
+    if C > zero(C)
+        diag += dt * C * (b > zero(b) ? lc / b : one(b))
+    else
+        src -= C * lc
+    end
+    if beta > zero(beta)
+        gamma = abs_ub / lr
+        diag += dt * gamma
+        src += gamma * br
+    end
+    return diag, b + dt * src
+end
+
+"""
+$(TYPEDSIGNATURES)
+
 Builds `b`'s own diffusion operator `(I - dt*∇·D∇)` and RHS (SUHMO Eq. 17) into `sals` -- see the
 module-level note just above for the boundary convention and the local-term treatment. `aP = 1 +
 dt*(D_E+D_W)/dx2 + dt*(D_N+D_S)/dy2` (the `1` is the equation's own "`I`"), each face coupling
 `dt*D_face/dx2_or_dy2` if that neighbour is `GROUNDED`, else `0` -- symmetric by construction (a
 shared face's `D` value is read identically from both sides, same reasoning as `h`'s own operator).
 """
-@parallel_indices (ix, iy) function update_SALS_b_diffusion_kernel!(mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, b, mdot, beta, abs_ub, A_visc, N, lc, D_x, D_y, rho_i, n_minus_1, dx2, dy2, dt)
+@parallel_indices (ix, iy) function update_SALS_b_diffusion_kernel!(mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, b, mdot, beta, abs_ub, A_visc, N, lc, D_x, D_y, rho_i, n_minus_1, dx2, dy2, dt, br, lr)
 
     nx, ny = size(mask, 1), size(mask, 2)
 
@@ -820,14 +857,14 @@ shared face's `D` value is read identically from both sides, same reasoning as `
             aN = (iy < ny && mask[ix, iy+1] == GROUNDED) ? dt * D_y[ix, iy+1] / dy2 : zero(dt)
             aS = (iy > 1  && mask[ix, iy-1] == GROUNDED) ? dt * D_y[ix, iy]   / dy2 : zero(dt)
 
-            nzval[idxP[ix, iy]] = one(aE) + aE + aW + aN + aS
+            local_diag, local_rhs = b_diffusion_local_terms(b[ix, iy], mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], N[ix, iy], lc[ix, iy], rho_i, n_minus_1, dt, br, lr)
+            nzval[idxP[ix, iy]] = one(aE) + aE + aW + aN + aS + local_diag
             ix < nx && (nzval[idxE[ix, iy]] = -aE)
             ix > 1  && (nzval[idxW[ix, iy]] = -aW)
             iy < ny && (nzval[idxN[ix, iy]] = -aN)
             iy > 1  && (nzval[idxS[ix, iy]] = -aS)
 
-            rhs[row] = b[ix, iy] + dt * (mdot[ix, iy] / rho_i + beta[ix, iy] * abs_ub[ix, iy] -
-                            A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy] * lc[ix, iy])
+            rhs[row] = local_rhs
 
         else # not evolved: frozen at its current value, same convention as compute_b_implicit_kernel!'s own GROUNDED-only guard
 
@@ -856,7 +893,7 @@ function update_SALS_b_diffusion!(sals::SparseAssembledLinearSystem, s::State, g
     fill!(nzval, 0)
     fill!(rhs, 0)
 
-    @parallel update_SALS_b_diffusion_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.b, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, s.lc, s.D_x, s.D_y, p.rho_i, p.n_minus_1_exp, g.dx2, g.dy2, dt)
+    @parallel (1:g.nx, 1:g.ny) update_SALS_b_diffusion_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.b, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, s.lc, s.D_x, s.D_y, p.rho_i, p.n_minus_1_exp, g.dx2, g.dy2, dt, p.br, p.lr)
 
     return
 
@@ -864,7 +901,7 @@ end
 
 # MatrixFreeLinearSystem counterpart of update_SALS_b_diffusion_kernel! -- same per-cell logic, no
 # sparse matrix to address into (see update_MFLS_elliptic_kernel!'s own note on this pairing).
-@parallel_indices (ix, iy) function update_MFLS_b_diffusion_kernel!(mask, aP, aE, aW, aN, aS, rhs, b, mdot, beta, abs_ub, A_visc, N, lc, D_x, D_y, rho_i, n_minus_1, dx2, dy2, dt)
+@parallel_indices (ix, iy) function update_MFLS_b_diffusion_kernel!(mask, aP, aE, aW, aN, aS, rhs, b, mdot, beta, abs_ub, A_visc, N, lc, D_x, D_y, rho_i, n_minus_1, dx2, dy2, dt, br, lr)
 
     nx, ny = size(mask, 1), size(mask, 2)
 
@@ -880,14 +917,14 @@ end
             aN_ij = (iy < ny && mask[ix, iy+1] == GROUNDED) ? dt * D_y[ix, iy+1] / dy2 : zero(dt)
             aS_ij = (iy > 1  && mask[ix, iy-1] == GROUNDED) ? dt * D_y[ix, iy]   / dy2 : zero(dt)
 
-            aP[ix, iy] = one(aE_ij) + aE_ij + aW_ij + aN_ij + aS_ij
+            local_diag, local_rhs = b_diffusion_local_terms(b[ix, iy], mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], N[ix, iy], lc[ix, iy], rho_i, n_minus_1, dt, br, lr)
+            aP[ix, iy] = one(aE_ij) + aE_ij + aW_ij + aN_ij + aS_ij + local_diag
             ix < nx && (aE[ix, iy] = aE_ij)
             ix > 1  && (aW[ix, iy] = aW_ij)
             iy < ny && (aN[ix, iy] = aN_ij)
             iy > 1  && (aS[ix, iy] = aS_ij)
 
-            rhs[row] = b[ix, iy] + dt * (mdot[ix, iy] / rho_i + beta[ix, iy] * abs_ub[ix, iy] -
-                            A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy] * lc[ix, iy])
+            rhs[row] = local_rhs
 
         else
 
@@ -916,7 +953,7 @@ function update_MFLS_b_diffusion!(mfls::MatrixFreeLinearSystem, s::State, g::Gri
     fill!(mfls.aS, 0)
     fill!(mfls.rhs, 0)
 
-    @parallel update_MFLS_b_diffusion_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.b, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, s.lc, s.D_x, s.D_y, p.rho_i, p.n_minus_1_exp, g.dx2, g.dy2, dt)
+    @parallel (1:g.nx, 1:g.ny) update_MFLS_b_diffusion_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.b, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, s.lc, s.D_x, s.D_y, p.rho_i, p.n_minus_1_exp, g.dx2, g.dy2, dt, p.br, p.lr)
 
     return
 
@@ -1085,6 +1122,20 @@ end
 """
 $(TYPEDSIGNATURES)
 
+Warns (at most 20 times per session) when Krylov.jl's `cg!` stopped without reaching its
+tolerance -- the Picard loop cannot tell an unconverged linear solve from a converged one, so
+without this it silently iterates to a wrong fixed point. Costs a single `Bool` read when the solve
+converged; the warning itself sits in a separate `@noinline` function so it adds no code to the
+hot path.
+"""
+@inline check_cg_converged(ws) = (ws.stats.solved || _warn_cg_not_converged(ws.stats); nothing)
+
+@noinline _warn_cg_not_converged(stats) =
+    @warn "CGIterativeSolver: CG stopped before converging -- the head solution is inaccurate (check the preconditioner or raise itmax)" niter = stats.niter status = stats.status maxlog = 20
+
+"""
+$(TYPEDSIGNATURES)
+
 Iterative solve via preconditioned conjugate gradient (Krylov.jl's `cg!`) -- valid because the
 assembled operator is symmetric positive definite (diffusion with reciprocal face fluxes plus a
 strictly positive diagonal reaction term from the Newton-linearized creep closure, Dirichlet
@@ -1147,7 +1198,7 @@ plain Jacobi. CPU-only, same reasoning as [`CholeskyDirectSolver`](@ref). `amg_r
 and the module-level note in `preconditioner.jl` for the lagged-hierarchy amortization this opts
 into when set above `1`.
 """
-function CGIterativeSolver(g::Grid{F}, ::Type{SparseAssembledLinearSystem}; chebyshev_degree::Union{Nothing, Int} = nothing, chebyshev_nsteps_estimate::Int = 15, amg::Bool = true, amg_refresh_every::Int = 1) where F
+function CGIterativeSolver(g::Grid{F}, ::Type{SparseAssembledLinearSystem}; chebyshev_degree::Union{Nothing, Int} = nothing, chebyshev_nsteps_estimate::Int = 15, chebyshev_bounds::Symbol = :gershgorin, chebyshev_eig_ratio = 30, amg::Bool = true, amg_refresh_every::Int = 1) where F
 
     # Krylov.jl's sparse matvec (SparseArrays.mul!) is CPU-only, same reasoning as CholeskyDirectSolver.
     backend != "Threads" && error("CGIterativeSolver(g, SparseAssembledLinearSystem) is CPU-only; use CGIterativeSolver(g, MatrixFreeLinearSystem) under the $backend backend.")
@@ -1160,7 +1211,7 @@ function CGIterativeSolver(g::Grid{F}, ::Type{SparseAssembledLinearSystem}; cheb
     precond = if amg
         AMGPreconditioner(sals.M; refresh_every = amg_refresh_every)
     elseif chebyshev_degree !== nothing
-        ChebyshevPreconditioner(sals.M, precond_diag, chebyshev_degree; nsteps_estimate = chebyshev_nsteps_estimate)
+        ChebyshevPreconditioner(sals.M, precond_diag, chebyshev_degree; nsteps_estimate = chebyshev_nsteps_estimate, bounds = chebyshev_bounds, eig_ratio = chebyshev_eig_ratio)
     else
         nothing
     end
@@ -1178,14 +1229,14 @@ Builds a [`CGIterativeSolver`](@ref) over a [`MatrixFreeLinearSystem`](@ref) on 
 `SparseMatrixCSC`, use the [`CGIterativeSolver`](@ref) constructor over
 [`SparseAssembledLinearSystem`](@ref) instead.
 """
-function CGIterativeSolver(g::Grid{F}, ::Type{MatrixFreeLinearSystem}; chebyshev_degree::Union{Nothing, Int} = nothing, chebyshev_nsteps_estimate::Int = 15, amg::Bool = false) where F
+function CGIterativeSolver(g::Grid{F}, ::Type{MatrixFreeLinearSystem}; chebyshev_degree::Union{Nothing, Int} = nothing, chebyshev_nsteps_estimate::Int = 15, chebyshev_bounds::Symbol = :gershgorin, chebyshev_eig_ratio = 30, amg::Bool = false) where F
 
     amg && error("AMGPreconditioner is CPU/SparseMatrixCSC-only (AlgebraicMultigrid.jl has no GPU array support); use CGIterativeSolver(g, SparseAssembledLinearSystem; amg = true) instead, or chebyshev_degree here for a GPU-capable accelerated preconditioner.")
 
     mfls = MatrixFreeLinearSystem(g)
     ws = CgWorkspace(g.nx * g.ny, g.nx * g.ny, typeof(mfls.rhs)) # storage type matches mfls.rhs, so it lands on the active backend (Array under Threads, MtlArray under Metal)
     precond_diag = @zeros(g.nx * g.ny)
-    precond = chebyshev_degree === nothing ? nothing : ChebyshevPreconditioner(StencilOperator(mfls), precond_diag, chebyshev_degree; nsteps_estimate = chebyshev_nsteps_estimate)
+    precond = chebyshev_degree === nothing ? nothing : ChebyshevPreconditioner(StencilOperator(mfls), precond_diag, chebyshev_degree; nsteps_estimate = chebyshev_nsteps_estimate, bounds = chebyshev_bounds, eig_ratio = chebyshev_eig_ratio)
 
     return CGIterativeSolver(mfls, ws, precond_diag, precond)
 
@@ -1228,6 +1279,7 @@ function solve_elliptic_linear_system!(ls::CGIterativeSolver{<:SparseAssembledLi
     # smaller once h is already close to converged (late Picard iterations, or consecutive
     # time steps), so it typically needs fewer Krylov iterations.
     cg!(ls.ws, ls.lsy.M, ls.lsy.rhs, vec(s.h); M = precond_matrix, ldiv = true) # solves in place, storing the result in the preallocated workspace ls.ws
+    check_cg_converged(ls.ws)
 
     s.h .= reshape(ls.ws.x, g.nx, g.ny) # update h
 
@@ -1249,6 +1301,7 @@ function solve_parabolic_linear_system!(ls::CGIterativeSolver{<:SparseAssembledL
     precond_matrix = _cg_precond!(ls)
 
     cg!(ls.ws, ls.lsy.M, ls.lsy.rhs, vec(s.h); M = precond_matrix, ldiv = true)
+    check_cg_converged(ls.ws)
 
     s.h .= reshape(ls.ws.x, g.nx, g.ny)
 
@@ -1268,6 +1321,7 @@ function solve_b_diffusion!(ls::CGIterativeSolver{<:SparseAssembledLinearSystem}
     precond_matrix = _cg_precond!(ls)
 
     cg!(ls.ws, ls.lsy.M, ls.lsy.rhs, vec(s.b); M = precond_matrix, ldiv = true)
+    check_cg_converged(ls.ws)
 
     s.b .= clamp.(reshape(ls.ws.x, g.nx, g.ny), p.b_min, p.b_max)
 
@@ -1287,6 +1341,7 @@ function solve_elliptic_linear_system!(ls::CGIterativeSolver{<:MatrixFreeLinearS
     precond_matrix = _cg_precond!(ls)
 
     cg!(ls.ws, StencilOperator(ls.lsy), ls.lsy.rhs, vec(s.h); M = precond_matrix, ldiv = true)
+    check_cg_converged(ls.ws)
 
     s.h .= reshape(ls.ws.x, g.nx, g.ny) # update h
 
@@ -1307,6 +1362,7 @@ function solve_parabolic_linear_system!(ls::CGIterativeSolver{<:MatrixFreeLinear
     precond_matrix = _cg_precond!(ls)
 
     cg!(ls.ws, StencilOperator(ls.lsy), ls.lsy.rhs, vec(s.h); M = precond_matrix, ldiv = true)
+    check_cg_converged(ls.ws)
 
     s.h .= reshape(ls.ws.x, g.nx, g.ny)
 
@@ -1326,6 +1382,7 @@ function solve_b_diffusion!(ls::CGIterativeSolver{<:MatrixFreeLinearSystem}, s::
     precond_matrix = _cg_precond!(ls)
 
     cg!(ls.ws, StencilOperator(ls.lsy), ls.lsy.rhs, vec(s.b); M = precond_matrix, ldiv = true)
+    check_cg_converged(ls.ws)
 
     s.b .= clamp.(reshape(ls.ws.x, g.nx, g.ny), p.b_min, p.b_max)
 

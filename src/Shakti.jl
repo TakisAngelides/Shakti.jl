@@ -100,6 +100,7 @@ include("newton_solver.jl")
 include("parabolic_solver.jl")
 include("gap_height.jl")
 include("cell_gap_clamping.jl")
+include("head_extrapolation.jl")
 include("simulation.jl")
 include("static_fields.jl")
 include("pressure.jl")
@@ -129,7 +130,7 @@ export compute_face_masks!, apply_mask_to_sliding!
 export AbstractMeltInput, ConstantMeltInput, SeasonalMeltInput, GaussianMoulinMeltInput, update_ieb!
 
 # k_face_scheme.jl
-export AbstractKFaceScheme, Arithmetic, Harmonic, compute_K_face
+export AbstractKFaceScheme, Arithmetic, Harmonic, compute_K_face, face_conductance
 
 # linear_solver.jl
 # (update_SALS_elliptic!/update_MFLS_elliptic! are internal assembly plumbing, not part of the
@@ -192,6 +193,9 @@ export AbstractCellGapClamping, NoCellGapClamping, CellGapClamping, apply_cell_g
 export AbstractCellNClamping, NoCellNClamping, CellNClamping, SmoothCellNClamping, apply_cell_N_clamping!
 export Simulation
 
+# head_extrapolation.jl
+export AbstractHeadExtrapolation, NoHeadExtrapolation, HeadExtrapolation, reset_head_history!
+
 # static_fields.jl
 export compute_H!, compute_po!, compute_h!, compute_abs_ub!
 
@@ -203,7 +207,7 @@ export compute_dhdx!, compute_dhdy!, compute_dhdxy!, compute_dpwdx!, compute_dpw
 
 # water_flux.jl
 export compute_q_x!, compute_q_y!, compute_q_xy!, compute_Re_x!, compute_Re_y!, compute_Re_xy!, compute_Re!, compute_K!
-export compute_q_and_Re_x!, compute_q_and_Re_y!, compute_q_and_Re_xy!
+export compute_q_and_Re_x!, compute_q_and_Re_y!, compute_q_and_Re_xy!, compute_face_flux!
 
 # gap_height.jl
 export compute_beta!, compute_lc!, compute_b_x!, compute_b_y!, compute_b!

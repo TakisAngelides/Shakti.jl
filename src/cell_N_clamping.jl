@@ -34,8 +34,39 @@ the global `ModelParameters.N_min`/`N_max` clamp already gave them. `bounds` map
 grid index to its `(nmin, nmax)` pair, e.g. `CellNClamping(Dict((209, 38) => (0.0, Inf)))` floors
 just that one cell at `N = 0` regardless of the (possibly `-Inf`/`Inf`, i.e. off) global setting.
 """
-struct CellNClamping{F <: AbstractFloat} <: AbstractCellNClamping
+struct CellNClamping{F <: AbstractFloat, I <: AbstractVector, V <: AbstractVector} <: AbstractCellNClamping
     bounds::Dict{Tuple{Int, Int}, Tuple{F, F}}
+    idx::I # the cells of `bounds`, as CartesianIndex, on the active backend (built once, see clamp_cells)
+    lo::V  # their lower bounds, same order, floattype, on the active backend
+    hi::V  # their upper bounds
+end
+
+CellNClamping(bounds::Dict{Tuple{Int, Int}, Tuple{F, F}}) where F <: AbstractFloat = CellNClamping(bounds, clamp_cells(bounds)...)
+
+# Backend-resident copy of a small host vector (the per-cell clamp lists): kept on the same device
+# as the State fields they index, so clamping is one in-place broadcast through a view -- no
+# host round-trip of the whole field, and no scalar indexing of a GPU array.
+@static if backend == "CUDA"
+    to_backend(x::AbstractVector) = CuArray(x)
+elseif backend == "Metal"
+    to_backend(x::AbstractVector) = MtlArray(x)
+else
+    to_backend(x::AbstractVector) = x
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Flattens a per-cell `(i, j) => (lo, hi)` bounds dictionary into three backend-resident vectors
+(cell indices, lower bounds, upper bounds, in matching order), built once at construction so each
+clamp is a single in-place broadcast.
+"""
+function clamp_cells(bounds::Dict{Tuple{Int, Int}, Tuple{F, F}}) where F <: AbstractFloat
+    ks = collect(keys(bounds))
+    idx = to_backend([CartesianIndex(k) for k in ks])
+    lo = to_backend([floattype(bounds[k][1]) for k in ks])
+    hi = to_backend([floattype(bounds[k][2]) for k in ks])
+    return idx, lo, hi
 end
 
 """
@@ -46,17 +77,11 @@ under [`NoCellNClamping`](@ref).
 """
 apply_cell_N_clamping!(s::State, ::NoCellNClamping) = s
 
-# Host round-trip rather than scalar getindex!/setindex! directly on s.N, same reasoning as
-# apply_cell_gap_clamping! (cell_gap_clamping.jl): GPUArrays.jl disallows element-by-element
-# indexing on GPU-resident arrays by default, and `bounds` is expected to be a short, user-curated
-# list of known-problem cells, not a per-cell field -- called every Picard iteration, but still
-# negligible against a whole elliptic solve.
+# In place through a view of just the listed cells (a device-side gather/scatter on GPU): called
+# every Picard iteration, so it must not copy the whole field to the host and back.
 function apply_cell_N_clamping!(s::State, cnc::CellNClamping)
-    N = Array(s.N)
-    for ((i, j), (nmin, nmax)) in cnc.bounds
-        N[i, j] = clamp(N[i, j], nmin, nmax)
-    end
-    s.N .= Data.Array(N)
+    Nv = view(s.N, cnc.idx)
+    Nv .= clamp.(Nv, cnc.lo, cnc.hi)
     return s
 end
 
@@ -80,10 +105,17 @@ intentionally left untouched for Picard-driven solvers (`CholeskyDirectSolver`/`
 -- this type is meant to be constructed and passed ONLY where [`NewtonJFNKSolver`](@ref) is in use,
 with the SAME `bounds` a `CellNClamping` would otherwise use for the same dataset.
 """
-struct SmoothCellNClamping{F <: AbstractFloat} <: AbstractCellNClamping
+struct SmoothCellNClamping{F <: AbstractFloat, I <: AbstractVector, V <: AbstractVector, S <: AbstractFloat} <: AbstractCellNClamping
     bounds::Dict{Tuple{Int, Int}, Tuple{F, F}}
     smoothing::F # transition width in N's own units (Pa); larger = smoother/safer for JFNK's Jacobian but a less faithful floor/cap
+    idx::I # see CellNClamping
+    lo::V
+    hi::V
+    smoothing_ft::S # `smoothing` in floattype, for the device-side broadcast
 end
+
+SmoothCellNClamping(bounds::Dict{Tuple{Int, Int}, Tuple{F, F}}, smoothing) where F <: AbstractFloat =
+    SmoothCellNClamping(bounds, F(smoothing), clamp_cells(bounds)..., floattype(smoothing))
 
 # Numerically stable softplus, log(1+exp(z)), avoiding overflow at large z via the identity
 # softplus(z) = z + softplus(-z) (only ever evaluates exp() at a non-positive argument).
@@ -110,10 +142,8 @@ Applies `cnc`'s smoothed per-cell overrides to `s.N`, called every time [`comput
 hard-clamp version of the same operation.
 """
 function apply_cell_N_clamping!(s::State, cnc::SmoothCellNClamping)
-    N = Array(s.N)
-    for ((i, j), (nmin, nmax)) in cnc.bounds
-        N[i, j] = _smooth_cap(_smooth_floor(N[i, j], nmin, cnc.smoothing), nmax, cnc.smoothing)
-    end
-    s.N .= Data.Array(N)
+    Nv = view(s.N, cnc.idx)
+    sm = cnc.smoothing_ft
+    Nv .= _smooth_cap.(_smooth_floor.(Nv, cnc.lo, sm), cnc.hi, sm)
     return s
 end
