@@ -21,9 +21,9 @@ struct State{A <: AbstractArray}
     lc::A         # ice-creep length scale (see AbstractCreepLengthScheme, gap_height.jl); equals b under StandardCreep
     abs_ub::A     # absolute value of the sliding velocity
     mdot::A       # melt rate
-    shear::A      # frictional (sliding) heating contribution to mdot, preallocated for compute_mdot!
-    potential::A  # potential-energy-dissipation contribution to mdot, preallocated for compute_mdot!
-    sensible::A   # sensible-heat-exchange contribution to mdot, preallocated for compute_mdot!
+    Q_b::A        # frictional (sliding) heat |u_b . taub| [W/m^2], written by compute_mdot! (0 when that term is off)
+    Q_diss::A     # heat dissipated by water flowing down the head gradient rho_w*g*|q . grad(h)| [W/m^2] (0 when off)
+    Q_sens::A     # sensible heat ct*cw*rho_w*(q . grad(pw)) [W/m^2] (0 when off)
     Re::A         # Reynolds number
     K::A          # hydraulic conductivity
     G::A          # geothermal heat flux
@@ -102,9 +102,9 @@ function State(g::Grid)
     lc        = initialize_center_field(g)
     abs_ub    = initialize_center_field(g)
     mdot      = initialize_center_field(g)
-    shear     = initialize_center_field(g)
-    potential = initialize_center_field(g)
-    sensible  = initialize_center_field(g)
+    Q_b       = initialize_center_field(g)
+    Q_diss    = initialize_center_field(g)
+    Q_sens    = initialize_center_field(g)
     Re        = initialize_center_field(g)
     K         = initialize_center_field(g)
     G         = initialize_center_field(g)
@@ -143,7 +143,7 @@ function State(g::Grid)
     valid_y = @fill(1.0, g.nx, g.ny+1) # float 1.0 = valid; recomputed in compute_face_masks!
 
     return State(
-        h, pw, po, b, beta, lc, abs_ub, mdot, shear, potential, sensible, Re, K, G, q_T, zb, zs, H, ieb, lambda, A_visc, N, mask,
+        h, pw, po, b, beta, lc, abs_ub, mdot, Q_b, Q_diss, Q_sens, Re, K, G, q_T, zb, zs, H, ieb, lambda, A_visc, N, mask,
         dhdx, q_x, Re_x, b_x, ub_x, taub_x, dpwdx, D_x, K_x, valid_x,
         dhdy, q_y, Re_y, b_y, ub_y, taub_y, dpwdy, D_y, K_y, valid_y,
     )

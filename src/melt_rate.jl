@@ -31,8 +31,8 @@ struct MeltTerms{Geothermal,Frictional,Potential,Sensible,Conductive} end
 # heat lost into cold ice above the bed, all divided by the latent heat of
 # fusion L. The four heat-source/sink terms are exposed as their own
 # standalone kernels below (compute_shear!/compute_potential!/
-# compute_sensible!, writing into preallocated State fields s.shear/
-# s.potential/s.sensible for standalone/diagnostic use, e.g. as a tracked_obs
+# compute_sensible!, writing into preallocated State fields s.Q_b/
+# s.Q_diss/s.Q_sens for standalone/diagnostic use, e.g. as a tracked_obs
 # name -- see Simulation's tracked_obs; q_T has no standalone kernel since
 # it's an input field, not something Shakti computes), but compute_mdot!'s
 # hot path (below) does NOT call compute_shear!/compute_potential!/
@@ -42,9 +42,9 @@ struct MeltTerms{Geothermal,Frictional,Potential,Sensible,Conductive} end
 # valid every Picard iteration for anyone reading them (when the
 # corresponding MeltTerms flag is on -- see compute_mdot_kernel! below).
 
-@parallel_indices (ix, iy) function compute_shear_kernel!(shear, ub_x, taub_x, ub_y, taub_y)
-    if ix <= size(shear, 1) && iy <= size(shear, 2)
-        shear[ix, iy] = abs((ub_x[ix+1, iy]*taub_x[ix+1, iy] + ub_x[ix, iy]*taub_x[ix, iy]) / 2 +
+@parallel_indices (ix, iy) function compute_shear_kernel!(Q_b, ub_x, taub_x, ub_y, taub_y)
+    if ix <= size(Q_b, 1) && iy <= size(Q_b, 2)
+        Q_b[ix, iy] = abs((ub_x[ix+1, iy]*taub_x[ix+1, iy] + ub_x[ix, iy]*taub_x[ix, iy]) / 2 +
                             (ub_y[ix, iy+1]*taub_y[ix, iy+1] + ub_y[ix, iy]*taub_y[ix, iy]) / 2)
     end
     return
@@ -53,12 +53,12 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Updates `s.shear`: the frictional (sliding) heating contribution to the melt rate, `|u_b . taub|`
-averaged from faces onto cell centers. Standalone/diagnostic use (e.g. as a `tracked_obs` name,
+Updates `s.Q_b`: the frictional (sliding) heat `|u_b . taub|` [W/m^2], averaged from faces onto
+cell centers. Standalone/diagnostic use (e.g. as a `tracked_obs` name,
 see `Simulation`'s `tracked_obs`) -- [`compute_mdot!`](@ref)'s hot path recomputes this term
 itself in a fused kernel rather than calling this function.
 """
-compute_shear!(s::State) = (@parallel compute_shear_kernel!(s.shear, s.ub_x, s.taub_x, s.ub_y, s.taub_y); s)
+compute_shear!(s::State) = (@parallel compute_shear_kernel!(s.Q_b, s.ub_x, s.taub_x, s.ub_y, s.taub_y); s)
 
 # Share of a face's dissipation (q.grad(h) or q.grad(pw) on that face) credited to cell (ix, iy):
 # half, as each interior face is split evenly between its two cells -- except the face between a
@@ -80,25 +80,25 @@ end
            face_heat_share(mask, ix, iy, ix, iy-1) * fy[ix, iy]   * gy[ix, iy]
 end
 
-@parallel_indices (ix, iy) function compute_potential_kernel!(potential, mask, q_x, dhdx, q_y, dhdy)
-    if ix <= size(potential, 1) && iy <= size(potential, 2)
-        potential[ix, iy] = abs(cell_face_sum(mask, q_x, dhdx, q_y, dhdy, ix, iy))
+@parallel_indices (ix, iy) function compute_potential_kernel!(Q_diss, mask, q_x, dhdx, q_y, dhdy, rho_w, ggrav)
+    if ix <= size(Q_diss, 1) && iy <= size(Q_diss, 2)
+        Q_diss[ix, iy] = rho_w * ggrav * abs(cell_face_sum(mask, q_x, dhdx, q_y, dhdy, ix, iy))
     end
     return
 end
 """
 $(TYPEDSIGNATURES)
 
-Updates `s.potential`: the potential-energy-dissipation contribution to the melt rate (water
-flowing down the hydraulic-head gradient), `|q . dhdx|` averaged from faces onto cell centers.
+Updates `s.Q_diss`: the heat dissipated by water flowing down the hydraulic-head gradient,
+`rho_w*g*|q . grad(h)|` [W/m^2], averaged from faces onto cell centers.
 Standalone/diagnostic use, same caveat as [`compute_shear!`](@ref).
 """
-compute_potential!(s::State) = (@parallel compute_potential_kernel!(s.potential, s.mask, s.q_x, s.dhdx, s.q_y, s.dhdy); s)
+compute_potential!(s::State, p::ModelParameters) = (@parallel compute_potential_kernel!(s.Q_diss, s.mask, s.q_x, s.dhdx, s.q_y, s.dhdy, p.rho_w, p.g); s)
 
 # Requires dpwdx/dpwdy (computed above) already current.
-@parallel_indices (ix, iy) function compute_sensible_kernel!(sensible, mask, q_x, dpwdx, q_y, dpwdy)
-    if ix <= size(sensible, 1) && iy <= size(sensible, 2)
-        sensible[ix, iy] = cell_face_sum(mask, q_x, dpwdx, q_y, dpwdy, ix, iy)
+@parallel_indices (ix, iy) function compute_sensible_kernel!(Q_sens, mask, q_x, dpwdx, q_y, dpwdy, ct, cw, rho_w)
+    if ix <= size(Q_sens, 1) && iy <= size(Q_sens, 2)
+        Q_sens[ix, iy] = ct * cw * rho_w * cell_face_sum(mask, q_x, dpwdx, q_y, dpwdy, ix, iy)
     end
     return
 end
@@ -106,22 +106,22 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Updates `s.sensible`: the sensible-heat-exchange contribution to the melt rate (water moving to
-regions of different pressure-melting-point temperature), `q . dpwdx` averaged from faces onto
+Updates `s.Q_sens`: the sensible heat exchanged as water moves to regions of different
+pressure-melting-point temperature, `ct*cw*rho_w*(q . grad(pw))` [W/m^2], averaged from faces onto
 cell centers. Requires `s.dpwdx`/`s.dpwdy` already current. Standalone/diagnostic use, same
 caveat as [`compute_shear!`](@ref).
 """
-compute_sensible!(s::State) = (@parallel compute_sensible_kernel!(s.sensible, s.mask, s.q_x, s.dpwdx, s.q_y, s.dpwdy); s)
+compute_sensible!(s::State, p::ModelParameters) = (@parallel compute_sensible_kernel!(s.Q_sens, s.mask, s.q_x, s.dpwdx, s.q_y, s.dpwdy, p.ct, p.cw, p.rho_w); s)
 
-# Fused hot-path kernel: shear/potential/sensible/mdot in one launch instead
-# of four. Duplicates the per-cell math above rather than calling those
-# kernels, since each is itself a separate kernel launch; still writes
-# shear/potential/sensible (not just mdot) so those fields aren't left stale
-# for anything that reads them after a Picard iteration -- UNLESS the
-# corresponding MeltTerms flag is off, in which case that field is left
-# untouched entirely (same "not just multiplied by zero" idiom the
-# sensible-heat term already had, now applied uniformly to every term).
-@parallel_indices (ix, iy) function compute_mdot_kernel!(mdot, mask, shear, potential, sensible, G, q_T, ub_x, taub_x, ub_y, taub_y, q_x, dhdx, q_y, dhdy, dpwdx, dpwdy, Linv, rho_w, ggrav, ct, cw,
+# Fused hot-path kernel: Q_b/Q_diss/Q_sens/mdot in one launch instead of
+# four. Duplicates the per-cell math above rather than calling those
+# kernels, since each is itself a separate kernel launch. Each term is
+# stored as a heat flux [W/m^2] with its prefactor applied, so the stored
+# fields are exactly what enters mdot and can be passed to a coupled ice
+# model as is. A term whose MeltTerms flag is off is not computed (its
+# inputs are never read) and its field is set to 0, so it never holds a
+# stale value.
+@parallel_indices (ix, iy) function compute_mdot_kernel!(mdot, mask, Q_b, Q_diss, Q_sens, G, q_T, ub_x, taub_x, ub_y, taub_y, q_x, dhdx, q_y, dhdy, dpwdx, dpwdy, Linv, rho_w, ggrav, ct, cw,
                                                           ::MeltTerms{Geothermal,Frictional,Potential,Sensible,Conductive}) where {Geothermal,Frictional,Potential,Sensible,Conductive}
     if ix <= size(mdot, 1) && iy <= size(mdot, 2)
         acc = zero(eltype(mdot))
@@ -133,20 +133,26 @@ compute_sensible!(s::State) = (@parallel compute_sensible_kernel!(s.sensible, s.
         if Frictional
             sh = abs((ub_x[ix+1, iy]*taub_x[ix+1, iy] + ub_x[ix, iy]*taub_x[ix, iy]) / 2 +
                      (ub_y[ix, iy+1]*taub_y[ix, iy+1] + ub_y[ix, iy]*taub_y[ix, iy]) / 2)
-            shear[ix, iy] = sh
+            Q_b[ix, iy] = sh
             acc += sh
+        else
+            Q_b[ix, iy] = zero(acc)
         end
 
         if Potential
-            pot = abs(cell_face_sum(mask, q_x, dhdx, q_y, dhdy, ix, iy))
-            potential[ix, iy] = pot
-            acc += rho_w*ggrav*pot
+            pot = rho_w*ggrav*abs(cell_face_sum(mask, q_x, dhdx, q_y, dhdy, ix, iy))
+            Q_diss[ix, iy] = pot
+            acc += pot
+        else
+            Q_diss[ix, iy] = zero(acc)
         end
 
         if Sensible
-            sens = cell_face_sum(mask, q_x, dpwdx, q_y, dpwdy, ix, iy)
-            sensible[ix, iy] = sens
-            acc += ct*cw*rho_w*sens
+            sens = ct*cw*rho_w*cell_face_sum(mask, q_x, dpwdx, q_y, dpwdy, ix, iy)
+            Q_sens[ix, iy] = sens
+            acc += sens
+        else
+            Q_sens[ix, iy] = zero(acc)
         end
 
         if Conductive
@@ -165,19 +171,20 @@ Updates `s.mdot` (subglacial melt rate) = geothermal flux `s.G` + frictional (sl
 potential energy released by water flowing downgradient + sensible heat exchanged as water moves to
 regions of different pressure melting point - conductive heat lost into cold ice above the bed
 `s.q_T`, all divided by the latent heat of fusion `p.L` -- each term included or not per `mt`'s type
-parameters (see [`MeltTerms`](@ref)). Also refreshes `s.shear`/`s.potential`/`s.sensible` as a side
-effect for any term that's on (needed by [`compute_shear!`](@ref) etc. for standalone/diagnostic
-use), computed via its own fused kernel rather than by calling those three functions (one launch
-instead of four).
+parameters (see [`MeltTerms`](@ref)). Also stores the heat terms `s.Q_b`/`s.Q_diss`/`s.Q_sens`
+[W/m^2], prefactors applied, so `L*mdot = G + Q_b + Q_diss + Q_sens - q_T`; a term that is off is
+stored as 0. Computed in one fused kernel rather than by calling [`compute_shear!`](@ref) etc. (one
+launch instead of four). The englacial input `s.ieb` is not part of `mdot`: it enters the water
+mass balance only, not the gap opening.
 
 Dispatches on `sim.mt` (decided once in `Simulation`'s constructor from `p.mdot_includes_G`/
 `p.mdot_includes_frictional`/`p.mdot_includes_potential`/`p.mdot_includes_sensible`/
 `p.mdot_includes_qT`): a term whose flag is `false` never touches its own inputs/output field at
-all (e.g. `s.sensible`/`s.dpwdx`/`s.dpwdy` when `Sensible == false`), rather than computing it and
-multiplying by a zero prefactor.
+all (e.g. `s.dpwdx`/`s.dpwdy` when `Sensible == false`), rather than computing it and multiplying by
+a zero prefactor; its output field is set to 0.
 """
 function compute_mdot!(s::State, p::ModelParameters, mt::MeltTerms)
-    @parallel compute_mdot_kernel!(s.mdot, s.mask, s.shear, s.potential, s.sensible, s.G, s.q_T, s.ub_x, s.taub_x, s.ub_y, s.taub_y, s.q_x, s.dhdx, s.q_y, s.dhdy, s.dpwdx, s.dpwdy, 1/p.L, p.rho_w, p.g, p.ct, p.cw, mt)
+    @parallel compute_mdot_kernel!(s.mdot, s.mask, s.Q_b, s.Q_diss, s.Q_sens, s.G, s.q_T, s.ub_x, s.taub_x, s.ub_y, s.taub_y, s.q_x, s.dhdx, s.q_y, s.dhdy, s.dpwdx, s.dpwdy, 1/p.L, p.rho_w, p.g, p.ct, p.cw, mt)
     return s
 end
 

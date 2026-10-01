@@ -76,8 +76,9 @@
             i = nx - 1 # GROUNDED, east neighbour OCEAN
             q, dh = Array(s.q_x), Array(s.dhdx)
             qy, dhy = Array(s.q_y), Array(s.dhdy)
-            expected = abs(q[i+1, j] * dh[i+1, j] + q[i, j] * dh[i, j] / 2 + qy[i, j+1] * dhy[i, j+1] / 2 + qy[i, j] * dhy[i, j] / 2)
-            @test s.potential[i, j] ≈ expected
+            p = sim.p
+            expected = p.rho_w * p.g * abs(q[i+1, j] * dh[i+1, j] + q[i, j] * dh[i, j] / 2 + qy[i, j+1] * dhy[i, j+1] / 2 + qy[i, j] * dhy[i, j] / 2)
+            @test s.Q_diss[i, j] ≈ expected
         end
 
         @testset "relax_update: backward Euler for R >= 0, exact exponential for R < 0" begin
