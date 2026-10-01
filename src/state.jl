@@ -21,6 +21,7 @@ struct State{A <: AbstractArray}
     lc::A         # ice-creep length scale (see AbstractCreepLengthScheme, gap_height.jl); equals b under StandardCreep
     abs_ub::A     # absolute value of the sliding velocity
     mdot::A       # melt rate
+    mdot_min::A   # floor on mdot this step, -rho_i*C (freeze-on capacity); applied when p.limit_freeze_on
     Q_b::A        # frictional (sliding) heat |u_b . taub| [W/m^2], written by compute_mdot! (0 when that term is off)
     Q_diss::A     # heat dissipated by water flowing down the head gradient rho_w*g*|q . grad(h)| [W/m^2] (0 when off)
     Q_sens::A     # sensible heat ct*cw*rho_w*(q . grad(pw)) [W/m^2] (0 when off)
@@ -102,6 +103,7 @@ function State(g::Grid)
     lc        = initialize_center_field(g)
     abs_ub    = initialize_center_field(g)
     mdot      = initialize_center_field(g)
+    mdot_min  = @fill(-Inf, g.nx, g.ny) # no floor until prepare_head_solve! sets one
     Q_b       = initialize_center_field(g)
     Q_diss    = initialize_center_field(g)
     Q_sens    = initialize_center_field(g)
@@ -143,7 +145,7 @@ function State(g::Grid)
     valid_y = @fill(1.0, g.nx, g.ny+1) # float 1.0 = valid; recomputed in compute_face_masks!
 
     return State(
-        h, pw, po, b, beta, lc, abs_ub, mdot, Q_b, Q_diss, Q_sens, Re, K, G, q_T, zb, zs, H, ieb, lambda, A_visc, N, mask,
+        h, pw, po, b, beta, lc, abs_ub, mdot, mdot_min, Q_b, Q_diss, Q_sens, Re, K, G, q_T, zb, zs, H, ieb, lambda, A_visc, N, mask,
         dhdx, q_x, Re_x, b_x, ub_x, taub_x, dpwdx, D_x, K_x, valid_x,
         dhdy, q_y, Re_y, b_y, ub_y, taub_y, dpwdy, D_y, K_y, valid_y,
     )

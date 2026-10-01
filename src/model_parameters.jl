@@ -33,6 +33,7 @@ struct ModelParameters{F <: AbstractFloat, NE1, NE2, NE3}
     mdot_includes_potential::Bool   # include the potential-energy-dissipation term in compute_mdot!
     mdot_includes_sensible::Bool    # include the sensible-heat-exchange term in compute_mdot! (its own ct*cw*rho_w prefactor still applies when on)
     mdot_includes_qT::Bool          # include (subtract) the conductive-heat-into-ice term q_T in compute_mdot!
+    limit_freeze_on::Bool           # cap freeze-on at the water the gap can supply this step (mdot >= -rho_i*C, see freeze_on_capacity!)
     n_exp::NE1         # canonical_exponent(n), see the fast-exponentiation note below
     n_minus_1_exp::NE2 # canonical_exponent(n - 1)
     inv_n_exp::NE3     # canonical_exponent(1 / n)
@@ -140,7 +141,8 @@ function ModelParameters(;
     mdot_includes_frictional = true,
     mdot_includes_potential = true,
     mdot_includes_sensible = true,
-    mdot_includes_qT = true)
+    mdot_includes_qT = true,
+    limit_freeze_on = true)
 
     T_hysteresis >= 0 || throw(ArgumentError("T_hysteresis must be >= 0 (got $T_hysteresis): the thaw threshold T_freeze + T_hysteresis may not lie below the freeze threshold"))
 
@@ -152,7 +154,7 @@ function ModelParameters(;
     return ModelParameters(
         F(rho_w), F(rho_sw), F(rho_i), F(g), F(nu), n_F, F(omega), F(L), F(br), F(lr), F(b_c), F(ct), F(cw), F(p_atm), F(b_min), F(b_max), F(N_min), F(N_max), F(e_v), F(T_freeze), F(T_hysteresis),
         mdot_includes_G, mdot_includes_frictional, mdot_includes_potential, mdot_includes_sensible, mdot_includes_qT,
-        n_exp, n_minus_1_exp, inv_n_exp
+        limit_freeze_on, n_exp, n_minus_1_exp, inv_n_exp
     )
 
 end

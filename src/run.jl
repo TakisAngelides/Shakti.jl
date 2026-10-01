@@ -189,6 +189,10 @@ function prepare_head_solve!(sim::Simulation)
     s = sim.state
     compute_H!(s)
     compute_po!(s, sim.p)
+    if sim.p.limit_freeze_on   # freeze-on floor for this step, from the start-of-step gap
+        freeze_on_capacity!(s.mdot_min, sim)
+        s.mdot_min .*= -sim.p.rho_i
+    end
     extrapolate_head!(sim.he, s, sim.dt[])
     refresh_head_dependents!(s, sim.grid, sim.p, sim.mt, sim.kfs, sim.sl; cnc = sim.cnc, ds = sim.ds)
     return sim
@@ -314,12 +318,18 @@ generous where it is a local maximum.
 it defaults to Shakti's own step. When Shakti subcycles within a longer host step (e.g. Yelmo
 advancing in `dt_min` chunks while Shakti steps hours), pass the host's step: the room in the gap
 is a stock, available once per host step, so spreading it over Shakti's short step would overstate
-`C` by the ratio of the two steps. The rate terms (opening by sliding, creep) are unaffected.
+`C` by the ratio of the two steps. With such a longer `dt`, opening by sliding and creep are also
+evaluated at the current gap rather than at `b_min`: over many Shakti steps creep keeps closing the
+gap at its actual size, and evaluating it at `b_min` (right for one implicit step) overstated `C`.
 """
 function freeze_on_capacity!(C, sim::Simulation; dt = sim.dt[])
     s, p = sim.state, sim.p
     diffusion = sim.ds isa WithDiffusion
-    beta_at_bmin, creep_at_bmin = sim.gs isa FullyImplicitGapScheme ? (true, true) :
+    # Over a host step longer than Shakti's own, creep and sliding act on the current gap for most
+    # of the interval, not on b_min (the end state of a single implicit step), so evaluate them at b.
+    subcycled = dt > sim.dt[]
+    beta_at_bmin, creep_at_bmin = subcycled ? (false, false) :
+                                  sim.gs isa FullyImplicitGapScheme ? (true, true) :
                                   sim.gs isa ImplicitGapScheme ? (false, true) : (false, false)
     @parallel freeze_on_capacity_kernel!(C, s.mask, s.b, s.beta, s.lc, s.abs_ub, s.A_visc, s.N, p.n_minus_1_exp, dt,
                                          p.b_min, p.br, p.lr, sim.cls, p.b_c, beta_at_bmin, creep_at_bmin, diffusion)

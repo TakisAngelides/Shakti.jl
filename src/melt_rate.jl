@@ -121,7 +121,7 @@ compute_sensible!(s::State, p::ModelParameters) = (@parallel compute_sensible_ke
 # model as is. A term whose MeltTerms flag is off is not computed (its
 # inputs are never read) and its field is set to 0, so it never holds a
 # stale value.
-@parallel_indices (ix, iy) function compute_mdot_kernel!(mdot, mask, Q_b, Q_diss, Q_sens, G, q_T, ub_x, taub_x, ub_y, taub_y, q_x, dhdx, q_y, dhdy, dpwdx, dpwdy, Linv, rho_w, ggrav, ct, cw,
+@parallel_indices (ix, iy) function compute_mdot_kernel!(mdot, mdot_min, limit_freeze_on, mask, Q_b, Q_diss, Q_sens, G, q_T, ub_x, taub_x, ub_y, taub_y, q_x, dhdx, q_y, dhdy, dpwdx, dpwdy, Linv, rho_w, ggrav, ct, cw,
                                                           ::MeltTerms{Geothermal,Frictional,Potential,Sensible,Conductive}) where {Geothermal,Frictional,Potential,Sensible,Conductive}
     if ix <= size(mdot, 1) && iy <= size(mdot, 2)
         acc = zero(eltype(mdot))
@@ -159,7 +159,10 @@ compute_sensible!(s::State, p::ModelParameters) = (@parallel compute_sensible_ke
             acc -= q_T[ix, iy]
         end
 
-        mdot[ix, iy] = Linv * acc
+        # Freeze-on is limited to the water the gap can supply this step: once the gap is at its
+        # floor there is nothing left to freeze, and the remaining heat deficit is the host's (it
+        # cools the ice), not water expelled into the flow.
+        mdot[ix, iy] = limit_freeze_on ? max(Linv * acc, mdot_min[ix, iy]) : Linv * acc
     end
     return
 end
@@ -173,7 +176,9 @@ regions of different pressure melting point - conductive heat lost into cold ice
 `s.q_T`, all divided by the latent heat of fusion `p.L` -- each term included or not per `mt`'s type
 parameters (see [`MeltTerms`](@ref)). Also stores the heat terms `s.Q_b`/`s.Q_diss`/`s.Q_sens`
 [W/m^2], prefactors applied, so `L*mdot = G + Q_b + Q_diss + Q_sens - q_T`; a term that is off is
-stored as 0. Computed in one fused kernel rather than by calling [`compute_shear!`](@ref) etc. (one
+stored as 0. With `p.limit_freeze_on`, `mdot` is floored at `s.mdot_min = -rho_i*C`, the
+freeze-on the gap can supply this step ([`freeze_on_capacity!`](@ref), set once per step by
+[`prepare_head_solve!`](@ref)); the heat terms are stored unlimited. Computed in one fused kernel rather than by calling [`compute_shear!`](@ref) etc. (one
 launch instead of four). The englacial input `s.ieb` is not part of `mdot`: it enters the water
 mass balance only, not the gap opening.
 
@@ -184,7 +189,7 @@ all (e.g. `s.dpwdx`/`s.dpwdy` when `Sensible == false`), rather than computing i
 a zero prefactor; its output field is set to 0.
 """
 function compute_mdot!(s::State, p::ModelParameters, mt::MeltTerms)
-    @parallel compute_mdot_kernel!(s.mdot, s.mask, s.Q_b, s.Q_diss, s.Q_sens, s.G, s.q_T, s.ub_x, s.taub_x, s.ub_y, s.taub_y, s.q_x, s.dhdx, s.q_y, s.dhdy, s.dpwdx, s.dpwdy, 1/p.L, p.rho_w, p.g, p.ct, p.cw, mt)
+    @parallel compute_mdot_kernel!(s.mdot, s.mdot_min, p.limit_freeze_on, s.mask, s.Q_b, s.Q_diss, s.Q_sens, s.G, s.q_T, s.ub_x, s.taub_x, s.ub_y, s.taub_y, s.q_x, s.dhdx, s.q_y, s.dhdy, s.dpwdx, s.dpwdy, 1/p.L, p.rho_w, p.g, p.ct, p.cw, mt)
     return s
 end
 

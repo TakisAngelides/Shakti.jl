@@ -198,4 +198,23 @@
             @test all(>=(0), Array(s.D_x)) && all(>=(0), Array(s.D_y))
         end
 
-    end
+    
+        @testset "limit_freeze_on: a cold bed freezes no more water than the gap holds" begin
+            # Strong conductive loss into cold ice (q_T >> G): without the limit, mdot stays
+            # negative after the gap reaches b_min and the "frozen" water is expelled into the flow.
+            sim = fresh_sim(; tsteps = 30)
+            s = sim.state
+            s.q_T .= 50.0   # freezes the ~1 cm gap within the 30 one-hour steps
+            for _ in 1:30
+                step!(sim)
+            end
+            gr = Array(s.mask) .== GROUNDED
+            b, mdot, mmin, N = Array(s.b), Array(s.mdot), Array(s.mdot_min), Array(s.N)
+            @test all(isfinite, N) && all(isfinite, b)
+            @test all(b[gr] .>= sim.p.b_min * (1 - 1e-12))
+            @test all(mdot[gr] .>= mmin[gr] .- 1e-18)
+            @test any(isapprox.(mdot[gr], mmin[gr]; rtol = 1e-10))      # the limit binds somewhere
+            @test any(isapprox.(b[gr], sim.p.b_min; rtol = 1e-8))       # and those cells sit at the floor
+        end
+
+end
