@@ -414,3 +414,55 @@ no-op there) to keep the rate/timescale estimate correct.
     end
     return
 end
+
+
+"""
+$(TYPEDSIGNATURES)
+
+Freeze-on capacity of one cell [m/s of ice]: the largest freezing rate `f` (melt opening
+`mdot/rho_i = -f`) the gap equation can take this step without the gap falling below `b_min`,
+
+    C = max(0, (b - b_min)/dt + beta(b_beta)*|u_b| - A|N|^(n-1)*N*l_c(b_creep)),
+
+i.e. room in the gap above the floor spread over the step, plus new room opened by sliding, minus
+room creep closure uses up anyway. `b_beta`/`b_creep` are where the gap scheme evaluates the two
+terms: `b_min` for an implicit term (the end-of-step gap, which at the limit is `b_min`), the old `b`
+for an explicit or lagged one. Exact for the backward-Euler branches of the gap update; with `N < 0`
+the update relaxes exponentially instead and this is the first-order estimate.
+"""
+@inline function freeze_on_capacity_cell(b, abs_ub, Cn, dt, b_min, br, lr, cls::AbstractCreepLengthScheme, b_c, b_beta, b_creep)
+    beta = br > 0 ? max(zero(b), (br - b_beta) / lr) : zero(b)
+    return max(zero(b), (b - b_min) / dt + beta * abs_ub - Cn * creep_length(cls, b_creep, b_c))
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+[`freeze_on_capacity_cell`](@ref) for the local terms of the SUHMO gap update under
+[`WithDiffusion`](@ref) ([`b_diffusion_local_terms`](@ref)), ignoring the diffusion itself: creep
+with `C > 0` is implicit through the lagged ratio `lc/b` (so it closes `C*(lc/b)*b_min` at the
+limit), creep with `C <= 0` is explicit (`C*lc`), and opening by sliding is implicit while the lagged
+`beta > 0` (`gamma*(br - b_min)`). Setting the solved `b` to `b_min` with `mdot/rho_i = -f` gives
+`f` exactly when `D = 0`.
+"""
+@inline function freeze_on_capacity_cell_diffusion(b, beta, abs_ub, Cn, lc, dt, b_min, br, lr)
+    creep   = Cn > zero(Cn) ? Cn * (b > zero(b) ? lc / b : one(b)) * b_min : Cn * lc
+    sliding = beta > zero(beta) ? (abs_ub / lr) * (br - b_min) : zero(b)
+    return max(zero(b), (b - b_min) / dt + sliding - creep)
+end
+
+@parallel_indices (ix, iy) function freeze_on_capacity_kernel!(Cap, mask, b, beta, lc, abs_ub, A_visc, N, n_minus_1, dt, b_min, br, lr, cls::AbstractCreepLengthScheme, b_c, beta_at_bmin, creep_at_bmin, diffusion)
+    if ix <= size(Cap, 1) && iy <= size(Cap, 2)
+        if mask[ix, iy] == GROUNDED
+            bb = b[ix, iy]
+            Cn = A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy]
+            Cap[ix, iy] = diffusion ?
+                freeze_on_capacity_cell_diffusion(bb, beta[ix, iy], abs_ub[ix, iy], Cn, lc[ix, iy], dt, b_min, br, lr) :
+                freeze_on_capacity_cell(bb, abs_ub[ix, iy], Cn, dt, b_min, br, lr, cls, b_c,
+                                        beta_at_bmin ? b_min : bb, creep_at_bmin ? b_min : bb)
+        else
+            Cap[ix, iy] = zero(eltype(Cap))
+        end
+    end
+    return
+end

@@ -187,3 +187,32 @@
         end
 
     end
+
+
+@testset "freeze_on_capacity_cell: freezing at C brings the gap to b_min" begin
+    b_min, dt, br, lr = 1e-6, 3600.0, 0.1, 2.0
+    for cls in (StandardCreep(), CreepCutoff()), (b0, ub, Cn) in ((0.05, 1e-6, 1e-9), (0.01, 3e-6, 1e-8), (0.2, 0.0, 1e-10))
+        b_c = cls isa CreepCutoff ? 1e-7 : 0.0   # cutoff below b_min keeps l_c linear at the limit
+        gamma = ub / lr
+        Cap = Shakti.freeze_on_capacity_cell(b0, ub, Cn, dt, b_min, br, lr, cls, b_c, b_min, b_min)
+        @test Cap > 0
+        # fully implicit update with mdot/rho_i = -Cap lands exactly on b_min
+        @test Shakti.fully_implicit_creep_update(cls, b0, -Cap, gamma, Cn, dt, br, b_c) ≈ b_min rtol = 1e-8
+        # any less freezing leaves room above the floor
+        @test Shakti.fully_implicit_creep_update(cls, b0, -0.9Cap, gamma, Cn, dt, br, b_c) > b_min
+    end
+    # a gap already at the floor with strong closure cannot freeze anything
+    @test Shakti.freeze_on_capacity_cell(1e-6, 0.0, 1.0, 3600.0, 1e-6, 0.0, 2.0, StandardCreep(), 0.0, 1e-6, 1e-6) == 0
+end
+
+@testset "freeze_on_capacity_cell_diffusion: SUHMO local terms land on b_min (D = 0)" begin
+    b_min, dt, br, lr, rho_i, n1 = 1e-6, 3600.0, 0.1, 2.0, 917.0, 2.0
+    for (b0, ub, A, N, lc) in ((0.05, 1e-6, 1e-24, 2e5, 0.05), (0.01, 3e-6, 1e-24, 5e5, 0.01), (0.02, 1e-6, 1e-24, -1e5, 0.02))
+        beta = max(0.0, (br - b0) / lr)
+        Cn = A * abs(N)^n1 * N
+        Cap = Shakti.freeze_on_capacity_cell_diffusion(b0, beta, ub, Cn, lc, dt, b_min, br, lr)
+        @test Cap > 0
+        diag, rhs = Shakti.b_diffusion_local_terms(b0, -rho_i * Cap, beta, ub, A, N, lc, rho_i, n1, dt, br, lr)
+        @test rhs / (1 + diag) ≈ b_min rtol = 1e-8
+    end
+end

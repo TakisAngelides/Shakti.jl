@@ -223,6 +223,7 @@ export save_checkpoint, load_checkpoint!
 
 # run.jl
 export run!, step!, step_h!, step_b!
+export freeze_on_capacity!
 
 # animation.jl
 export make_mp4_mid, make_mp4_2d, get_moulin_ij

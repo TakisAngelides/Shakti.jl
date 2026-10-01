@@ -296,6 +296,33 @@ compute_b!(sim::Simulation) = sim.ds isa WithDiffusion ? compute_b!(sim, sim.ds)
 """
 $(TYPEDSIGNATURES)
 
+Freeze-on capacity [m/s of ice] of every `GROUNDED` cell for a host's capacity basal boundary
+condition, from the current state (call it before the host's thermodynamic step, i.e. with this
+step's `b` and the last step's `N` and `|u_b|`): the fastest freezing the next gap update can absorb
+without `b` falling below `p.b_min`, see [`freeze_on_capacity_cell`](@ref). Zero off `GROUNDED`.
+Freezing closes the gap by the ice thickness and expels the excess water into the flow, so the limit
+is gap room, not water mass, and the result is local (no inflow term).
+
+Where each term is evaluated follows the gap scheme in use: [`FullyImplicitGapScheme`](@ref) takes
+opening by sliding and creep at `b_min`, [`ImplicitGapScheme`](@ref) sliding at the old `b` (lagged
+`beta`) and creep at `b_min`, [`ExplicitGapScheme`](@ref) both at the old `b`. Under [`WithDiffusion`](@ref) it follows SUHMO's
+local terms ([`freeze_on_capacity_cell_diffusion`](@ref)) and ignores the diffusion of `b`, which only
+moves gap volume between grounded cells: `C` is then conservative where `b` is a local minimum and
+generous where it is a local maximum.
+"""
+function freeze_on_capacity!(C, sim::Simulation)
+    s, p = sim.state, sim.p
+    diffusion = sim.ds isa WithDiffusion
+    beta_at_bmin, creep_at_bmin = sim.gs isa FullyImplicitGapScheme ? (true, true) :
+                                  sim.gs isa ImplicitGapScheme ? (false, true) : (false, false)
+    @parallel freeze_on_capacity_kernel!(C, s.mask, s.b, s.beta, s.lc, s.abs_ub, s.A_visc, s.N, p.n_minus_1_exp, sim.dt[],
+                                         p.b_min, p.br, p.lr, sim.cls, p.b_c, beta_at_bmin, creep_at_bmin, diffusion)
+    return C
+end
+
+"""
+$(TYPEDSIGNATURES)
+
 Solves `b`'s coupled diffusion system for the new timestep ([`solve_b_diffusion!`](@ref), using
 the second, independent linear solver bundled in `ds`) -- the [`WithDiffusion`](@ref) counterpart
 of the `sim.gs`-dispatched methods below, taking over `b`'s evolution entirely rather than
