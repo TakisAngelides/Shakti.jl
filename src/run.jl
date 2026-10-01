@@ -309,13 +309,19 @@ opening by sliding and creep at `b_min`, [`ImplicitGapScheme`](@ref) sliding at 
 local terms ([`freeze_on_capacity_cell_diffusion`](@ref)) and ignores the diffusion of `b`, which only
 moves gap volume between grounded cells: `C` is then conservative where `b` is a local minimum and
 generous where it is a local maximum.
+
+`dt` [s] is the interval the host applies `C` over, used for the gap-room term `(b - b_min)/dt`;
+it defaults to Shakti's own step. When Shakti subcycles within a longer host step (e.g. Yelmo
+advancing in `dt_min` chunks while Shakti steps hours), pass the host's step: the room in the gap
+is a stock, available once per host step, so spreading it over Shakti's short step would overstate
+`C` by the ratio of the two steps. The rate terms (opening by sliding, creep) are unaffected.
 """
-function freeze_on_capacity!(C, sim::Simulation)
+function freeze_on_capacity!(C, sim::Simulation; dt = sim.dt[])
     s, p = sim.state, sim.p
     diffusion = sim.ds isa WithDiffusion
     beta_at_bmin, creep_at_bmin = sim.gs isa FullyImplicitGapScheme ? (true, true) :
                                   sim.gs isa ImplicitGapScheme ? (false, true) : (false, false)
-    @parallel freeze_on_capacity_kernel!(C, s.mask, s.b, s.beta, s.lc, s.abs_ub, s.A_visc, s.N, p.n_minus_1_exp, sim.dt[],
+    @parallel freeze_on_capacity_kernel!(C, s.mask, s.b, s.beta, s.lc, s.abs_ub, s.A_visc, s.N, p.n_minus_1_exp, dt,
                                          p.b_min, p.br, p.lr, sim.cls, p.b_c, beta_at_bmin, creep_at_bmin, diffusion)
     return C
 end
