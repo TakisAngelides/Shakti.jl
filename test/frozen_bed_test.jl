@@ -202,6 +202,12 @@
             @test state.mask[2, 2] == GROUNDED             # a corner neighbour keeps its other drainage
         end
 
+        @testset "pin_penalty: a weightless GROUNDED row is pulled to overburden" begin
+            @test Shakti.pin_penalty(0.0) == 1e-9          # no faces, no creep: pinned
+            @test Shakti.pin_penalty(2.0) == 0.0           # any weight: untouched
+            @test Shakti.overburden_head(100.0, 9.81e6, 1000.0, 9.81) ≈ 1100.0
+        end
+
         @testset "gap_budget_terms: the budget where b is clamped" begin
             q = ModelParameters(b_max = 1.0, b_min = 1e-6)
             A, h = 5e-25, 100.0
