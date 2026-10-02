@@ -135,3 +135,43 @@ function update_frozen_mask!(s::State, p::ModelParameters, T_prime_b::AbstractMa
     n_thawed > 0 && thaw_cells!(s, p, thaw_mask)
     return (n_frozen = n_frozen, n_thawed = n_thawed, discarded_b = discarded_b)
 end
+
+
+"""
+$(TYPEDSIGNATURES)
+
+Reclassifies cells to a host model's current mask `new_mask` (codes `GROUNDED`, `OCEAN`, `LAND`,
+`OTHER_BASIN`; e.g. where the ice-sheet model has grounded ice it solves), keeping `FROZEN_BED`
+cells frozen where the host still has them grounded (the frozen bed is handled by
+[`update_frozen_mask!`](@ref) after this). Call it at each coupling step, before the hydrology step,
+so Shakti never solves where the host has no grounded ice and never ignores where it does.
+
+- A cell that stops being `GROUNDED` loses its water (`b = 0`, discarded, returned) and takes the
+  prescribed `pw` of its new category ([`apply_boundary_pw!`](@ref)).
+- A cell that becomes `GROUNDED` is seeded at `b = p.b_min`, as a thawing cell is; its `pw` (the
+  Dirichlet value of its old category) is the initial guess of the next head solve.
+
+Then refreshes the mask-dependent fields as [`freeze_cells!`](@ref) does. Returns
+`(n_on, n_off, discarded_b)`.
+"""
+function set_mask!(s::State, p::ModelParameters, new_mask::AbstractMatrix)
+    nm = similar(s.mask)
+    copyto!(nm, new_mask)
+    @. nm = ifelse((s.mask == FROZEN_BED) & (nm == GROUNDED), FROZEN_BED, nm)
+    on  = (nm .== GROUNDED) .& (s.mask .!= GROUNDED)
+    off = (s.mask .== GROUNDED) .& (nm .!= GROUNDED)
+    n_on, n_off = count(on), count(off)
+    discarded_b = zero(eltype(s.b))
+    (n_on == 0 && n_off == 0 && s.mask == nm) && return (n_on = 0, n_off = 0, discarded_b = discarded_b)
+    discarded_b = sum(s.b .* off)
+    s.mask .= nm
+    @. s.b = ifelse(on, p.b_min, ifelse(off, zero(eltype(s.b)), s.b))
+    apply_boundary_pw!(s, p)
+    refresh_b_dependents!(s, p)
+    compute_h!(s, p)
+    compute_K!(s, p)
+    compute_face_masks!(s)
+    apply_mask_to_sliding!(s)
+    compute_N!(s, p)
+    return (n_on = n_on, n_off = n_off, discarded_b = discarded_b)
+end

@@ -88,15 +88,7 @@ function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, sl::Abst
     # Harmless numerically (the Poisson solve overwrites h/pw on those rows
     # immediately) but keeps pw/N consistent from the start.
     # Vectorized rather than a scalar for-loop so that it is GPU compatible.
-    zero_zb = zero(F)
-    zero_pw = F(0.0)
-    @. s.pw = ifelse(s.mask == OCEAN, # if the cell is OCEAN then set the water pressure to be the hydrostatic pressure of ocean water that is present above the zb at that point
-                      p.p_atm - p.rho_sw * p.g * min(s.zb, zero_zb), # see linear_system.jl's OCEAN branch for the sign convention
-               ifelse((s.mask == LAND) | (s.mask == OTHER_BASIN),
-                      p.p_atm,
-               ifelse(s.mask == FROZEN_BED,
-                      zero_pw, # exactly 0, not p_atm: a frozen bed has no water at all, so pw=0 regardless of what p_atm happens to be (unlike LAND/OTHER_BASIN's Dirichlet convention) -- gives N=po via compute_N!, see FROZEN_BED's own docstring in mask.jl
-                      s.pw)))
+    apply_boundary_pw!(s, p)
     compute_dpwdx!(s, g) # water pressure gradient in x and y, feeds compute_sensible!'s sensible-heat term (via compute_mdot! below)
     compute_dpwdy!(s, g)
     compute_N!(s, p) # Effective pressure
@@ -131,4 +123,26 @@ function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, sl::Abst
     compute_mdot!(s, p, mt) # melt rate
     compute_K!(s, p) # transmissivity
 
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Sets `s.pw` to its prescribed value in every non-`GROUNDED` cell, leaving `GROUNDED` cells alone:
+`OCEAN` the hydrostatic pressure of the ocean water above `zb`, `LAND`/`OTHER_BASIN` `p.p_atm`, and
+`FROZEN_BED` exactly 0 (no water at all, so `N = po`; see `FROZEN_BED`'s docstring in mask.jl).
+Used by [`set_initial_conditions!`](@ref) and [`set_mask!`](@ref). Vectorized, so GPU compatible.
+"""
+function apply_boundary_pw!(s::State, p::ModelParameters)
+    F = eltype(s.pw)
+    zero_zb = zero(F)
+    zero_pw = F(0.0)
+    @. s.pw = ifelse(s.mask == OCEAN, # hydrostatic pressure of the ocean water above zb
+                      p.p_atm - p.rho_sw * p.g * min(s.zb, zero_zb), # see linear_system.jl's OCEAN branch for the sign convention
+               ifelse((s.mask == LAND) | (s.mask == OTHER_BASIN),
+                      p.p_atm,
+               ifelse(s.mask == FROZEN_BED,
+                      zero_pw,
+                      s.pw)))
+    return s
 end

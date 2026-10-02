@@ -166,4 +166,25 @@
             @test all(==(0.0), Array(state.b)[2:4, 3:5])
         end
 
-    end
+    
+        @testset "set_mask!: follow a host mask" begin
+            mask = base_mask()
+            state = State(grid)
+            set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
+            state.mask[4, 4] = FROZEN_BED                 # frozen cell the host still has grounded
+            new = copy(base_mask())
+            new[3, 3] = OTHER_BASIN                       # host: no longer grounded (e.g. too thin to solve)
+            new[end, 3] = GROUNDED                        # host: newly grounded (was OCEAN)
+            r = set_mask!(state, p, new)
+            @test r.n_off == 1 && r.n_on == 1
+            @test r.discarded_b ≈ b[3, 3]
+            @test state.mask[3, 3] == OTHER_BASIN && state.b[3, 3] == 0
+            @test state.pw[3, 3] == p.p_atm
+            @test state.mask[end, 3] == GROUNDED && state.b[end, 3] == p.b_min
+            @test state.mask[4, 4] == FROZEN_BED          # stays frozen
+            @test state.valid_x[3, 3] == 0.0 && state.valid_x[4, 3] == 0.0   # faces of the now inert cell
+            @test state.pw[end, 3] ≈ p.p_atm - p.rho_sw * p.g * min(state.zb[end, 3], 0.0)  # old OCEAN pw as the initial guess
+            @test set_mask!(state, p, new).n_on == 0       # idempotent
+        end
+
+end

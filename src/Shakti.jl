@@ -217,6 +217,7 @@ export set_initial_conditions!
 
 # frozen_bed.jl
 export freeze_cells!, thaw_cells!, update_frozen_mask!
+export set_mask!, apply_boundary_pw!
 
 # checkpoint.jl
 export save_checkpoint, load_checkpoint!
