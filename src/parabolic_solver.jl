@@ -150,6 +150,7 @@ function Parabolic_loop!(pps::ParabolicPicardSolver, state::State, grid::Grid, p
 
     pps.converged = false
     pps.last_iter = 0
+    refresh_outflow_faces_per_step!(state, p, kfs) # elliptic_solver.jl
 
     @inbounds for iter in 1:pps.iters
 

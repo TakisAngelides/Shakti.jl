@@ -337,6 +337,7 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
     ps.converged = false
     ps.last_iter = 0
     reset_relaxation!(ps.hr) # no-op except for AndersonHeadRelaxation, whose history is only valid within one timestep's fixed-point map
+    refresh_outflow_faces_per_step!(state, p, kfs)
 
     @inbounds for iter in 1:ps.iters # start the Picard loop
 
@@ -370,6 +371,16 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
 
 end
 
+# outflow_faces_per_step: decide the closed LAND/OCEAN faces once, from the head at the start of the step,
+# and keep them for every iteration (refresh_head_dependents! skips them), so faces cannot switch between iterations.
+# compute_face_flux! then rebuilds K_x/K_y with the new faces, which the first linear solve of the step assembles.
+function refresh_outflow_faces_per_step!(s::State, p::ModelParameters, kfs::AbstractKFaceScheme)
+    p.outflow_faces_per_step && (p.outflow_only_land || p.outflow_only_ocean) || return nothing
+    compute_face_masks!(s, p.outflow_only_land, p.outflow_only_ocean)
+    compute_face_flux!(s, p, kfs)
+    return nothing
+end
+
 """
 $(TYPEDSIGNATURES)
 
@@ -383,7 +394,7 @@ https://gmd.copernicus.org/articles/11/2955/2018/.
 """
 function refresh_head_dependents!(s::State, g::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion())
 
-    (p.outflow_only_land || p.outflow_only_ocean) && compute_face_masks!(s, p.outflow_only_land, p.outflow_only_ocean) # close LAND/OCEAN faces that would feed the ice, from the new head
+    (p.outflow_only_land || p.outflow_only_ocean) && !p.outflow_faces_per_step && compute_face_masks!(s, p.outflow_only_land, p.outflow_only_ocean) # close LAND/OCEAN faces that would feed the ice, from the new head
     compute_dhdxy!(s, g) # updates gradient of h in both x and y directions in one kernel to reduce the number of kernels
 
     compute_pw!(s, p) # update water pressure
