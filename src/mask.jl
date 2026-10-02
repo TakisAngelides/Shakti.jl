@@ -124,6 +124,16 @@ hydrology isn't solved, so any gradient computed across that face would spurious
 frozen, non-evolving neighbour value rather than a real head/pressure difference. `LAND` and
 `OCEAN` faces are left valid, since those are genuine (Dirichlet) drainage boundaries where a real flux
 is physically meaningful.
+
+With `land = true` (`ocean = true`), a `LAND` (`OCEAN`) face is additionally closed where the boundary's
+fixed head lies above the neighbouring grounded cell's, so the boundary drains the ice but never feeds
+it. Both are on by default (`ModelParameters` `outflow_only_land`/`outflow_only_ocean`); set
+`outflow_only_ocean = false` to let ocean water into the bed (e.g. tidal intrusion).
+
+The open/closed state is re-decided from the current head on every Picard iteration (see
+`refresh_head_dependents!`). On the 8-dataset check this cost up to ~2x wall time (Thwaites 2 km,
+pan-Antarctica 16 km), likely from faces switching between iterations. If that cost matters, freeze the
+state once per time step (decide from the head at the start of the step, keep it for all iterations).
 """
 function compute_face_masks!(s::State, land::Bool = false, ocean::Bool = false)
     @parallel compute_valid_x_kernel!(s.valid_x, s.mask, s.h, land, ocean)

@@ -147,8 +147,8 @@ function ModelParameters(;
     mdot_includes_qT = true,
     limit_freeze_on = true,
     clamp_budget = 0,
-    outflow_only_land = false,
-    outflow_only_ocean = false)
+    outflow_only_land = true,
+    outflow_only_ocean = true)
 
     T_hysteresis >= 0 || throw(ArgumentError("T_hysteresis must be >= 0 (got $T_hysteresis): the thaw threshold T_freeze + T_hysteresis may not lie below the freeze threshold"))
 
