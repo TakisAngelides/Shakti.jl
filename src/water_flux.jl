@@ -230,14 +230,14 @@ compute_cell_K!(s::State, p::ModelParameters) = (@parallel compute_K_kernel!(s.K
 
 # Face transmissivity from the face's own (current) Re_x/Re_y -- the lagged counterpart of
 # compute_face_flux_kernel! below, for callers that set Re_x/Re_y themselves (compute_K!).
-@parallel_indices (ix, iy) function compute_face_K_kernel!(K_x, K_y, b, mask, Re_x, Re_y, c0, omega, kfs::AbstractKFaceScheme)
+@parallel_indices (ix, iy) function compute_face_K_kernel!(K_x, K_y, b, mask, Re_x, Re_y, valid_x, valid_y, c0, omega, kfs::AbstractKFaceScheme)
     nx, ny = size(b, 1), size(b, 2)
     if ix <= size(K_x, 1) && iy <= size(K_x, 2)
-        K0 = (ix > 1 && ix <= nx) ? face_conductance(kfs, c0 * b[ix-1, iy]^3, mask[ix-1, iy], c0 * b[ix, iy]^3, mask[ix, iy]) : zero(c0)
+        K0 = (ix > 1 && ix <= nx) ? face_conductance(kfs, c0 * b[ix-1, iy]^3, mask[ix-1, iy], c0 * b[ix, iy]^3, mask[ix, iy]) * valid_x[ix, iy] : zero(c0)
         K_x[ix, iy] = K0 / (1 + omega * Re_x[ix, iy])
     end
     if ix <= size(K_y, 1) && iy <= size(K_y, 2)
-        K0 = (iy > 1 && iy <= ny) ? face_conductance(kfs, c0 * b[ix, iy-1]^3, mask[ix, iy-1], c0 * b[ix, iy]^3, mask[ix, iy]) : zero(c0)
+        K0 = (iy > 1 && iy <= ny) ? face_conductance(kfs, c0 * b[ix, iy-1]^3, mask[ix, iy-1], c0 * b[ix, iy]^3, mask[ix, iy]) * valid_y[ix, iy] : zero(c0)
         K_y[ix, iy] = K0 / (1 + omega * Re_y[ix, iy])
     end
     return
@@ -253,7 +253,7 @@ and the face transmissivities `s.K_x`/`s.K_y` the linear system assembles from t
 """
 function compute_K!(s::State, p::ModelParameters, kfs::AbstractKFaceScheme = Arithmetic())
     compute_cell_K!(s, p)
-    @parallel compute_face_K_kernel!(s.K_x, s.K_y, s.b, s.mask, s.Re_x, s.Re_y, p.g / (12 * p.nu), p.omega, kfs)
+    @parallel compute_face_K_kernel!(s.K_x, s.K_y, s.b, s.mask, s.Re_x, s.Re_y, s.valid_x, s.valid_y, p.g / (12 * p.nu), p.omega, kfs)
     return s
 end
 
@@ -266,10 +266,10 @@ end
 # grounded cell's own value at an OCEAN/LAND face, 0 at a face touching OTHER_BASIN/FROZEN_BED or
 # the domain edge); Re from the same lag-free quadratic as compute_q_and_Re_xy_kernel!, with
 # D = K0*|dh|/nu; then K_face = K0/(1 + omega*Re) and q = -K_face*dh (so |q|/nu == Re exactly).
-@parallel_indices (ix, iy) function compute_face_flux_kernel!(K_x, K_y, q_x, q_y, Re_x, Re_y, b, mask, dhdx, dhdy, c0, nu, omega, kfs::AbstractKFaceScheme)
+@parallel_indices (ix, iy) function compute_face_flux_kernel!(K_x, K_y, q_x, q_y, Re_x, Re_y, b, mask, dhdx, dhdy, valid_x, valid_y, c0, nu, omega, kfs::AbstractKFaceScheme)
     nx, ny = size(b, 1), size(b, 2)
     if ix <= size(K_x, 1) && iy <= size(K_x, 2)
-        K0 = (ix > 1 && ix <= nx) ? face_conductance(kfs, c0 * b[ix-1, iy]^3, mask[ix-1, iy], c0 * b[ix, iy]^3, mask[ix, iy]) : zero(c0)
+        K0 = (ix > 1 && ix <= nx) ? face_conductance(kfs, c0 * b[ix-1, iy]^3, mask[ix-1, iy], c0 * b[ix, iy]^3, mask[ix, iy]) * valid_x[ix, iy] : zero(c0)
         D = K0 * abs(dhdx[ix, iy]) / nu
         Re = 2 * D / (1 + sqrt(1 + 4 * omega * D))
         Kf = K0 / (1 + omega * Re)
@@ -278,7 +278,7 @@ end
         q_x[ix, iy] = -Kf * dhdx[ix, iy]
     end
     if ix <= size(K_y, 1) && iy <= size(K_y, 2)
-        K0 = (iy > 1 && iy <= ny) ? face_conductance(kfs, c0 * b[ix, iy-1]^3, mask[ix, iy-1], c0 * b[ix, iy]^3, mask[ix, iy]) : zero(c0)
+        K0 = (iy > 1 && iy <= ny) ? face_conductance(kfs, c0 * b[ix, iy-1]^3, mask[ix, iy-1], c0 * b[ix, iy]^3, mask[ix, iy]) * valid_y[ix, iy] : zero(c0)
         D = K0 * abs(dhdy[ix, iy]) / nu
         Re = 2 * D / (1 + sqrt(1 + 4 * omega * D))
         Kf = K0 / (1 + omega * Re)
@@ -307,4 +307,4 @@ Dirichlet cell's placeholder `b = 0` would cut the outlet flux by a factor of 8)
 `Re = 2*D / (1 + sqrt(1 + 4*omega*D))` (see [`compute_q_and_Re_x!`](@ref)).
 """
 compute_face_flux!(s::State, p::ModelParameters, kfs::AbstractKFaceScheme = Arithmetic()) =
-    (@parallel compute_face_flux_kernel!(s.K_x, s.K_y, s.q_x, s.q_y, s.Re_x, s.Re_y, s.b, s.mask, s.dhdx, s.dhdy, p.g / (12 * p.nu), p.nu, p.omega, kfs); s)
+    (@parallel compute_face_flux_kernel!(s.K_x, s.K_y, s.q_x, s.q_y, s.Re_x, s.Re_y, s.b, s.mask, s.dhdx, s.dhdy, s.valid_x, s.valid_y, p.g / (12 * p.nu), p.nu, p.omega, kfs); s)

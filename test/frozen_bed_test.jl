@@ -187,4 +187,52 @@
             @test set_mask!(state, p, new).n_on == 0       # idempotent
         end
 
+        @testset "freeze_isolated!: a GROUNDED cell cut off by frozen neighbours" begin
+            mask = base_mask()
+            state = State(grid)
+            set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
+            T_prime_b = zeros(nx, ny)
+            for (i, j) in ((2, 3), (4, 3), (3, 2), (3, 4))
+                T_prime_b[i, j] = -5.0                     # freeze the four neighbours of (3, 3)
+            end
+            r = update_frozen_mask!(state, p, T_prime_b)
+            @test r.n_frozen == 4 && r.n_isolated == 1
+            @test state.mask[3, 3] == FROZEN_BED && state.b[3, 3] == 0
+            @test freeze_isolated!(state, p) == 0          # nothing left to isolate
+            @test state.mask[2, 2] == GROUNDED             # a corner neighbour keeps its other drainage
+        end
+
+        @testset "gap_budget_terms: the budget where b is clamped" begin
+            q = ModelParameters(b_max = 1.0, b_min = 1e-6)
+            A, h = 5e-25, 100.0
+            args(b, mdot, N) = (b, q.b_min, q.b_max, mdot, 0.0, 0.0, A, N, b, h, q.rho_w, q.rho_i, q.g, q.n, q.n_minus_1_exp)
+            legacy(b, mdot, N) = Shakti.gap_budget_terms(0, args(b, mdot, N)...)
+            # at b_max with opening winning: held under 1 and 2, the melt enters as water
+            src0, gd0 = legacy(1.0, 1e-3, 1e5)
+            @test gd0 > 0 && src0 ≈ 1e-3 * (1 / q.rho_w - 1 / q.rho_i) + A * 1e5^3 * 1.0 + gd0 * h
+            @test Shakti.gap_budget_terms(1, args(1.0, 1e-3, 1e5)...) == (1e-3 / q.rho_w, 0.0)
+            @test Shakti.gap_budget_terms(2, args(1.0, 1e-3, 1e5)...) == (1e-3 / q.rho_w, 0.0)
+            # below the cap nothing changes
+            @test Shakti.gap_budget_terms(1, args(0.5, 1e-3, 1e5)...) == legacy(0.5, 1e-3, 1e5)
+            # at b_min with closure winning: held only under 2
+            @test Shakti.gap_budget_terms(1, args(1e-6, 0.0, 1e6)...) == legacy(1e-6, 0.0, 1e6)
+            @test Shakti.gap_budget_terms(2, args(1e-6, 0.0, 1e6)...) == (0.0, 0.0)
+        end
+
+        @testset "outflow_only_land/ocean: boundary faces do not feed the ice" begin
+            mask = base_mask()                             # LAND at i = 1, OCEAN at i = nx
+            state = State(grid)
+            set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
+            state.h[1, 3] = state.h[2, 3] + 50.0           # land head above its grounded neighbour: inflow face
+            state.h[1, 4] = state.h[2, 4] - 50.0           # land head below: outflow face
+            compute_face_masks!(state)                     # legacy: both open
+            @test state.valid_x[2, 3] == 1 && state.valid_x[2, 4] == 1
+            compute_face_masks!(state, false, true)       # ocean one-way only: the land faces stay open
+            @test state.valid_x[2, 3] == 1
+            compute_face_masks!(state, true, false)
+            @test state.valid_x[2, 3] == 0                 # closed: would carry land water into the ice
+            @test state.valid_x[2, 4] == 1                 # open: the ice drains onto land
+            @test state.valid_x[3, 3] == 1                 # GROUNDED-GROUNDED faces untouched
+        end
+
 end

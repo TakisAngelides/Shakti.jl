@@ -216,7 +216,7 @@ export compute_beta!, compute_lc!, compute_b_x!, compute_b_y!, compute_b!
 export set_initial_conditions!
 
 # frozen_bed.jl
-export freeze_cells!, thaw_cells!, update_frozen_mask!
+export freeze_cells!, thaw_cells!, update_frozen_mask!, freeze_isolated!
 export set_mask!, apply_boundary_pw!
 
 # checkpoint.jl

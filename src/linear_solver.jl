@@ -296,6 +296,23 @@ function CholeskyDirectSolver(g::Grid{F}; ordering::Symbol = :amd) where F
 
 end
 
+# Gap-evolution terms of a GROUNDED cell's head-equation source, and their Newton diagonal `gd`. The
+# steady head equation folds the gap evolution db/dt = mdot/rho_i + beta*|u_b| - creep into the water
+# budget, so the source is mdot*(1/rho_w - 1/rho_i) - beta*|u_b| + creep (+ gd*h, the creep's Newton
+# term, whose diagonal is gd). Where `b` sits at a bound and the gap would move past it, `compute_b!`
+# clamps it, so db/dt = 0 there. `clamp_budget` (ModelParameters) makes the budget agree: 1 at b_max, 2
+# at b_max and b_min. A held cell's source is then the melt as water, mdot/rho_w, with no gap terms;
+# otherwise the water the clamp keeps out of the gap is lost (at b_max) or created (at b_min). 0 keeps
+# the unclamped (legacy) terms.
+@inline function gap_budget_terms(clamp_budget, b, b_min, b_max, mdot, beta, abs_ub, A, N, lc, h, rho_w, rho_i, ggrav, n, n_minus_1)
+    An1  = A * pow(abs(N), n_minus_1)
+    rate = mdot / rho_i + beta * abs_ub - An1 * N * lc   # db/dt of the unclamped gap evolution
+    held = (clamp_budget >= 1 && b >= b_max && rate > 0) || (clamp_budget >= 2 && b <= b_min && rate < 0)
+    held && return mdot / rho_w, zero(b)
+    gd = n * rho_w * ggrav * An1 * lc
+    return mdot * (1 / rho_w - 1 / rho_i) - beta * abs_ub + An1 * N * lc + gd * h, gd
+end
+
 """
 $(TYPEDSIGNATURES)
 
@@ -331,6 +348,7 @@ convert `ds` to `Val(ds isa WithDiffusion)` -- an `isbits`, zero-size flag carry
 the one bit `@parallel` and this dispatch actually need -- right before the kernel call, rather
 than threading the heavy `ds` itself all the way into the hot loop.
 """
+
 @inline diffusion_source(::Val{false}, D_x, D_y, mask, b, ix, iy, nx, ny, dx2, dy2) = zero(eltype(b))
 
 @inline function diffusion_source(::Val{true}, D_x, D_y, mask, b, ix, iy, nx, ny, dx2, dy2)
@@ -355,7 +373,7 @@ end
 # range from the elementwise max size over ALL array arguments, and the flat
 # length-(nx*ny) nzval/rhs vectors would make that (nx*ny, ny) -- nx*ny^2
 # iterations, almost all failing the bounds check (measured 19x slower at 512x512).
-@parallel_indices (ix, iy) function update_SALS_elliptic_kernel!(mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, zb, h, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, b, D_x, D_y, diffusion_on)
+@parallel_indices (ix, iy) function update_SALS_elliptic_kernel!(mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, zb, h, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, b, b_min, b_max, clamp_budget, D_x, D_y, diffusion_on)
 
     nx, ny = size(mask, 1), size(mask, 2)
 
@@ -400,7 +418,8 @@ end
             # the standard Glen's-law n=3, hitting the fast power-by-squaring path.
             # `lc` (not `b` directly) is the ice-creep length scale -- lagged like `beta`,
             # see AbstractCreepLengthScheme (gap_height.jl); equals `b` under StandardCreep.
-            aP = (aE + aW + aN + aS) + n * rho_w * ggrav * A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * lc[ix, iy]
+            gs, gd = gap_budget_terms(clamp_budget, b[ix, iy], b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], N[ix, iy], lc[ix, iy], h[ix, iy], rho_w, rho_i, ggrav, n, n_minus_1)
+            aP = (aE + aW + aN + aS) + gd
 
             # Update the non-zero values of the M sparse matrix. A GROUNDED
             # neighbour couples symmetrically (handled below in the else
@@ -431,10 +450,7 @@ end
             end
 
             # Update the rhs vector
-            rhs[row] = mdot[ix, iy] * (1 / rho_w - 1 / rho_i) -
-                        beta[ix, iy] * abs_ub[ix, iy] +
-                        A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy] * lc[ix, iy] +
-                        A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * (n * rho_w * ggrav * h[ix, iy]) * lc[ix, iy] + # term from Newton linearization of the creep closing term
+            rhs[row] = gs + # gap-evolution terms and melt, see gap_budget_terms
                         ieb[ix, iy] +
                         diffusion_source(diffusion_on, D_x, D_y, mask, b, ix, iy, nx, ny, dx2, dy2) + # -div(D*grad(b)) (SUHMO Eq. 11), zero under NoDiffusion
                         dirichlet_rhs
@@ -465,7 +481,7 @@ function update_SALS_elliptic!(sals::SparseAssembledLinearSystem, s::State, g::G
     fill!(nzval, 0)
     fill!(rhs, 0)
 
-    @parallel (1:g.nx, 1:g.ny) update_SALS_elliptic_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.zb, s.h, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, s.b, s.D_x, s.D_y, Val(ds isa WithDiffusion))
+    @parallel (1:g.nx, 1:g.ny) update_SALS_elliptic_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.zb, s.h, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, s.b, p.b_min, p.b_max, p.clamp_budget, s.D_x, s.D_y, Val(ds isa WithDiffusion))
 
     return
 
@@ -498,7 +514,7 @@ end
 # Newton-corrected, same as the elliptic kernel) -- one full Parabolic_loop!
 # call still drives all of them to self-consistency across iterations, same
 # as Picard_loop! does.
-@parallel_indices (ix, iy) function update_SALS_parabolic_kernel!(mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, zb, h, h_old, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, e_v, dt, b, D_x, D_y, diffusion_on)
+@parallel_indices (ix, iy) function update_SALS_parabolic_kernel!(mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, zb, h, h_old, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, e_v, dt, b, b_min, b_max, clamp_budget, D_x, D_y, diffusion_on)
 
     nx, ny = size(mask, 1), size(mask, 2)
 
@@ -526,7 +542,8 @@ end
             aN = (iy < ny) ? K_y[ix, iy+1] / dy2 : zero(dy2)
             aS = (iy > 1)  ? K_y[ix, iy] / dy2 : zero(dy2)
 
-            aP = (aE + aW + aN + aS) + e_v / dt + n * rho_w * ggrav * A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * lc[ix, iy] # diffusion + backward-Euler englacial storage reaction term + Newton-linearized creep closure (same term as update_SALS_elliptic_kernel!'s aP)
+            gs, gd = gap_budget_terms(clamp_budget, b[ix, iy], b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], N[ix, iy], lc[ix, iy], h[ix, iy], rho_w, rho_i, ggrav, n, n_minus_1)
+            aP = (aE + aW + aN + aS) + e_v / dt + gd # diffusion + backward-Euler englacial storage reaction term + Newton-linearized creep closure (same term as update_SALS_elliptic_kernel!'s aP)
 
             nzval[idxP[ix, iy]] += aP
             dirichlet_rhs = zero(eltype(rhs))
@@ -551,10 +568,7 @@ end
             # creep term's own N-dependence (linearized at `h`, same as
             # update_SALS_elliptic_kernel!'s rhs), and the e_v/dt*h_old storage term (h_old, NOT
             # h -- see this kernel's own docstring note above)
-            rhs[row] = mdot[ix, iy] * (1 / rho_w - 1 / rho_i) -
-                        beta[ix, iy] * abs_ub[ix, iy] +
-                        A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy] * lc[ix, iy] +
-                        A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * (n * rho_w * ggrav * h[ix, iy]) * lc[ix, iy] + # term from Newton linearization of the creep closing term
+            rhs[row] = gs + # gap-evolution terms and melt, see gap_budget_terms
                         ieb[ix, iy] +
                         diffusion_source(diffusion_on, D_x, D_y, mask, b, ix, iy, nx, ny, dx2, dy2) + # -div(D*grad(b)) (SUHMO Eq. 11), zero under NoDiffusion
                         (e_v / dt) * h_old[ix, iy] +
@@ -589,7 +603,7 @@ function update_SALS_parabolic!(sals::SparseAssembledLinearSystem, s::State, g::
     fill!(nzval, 0)
     fill!(rhs, 0)
 
-    @parallel (1:g.nx, 1:g.ny) update_SALS_parabolic_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.zb, s.h, h_old, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, p.e_v, dt, s.b, s.D_x, s.D_y, Val(ds isa WithDiffusion))
+    @parallel (1:g.nx, 1:g.ny) update_SALS_parabolic_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.zb, s.h, h_old, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, p.e_v, dt, s.b, p.b_min, p.b_max, p.clamp_budget, s.D_x, s.D_y, Val(ds isa WithDiffusion))
 
     return
 
@@ -601,7 +615,7 @@ end
 # stored as the raw positive face conductances -- stencil_matvec_kernel!
 # below applies the minus sign when it uses them, matching the sign
 # convention update_SALS_elliptic_kernel! bakes directly into nzval.
-@parallel_indices (ix, iy) function update_MFLS_elliptic_kernel!(mask, aP, aE, aW, aN, aS, rhs, zb, h, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, b, D_x, D_y, diffusion_on)
+@parallel_indices (ix, iy) function update_MFLS_elliptic_kernel!(mask, aP, aE, aW, aN, aS, rhs, zb, h, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, b, b_min, b_max, clamp_budget, D_x, D_y, diffusion_on)
 
     nx, ny = size(mask, 1), size(mask, 2)
 
@@ -629,7 +643,8 @@ end
             aN_ij = (iy < ny) ? K_y[ix, iy+1] / dy2 : zero(dy2)
             aS_ij = (iy > 1)  ? K_y[ix, iy] / dy2 : zero(dy2)
 
-            aP[ix, iy] = (aE_ij + aW_ij + aN_ij + aS_ij) + n * rho_w * ggrav * A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * lc[ix, iy]
+            gs, gd = gap_budget_terms(clamp_budget, b[ix, iy], b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], N[ix, iy], lc[ix, iy], h[ix, iy], rho_w, rho_i, ggrav, n, n_minus_1)
+            aP[ix, iy] = (aE_ij + aW_ij + aN_ij + aS_ij) + gd
 
             # As in update_SALS_elliptic_kernel!: an OCEAN/LAND neighbour's known head
             # is folded into rhs instead of being wired up as a matrix
@@ -653,10 +668,7 @@ end
                 (mS == OCEAN || mS == LAND) ? (dirichlet_rhs += aS_ij * dirichlet_head(mS, zb[ix, iy-1], p_atm, rho_w, rho_sw, ggrav)) : (aS[ix, iy] = aS_ij)
             end
 
-            rhs[row] = mdot[ix, iy] * (1 / rho_w - 1 / rho_i) -
-                        beta[ix, iy] * abs_ub[ix, iy] +
-                        A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy] * lc[ix, iy] +
-                        A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * (n * rho_w * ggrav * h[ix, iy]) * lc[ix, iy] +
+            rhs[row] = gs + # gap-evolution terms and melt, see gap_budget_terms
                         ieb[ix, iy] +
                         diffusion_source(diffusion_on, D_x, D_y, mask, b, ix, iy, nx, ny, dx2, dy2) + # -div(D*grad(b)) (SUHMO Eq. 11), zero under NoDiffusion
                         dirichlet_rhs
@@ -683,7 +695,7 @@ function update_MFLS_elliptic!(mfls::MatrixFreeLinearSystem, s::State, g::Grid, 
     fill!(mfls.aS, 0)
     fill!(mfls.rhs, 0)
 
-    @parallel (1:g.nx, 1:g.ny) update_MFLS_elliptic_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.zb, s.h, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, s.b, s.D_x, s.D_y, Val(ds isa WithDiffusion))
+    @parallel (1:g.nx, 1:g.ny) update_MFLS_elliptic_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.zb, s.h, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, s.b, p.b_min, p.b_max, p.clamp_budget, s.D_x, s.D_y, Val(ds isa WithDiffusion))
 
     return
 
@@ -695,7 +707,7 @@ end
 # for the storage-term/Newton-linearization reasoning, and for why `h_old`
 # (fixed for the whole real timestep) must be a separate argument from `h`
 # (the current Picard sub-iterate).
-@parallel_indices (ix, iy) function update_MFLS_parabolic_kernel!(mask, aP, aE, aW, aN, aS, rhs, zb, h, h_old, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, e_v, dt, b, D_x, D_y, diffusion_on)
+@parallel_indices (ix, iy) function update_MFLS_parabolic_kernel!(mask, aP, aE, aW, aN, aS, rhs, zb, h, h_old, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, e_v, dt, b, b_min, b_max, clamp_budget, D_x, D_y, diffusion_on)
 
     nx, ny = size(mask, 1), size(mask, 2)
 
@@ -723,7 +735,8 @@ end
             aN_ij = (iy < ny) ? K_y[ix, iy+1] / dy2 : zero(dy2)
             aS_ij = (iy > 1)  ? K_y[ix, iy] / dy2 : zero(dy2)
 
-            aP[ix, iy] = (aE_ij + aW_ij + aN_ij + aS_ij) + e_v / dt + n * rho_w * ggrav * A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * lc[ix, iy] # diffusion + backward-Euler englacial storage reaction term + Newton-linearized creep closure (same term as update_MFLS_elliptic_kernel!'s aP)
+            gs, gd = gap_budget_terms(clamp_budget, b[ix, iy], b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], N[ix, iy], lc[ix, iy], h[ix, iy], rho_w, rho_i, ggrav, n, n_minus_1)
+            aP[ix, iy] = (aE_ij + aW_ij + aN_ij + aS_ij) + e_v / dt + gd # diffusion + backward-Euler englacial storage reaction term + Newton-linearized creep closure (same term as update_MFLS_elliptic_kernel!'s aP)
 
             dirichlet_rhs = zero(eltype(rhs))
             if ix < nx
@@ -743,10 +756,7 @@ end
                 (mS == OCEAN || mS == LAND) ? (dirichlet_rhs += aS_ij * dirichlet_head(mS, zb[ix, iy-1], p_atm, rho_w, rho_sw, ggrav)) : (aS[ix, iy] = aS_ij)
             end
 
-            rhs[row] = mdot[ix, iy] * (1 / rho_w - 1 / rho_i) -
-                        beta[ix, iy] * abs_ub[ix, iy] +
-                        A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy] * lc[ix, iy] +
-                        A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * (n * rho_w * ggrav * h[ix, iy]) * lc[ix, iy] + # term from Newton linearization of the creep closing term
+            rhs[row] = gs + # gap-evolution terms and melt, see gap_budget_terms
                         ieb[ix, iy] +
                         diffusion_source(diffusion_on, D_x, D_y, mask, b, ix, iy, nx, ny, dx2, dy2) + # -div(D*grad(b)) (SUHMO Eq. 11), zero under NoDiffusion
                         (e_v / dt) * h_old[ix, iy] +
@@ -774,7 +784,7 @@ function update_MFLS_parabolic!(mfls::MatrixFreeLinearSystem, s::State, g::Grid,
     fill!(mfls.aS, 0)
     fill!(mfls.rhs, 0)
 
-    @parallel (1:g.nx, 1:g.ny) update_MFLS_parabolic_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.zb, s.h, h_old, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, p.e_v, dt, s.b, s.D_x, s.D_y, Val(ds isa WithDiffusion))
+    @parallel (1:g.nx, 1:g.ny) update_MFLS_parabolic_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.zb, s.h, h_old, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, p.e_v, dt, s.b, p.b_min, p.b_max, p.clamp_budget, s.D_x, s.D_y, Val(ds isa WithDiffusion))
 
     return
 

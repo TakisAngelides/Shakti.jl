@@ -74,11 +74,21 @@ const FROZEN_BED = 4.0
 # at 1.0: compute_dhdx! etc. never write those entries anyway (their update
 # ranges are 2:end-1), so they stay at their initialized value of zero.
 
-@parallel_indices (ix, iy) function compute_valid_x_kernel!(valid_x, mask)
+# A face between a GROUNDED cell and a LAND/OCEAN cell whose fixed head lies above the grounded cell's
+# carries water into the ice from the boundary. A fixed head is an unlimited reservoir, so a margin cell
+# below higher ice-free land (head = bed elevation) would draw an unlimited supply that does not exist.
+# With `land` (`ocean`) such LAND (OCEAN) faces are closed: the boundary takes water from the ice but
+# does not feed it. OCEAN faces can stay two-way where ocean water may enter the bed (tidal intrusion).
+@inline closes_inflow(m, land, ocean) = (land && m == LAND) || (ocean && m == OCEAN)
+@inline inflow_face(m1, m2, h1, h2, land, ocean) = (m1 == GROUNDED && closes_inflow(m2, land, ocean) && h2 > h1) ||
+                                                   (m2 == GROUNDED && closes_inflow(m1, land, ocean) && h1 > h2)
+
+@parallel_indices (ix, iy) function compute_valid_x_kernel!(valid_x, mask, h, land, ocean)
     if ix <= size(valid_x, 1) && iy <= size(valid_x, 2)
         if ix > 1 && ix < size(valid_x, 1)
             m1, m2 = mask[ix-1, iy], mask[ix, iy]
-            valid = (m1 != OTHER_BASIN) && (m1 != FROZEN_BED) && (m2 != OTHER_BASIN) && (m2 != FROZEN_BED) # neither cell touching the face may be OTHER_BASIN or FROZEN_BED
+            valid = (m1 != OTHER_BASIN) && (m1 != FROZEN_BED) && (m2 != OTHER_BASIN) && (m2 != FROZEN_BED) && # neither cell touching the face may be OTHER_BASIN or FROZEN_BED
+                    !inflow_face(m1, m2, h[ix-1, iy], h[ix, iy], land, ocean)
             valid_x[ix, iy] = valid ? one(eltype(valid_x)) : zero(eltype(valid_x))
         else
             valid_x[ix, iy] = one(eltype(valid_x))
@@ -87,11 +97,12 @@ const FROZEN_BED = 4.0
     return
 end
 
-@parallel_indices (ix, iy) function compute_valid_y_kernel!(valid_y, mask)
+@parallel_indices (ix, iy) function compute_valid_y_kernel!(valid_y, mask, h, land, ocean)
     if ix <= size(valid_y, 1) && iy <= size(valid_y, 2)
         if iy > 1 && iy < size(valid_y, 2)
             m1, m2 = mask[ix, iy-1], mask[ix, iy]
-            valid = (m1 != OTHER_BASIN) && (m1 != FROZEN_BED) && (m2 != OTHER_BASIN) && (m2 != FROZEN_BED) # neither cell touching the face may be OTHER_BASIN or FROZEN_BED
+            valid = (m1 != OTHER_BASIN) && (m1 != FROZEN_BED) && (m2 != OTHER_BASIN) && (m2 != FROZEN_BED) && # neither cell touching the face may be OTHER_BASIN or FROZEN_BED
+                    !inflow_face(m1, m2, h[ix, iy-1], h[ix, iy], land, ocean)
             valid_y[ix, iy] = valid ? one(eltype(valid_y)) : zero(eltype(valid_y))
         else
             valid_y[ix, iy] = one(eltype(valid_y))
@@ -113,10 +124,20 @@ hydrology isn't solved, so any gradient computed across that face would spurious
 frozen, non-evolving neighbour value rather than a real head/pressure difference. `LAND` and
 `OCEAN` faces are left valid, since those are genuine (Dirichlet) drainage boundaries where a real flux
 is physically meaningful.
+
+With `land = true` (`ocean = true`), a `LAND` (`OCEAN`) face is additionally closed where the boundary's
+fixed head lies above the neighbouring grounded cell's, so the boundary drains the ice but never feeds
+it. Both are on by default (`ModelParameters` `outflow_only_land`/`outflow_only_ocean`); set
+`outflow_only_ocean = false` to let ocean water into the bed (e.g. tidal intrusion).
+
+The open/closed state is re-decided from the current head on every Picard iteration (see
+`refresh_head_dependents!`). On the 8-dataset check this cost up to ~2x wall time (Thwaites 2 km,
+pan-Antarctica 16 km), likely from faces switching between iterations. If that cost matters, freeze the
+state once per time step (decide from the head at the start of the step, keep it for all iterations).
 """
-function compute_face_masks!(s::State)
-    @parallel compute_valid_x_kernel!(s.valid_x, s.mask)
-    @parallel compute_valid_y_kernel!(s.valid_y, s.mask)
+function compute_face_masks!(s::State, land::Bool = false, ocean::Bool = false)
+    @parallel compute_valid_x_kernel!(s.valid_x, s.mask, s.h, land, ocean)
+    @parallel compute_valid_y_kernel!(s.valid_y, s.mask, s.h, land, ocean)
     return s
 end
 

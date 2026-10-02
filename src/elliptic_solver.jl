@@ -383,6 +383,7 @@ https://gmd.copernicus.org/articles/11/2955/2018/.
 """
 function refresh_head_dependents!(s::State, g::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion())
 
+    (p.outflow_only_land || p.outflow_only_ocean) && compute_face_masks!(s, p.outflow_only_land, p.outflow_only_ocean) # close LAND/OCEAN faces that would feed the ice, from the new head
     compute_dhdxy!(s, g) # updates gradient of h in both x and y directions in one kernel to reduce the number of kernels
 
     compute_pw!(s, p) # update water pressure
