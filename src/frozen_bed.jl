@@ -94,6 +94,36 @@ function thaw_cells!(s::State, p::ModelParameters, thaw_mask::AbstractMatrix{Boo
     return s
 end
 
+@inline drains_to(m) = m == GROUNDED || m == LAND || m == OCEAN
+
+@parallel_indices (ix, iy) function isolated_cells_kernel!(iso, mask)
+    nx, ny = size(mask, 1), size(mask, 2)
+    if ix <= nx && iy <= ny
+        iso[ix, iy] = mask[ix, iy] == GROUNDED &&
+                      !((ix > 1 && drains_to(mask[ix-1, iy])) || (ix < nx && drains_to(mask[ix+1, iy])) ||
+                        (iy > 1 && drains_to(mask[ix, iy-1])) || (iy < ny && drains_to(mask[ix, iy+1])))
+    end
+    return
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Freezes ([`freeze_cells!`](@ref)) every `GROUNDED` cell none of whose four neighbours is `GROUNDED`,
+`LAND` or `OCEAN`: all its faces are closed (frozen, `OTHER_BASIN` or the domain edge), so its water
+has nowhere to go and, where its creep term vanishes (e.g. `N = 0` under `N_min = 0`), its head-equation
+row is all zero and the solve fails. Freezing such a cell can isolate no other one (an isolated cell has
+no `GROUNDED` neighbour), so one pass suffices. One stencil kernel and a count, run where the mask
+changes, not per step. Returns the number of cells frozen.
+"""
+function freeze_isolated!(s::State, p::ModelParameters)
+    iso = similar(s.mask, Bool)
+    @parallel (1:size(s.mask, 1), 1:size(s.mask, 2)) isolated_cells_kernel!(iso, s.mask)
+    n_iso = count(iso)
+    n_iso > 0 && freeze_cells!(s, p, iso)
+    return n_iso
+end
+
 """
 $(TYPEDSIGNATURES)
 
@@ -133,7 +163,8 @@ function update_frozen_mask!(s::State, p::ModelParameters, T_prime_b::AbstractMa
         freeze_cells!(s, p, freeze_mask)
     end
     n_thawed > 0 && thaw_cells!(s, p, thaw_mask)
-    return (n_frozen = n_frozen, n_thawed = n_thawed, discarded_b = discarded_b)
+    n_isolated = freeze_isolated!(s, p)   # freezing can cut a GROUNDED cell off from every drainage path
+    return (n_frozen = n_frozen, n_thawed = n_thawed, discarded_b = discarded_b, n_isolated = n_isolated)
 end
 
 
@@ -162,7 +193,7 @@ function set_mask!(s::State, p::ModelParameters, new_mask::AbstractMatrix)
     off = (s.mask .== GROUNDED) .& (nm .!= GROUNDED)
     n_on, n_off = count(on), count(off)
     discarded_b = zero(eltype(s.b))
-    (n_on == 0 && n_off == 0 && s.mask == nm) && return (n_on = 0, n_off = 0, discarded_b = discarded_b)
+    (n_on == 0 && n_off == 0 && s.mask == nm) && return (n_on = 0, n_off = 0, discarded_b = discarded_b, n_isolated = 0)
     discarded_b = sum(s.b .* off)
     s.mask .= nm
     @. s.b = ifelse(on, p.b_min, ifelse(off, zero(eltype(s.b)), s.b))
@@ -173,5 +204,6 @@ function set_mask!(s::State, p::ModelParameters, new_mask::AbstractMatrix)
     compute_face_masks!(s)
     apply_mask_to_sliding!(s)
     compute_N!(s, p)
-    return (n_on = n_on, n_off = n_off, discarded_b = discarded_b)
+    n_isolated = freeze_isolated!(s, p)   # kept FROZEN_BED cells can cut a new GROUNDED cell off from every drainage path
+    return (n_on = n_on, n_off = n_off, discarded_b = discarded_b, n_isolated = n_isolated)
 end
