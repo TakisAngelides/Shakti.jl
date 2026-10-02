@@ -219,7 +219,7 @@
             @test Shakti.gap_budget_terms(2, args(1e-6, 0.0, 1e6)...) == (0.0, 0.0)
         end
 
-        @testset "outflow_only: LAND/OCEAN faces do not feed the ice" begin
+        @testset "outflow_only_land/ocean: boundary faces do not feed the ice" begin
             mask = base_mask()                             # LAND at i = 1, OCEAN at i = nx
             state = State(grid)
             set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
@@ -227,7 +227,9 @@
             state.h[1, 4] = state.h[2, 4] - 50.0           # land head below: outflow face
             compute_face_masks!(state)                     # legacy: both open
             @test state.valid_x[2, 3] == 1 && state.valid_x[2, 4] == 1
-            compute_face_masks!(state, true)
+            compute_face_masks!(state, false, true)       # ocean one-way only: the land faces stay open
+            @test state.valid_x[2, 3] == 1
+            compute_face_masks!(state, true, false)
             @test state.valid_x[2, 3] == 0                 # closed: would carry land water into the ice
             @test state.valid_x[2, 4] == 1                 # open: the ice drains onto land
             @test state.valid_x[3, 3] == 1                 # GROUNDED-GROUNDED faces untouched
