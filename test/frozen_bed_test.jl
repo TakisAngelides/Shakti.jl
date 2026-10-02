@@ -202,6 +202,28 @@
             @test state.mask[2, 2] == GROUNDED             # a corner neighbour keeps its other drainage
         end
 
+        @testset "pin_enclosed!: one pinned cell per enclosed GROUNDED patch" begin
+            mask = base_mask()
+            state = State(grid)
+            set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
+            @test pin_enclosed!(state, p) == 0 && sum(state.pin) == 0          # everything drains
+            # enclose the 2-cell patch (3,3)-(4,3) in frozen bed
+            for (i, j) in ((2, 3), (5, 3), (3, 2), (4, 2), (3, 4), (4, 4))
+                state.mask[i, j] = FROZEN_BED
+            end
+            @test pin_enclosed!(state, p) == 1 && sum(state.pin) == 1
+            hob(i, j) = state.zb[i, j] + state.po[i, j] / (p.rho_w * p.g)
+            lo = hob(3, 3) <= hob(4, 3) ? (3, 3) : (4, 3)
+            @test state.pin[lo...] == 1                                           # at the lowest overburden head
+            # the penalty: zero off the pin, 1e3 times the row weight on it, floored
+            @test Shakti.pin_penalty(0.0, 2.0) == 0.0
+            @test Shakti.pin_penalty(0.0, 0.0) == 1e-9                             # a weightless row pins itself
+            @test Shakti.pin_penalty(1.0, 2.0) == 2e3 && Shakti.pin_penalty(1.0, 0.0) == 1e-9
+            # handle_enclosed! follows ModelParameters.pin_enclosed
+            q = ModelParameters(pin_enclosed = true)
+            @test Shakti.handle_enclosed!(state, q) == 1 && state.mask[3, 3] == GROUNDED   # pinned, not frozen
+        end
+
         @testset "gap_budget_terms: the budget where b is clamped" begin
             q = ModelParameters(b_max = 1.0, b_min = 1e-6)
             A, h = 5e-25, 100.0

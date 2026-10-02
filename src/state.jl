@@ -39,6 +39,7 @@ struct State{A <: AbstractArray}
     A_visc::A     # Glen's flow law rate factor
     N::A          # effective pressure
     mask::A       # 0 grounded, 1 ocean, 2 land, 3 other grounded-ice basin (static per run)
+    pin::A        # 1.0 at one GROUNDED cell per enclosed patch, whose head is held at overburden (pin_enclosed!, frozen_bed.jl)
 
     # XFace fields
     dhdx::A       # gradient of hydraulic head in x direction
@@ -119,6 +120,7 @@ function State(g::Grid)
     A_visc    = initialize_center_field(g)
     N         = initialize_center_field(g)
     mask      = @fill(0.0, g.nx, g.ny) # 0.0: GROUNDED, 1.0: OCEAN, 2.0: LAND, 3.0: OTHER_BASIN, 4.0: FROZEN_BED
+    pin       = @fill(0.0, g.nx, g.ny)
 
     # XFace fields
     dhdx    = initialize_xface_field(g)
@@ -145,7 +147,7 @@ function State(g::Grid)
     valid_y = @fill(1.0, g.nx, g.ny+1) # float 1.0 = valid; recomputed in compute_face_masks!
 
     return State(
-        h, pw, po, b, beta, lc, abs_ub, mdot, mdot_min, Q_b, Q_diss, Q_sens, Re, K, G, q_T, zb, zs, H, ieb, lambda, A_visc, N, mask,
+        h, pw, po, b, beta, lc, abs_ub, mdot, mdot_min, Q_b, Q_diss, Q_sens, Re, K, G, q_T, zb, zs, H, ieb, lambda, A_visc, N, mask, pin,
         dhdx, q_x, Re_x, b_x, ub_x, taub_x, dpwdx, D_x, K_x, valid_x,
         dhdy, q_y, Re_y, b_y, ub_y, taub_y, dpwdy, D_y, K_y, valid_y,
     )

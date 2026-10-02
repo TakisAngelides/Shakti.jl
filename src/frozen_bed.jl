@@ -127,6 +127,63 @@ end
 """
 $(TYPEDSIGNATURES)
 
+Finds every connected patch of `GROUNDED` cells with no face to `LAND`/`OCEAN` (cut off by `FROZEN_BED`,
+`OTHER_BASIN` or the domain edge) and sets `s.pin = 1` at one cell of each, the cell with the lowest
+overburden head `zb + po/(rho_w*g)` (where trapped water would first lift the ice); `s.pin = 0`
+elsewhere. The head solve then holds that cell near overburden (N = 0, `pin_penalty`, linear_solver.jl),
+which makes the patch's system nonsingular while keeping its water. Covers single isolated cells too.
+
+A breadth-first search on the host from every `GROUNDED` cell next to `LAND`/`OCEAN`, then a labelling of
+what it did not reach: O(cells), run where the mask changes (thermodynamic timescale), not per step; the
+head kernels only read one more array. Returns the number of patches pinned.
+"""
+function pin_enclosed!(s::State, p::ModelParameters)
+    m = Array(s.mask); nx, ny = size(m)
+    hob = Array(s.zb) .+ Array(s.po) ./ (p.rho_w * p.g)
+    seen = falses(nx, ny); queue = Tuple{Int,Int}[]
+    nbrs(i, j) = ((i-1, j), (i+1, j), (i, j-1), (i, j+1))
+    inb(i, j) = 1 <= i <= nx && 1 <= j <= ny
+    for j in 1:ny, i in 1:nx
+        m[i, j] == GROUNDED || continue
+        if any(((a, b),) -> inb(a, b) && (m[a, b] == LAND || m[a, b] == OCEAN), nbrs(i, j))
+            seen[i, j] = true; push!(queue, (i, j))
+        end
+    end
+    flood!(q) = while !isempty(q)
+        (i, j) = popfirst!(q)
+        for (a, b) in nbrs(i, j)
+            if inb(a, b) && !seen[a, b] && m[a, b] == GROUNDED
+                seen[a, b] = true; push!(q, (a, b))
+            end
+        end
+    end
+    flood!(queue)
+    pin = zeros(eltype(s.pin), nx, ny); npatch = 0
+    for j in 1:ny, i in 1:nx
+        (m[i, j] == GROUNDED && !seen[i, j]) || continue
+        # a new enclosed patch: flood it, keeping its lowest-overburden-head cell
+        seen[i, j] = true; q = [(i, j)]; best = (i, j); comp = [(i, j)]
+        while !isempty(q)
+            (a0, b0) = popfirst!(q)
+            hob[a0, b0] < hob[best...] && (best = (a0, b0))
+            for (a, b) in nbrs(a0, b0)
+                if inb(a, b) && !seen[a, b] && m[a, b] == GROUNDED
+                    seen[a, b] = true; push!(q, (a, b))
+                end
+            end
+        end
+        pin[best...] = 1; npatch += 1
+    end
+    copyto!(s.pin, pin)
+    return npatch
+end
+
+# The enclosed-patch rule of ModelParameters.pin_enclosed: pin one cell per patch, or freeze isolated cells.
+handle_enclosed!(s::State, p::ModelParameters) = p.pin_enclosed ? pin_enclosed!(s, p) : freeze_isolated!(s, p)
+
+"""
+$(TYPEDSIGNATURES)
+
 Updates `s.mask` between `GROUNDED` and `FROZEN_BED` from the basal temperature relative to
 pressure melting `T_prime_b` (K, an array the same shape as `s.mask`, e.g. Yelmo's `T_prime_b`),
 using `p.T_freeze` and `p.T_hysteresis`:
@@ -163,7 +220,7 @@ function update_frozen_mask!(s::State, p::ModelParameters, T_prime_b::AbstractMa
         freeze_cells!(s, p, freeze_mask)
     end
     n_thawed > 0 && thaw_cells!(s, p, thaw_mask)
-    n_isolated = freeze_isolated!(s, p)   # freezing can cut a GROUNDED cell off from every drainage path
+    n_isolated = handle_enclosed!(s, p)   # freezing can cut GROUNDED cells off from every drainage path
     return (n_frozen = n_frozen, n_thawed = n_thawed, discarded_b = discarded_b, n_isolated = n_isolated)
 end
 
@@ -204,6 +261,6 @@ function set_mask!(s::State, p::ModelParameters, new_mask::AbstractMatrix)
     compute_face_masks!(s)
     apply_mask_to_sliding!(s)
     compute_N!(s, p)
-    n_isolated = freeze_isolated!(s, p)   # kept FROZEN_BED cells can cut a new GROUNDED cell off from every drainage path
+    n_isolated = handle_enclosed!(s, p)   # kept FROZEN_BED cells can cut new GROUNDED cells off from every drainage path
     return (n_on = n_on, n_off = n_off, discarded_b = discarded_b, n_isolated = n_isolated)
 end

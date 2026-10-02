@@ -304,6 +304,18 @@ end
 # at b_max and b_min. A held cell's source is then the melt as water, mdot/rho_w, with no gap terms;
 # otherwise the water the clamp keeps out of the gap is lost (at b_max) or created (at b_min). 0 keeps
 # the unclamped (legacy) terms.
+# A pinned cell (pin_enclosed!, frozen_bed.jl) closes an enclosed patch of GROUNDED cells (no face to
+# LAND/OCEAN) with a penalty pv*(h - h_ob) toward its overburden head h_ob (N = 0): water trapped under
+# the ice rises to overburden, where it lifts the ice and escapes. Without it such a patch's rows sum to
+# its creep term alone, which vanishes as N -> 0 or b -> 0, and the system is singular. pv is 1e3 times
+# the cell's own row weight, with a floor for a cell whose faces and creep all vanish; diagonal only, so
+# the matrix stays symmetric positive definite.
+# A GROUNDED row with no weight at all (every face closed -- frozen, OTHER_BASIN, an outflow-only face
+# turned away -- and no creep, e.g. N = 0) is pinned the same way on the spot: it is a one-cell enclosed
+# patch that pin_enclosed! cannot see, because outflow-only faces open and close with the head.
+@inline pin_penalty(pinv, a_row) = (pinv > 0 || a_row <= 0) ? max(1e3 * a_row, oftype(a_row, 1e-9)) : zero(a_row)
+@inline overburden_head(zb, po, rho_w, ggrav) = zb + po / (rho_w * ggrav)
+
 @inline function gap_budget_terms(clamp_budget, b, b_min, b_max, mdot, beta, abs_ub, A, N, lc, h, rho_w, rho_i, ggrav, n, n_minus_1)
     An1  = A * pow(abs(N), n_minus_1)
     rate = mdot / rho_i + beta * abs_ub - An1 * N * lc   # db/dt of the unclamped gap evolution
@@ -373,7 +385,7 @@ end
 # range from the elementwise max size over ALL array arguments, and the flat
 # length-(nx*ny) nzval/rhs vectors would make that (nx*ny, ny) -- nx*ny^2
 # iterations, almost all failing the bounds check (measured 19x slower at 512x512).
-@parallel_indices (ix, iy) function update_SALS_elliptic_kernel!(mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, zb, h, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, b, b_min, b_max, clamp_budget, D_x, D_y, diffusion_on)
+@parallel_indices (ix, iy) function update_SALS_elliptic_kernel!(mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, zb, h, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, b, b_min, b_max, clamp_budget, D_x, D_y, diffusion_on, pin, po)
 
     nx, ny = size(mask, 1), size(mask, 2)
 
@@ -419,7 +431,8 @@ end
             # `lc` (not `b` directly) is the ice-creep length scale -- lagged like `beta`,
             # see AbstractCreepLengthScheme (gap_height.jl); equals `b` under StandardCreep.
             gs, gd = gap_budget_terms(clamp_budget, b[ix, iy], b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], N[ix, iy], lc[ix, iy], h[ix, iy], rho_w, rho_i, ggrav, n, n_minus_1)
-            aP = (aE + aW + aN + aS) + gd
+            pv = pin_penalty(pin[ix, iy], aE + aW + aN + aS + gd)
+            aP = (aE + aW + aN + aS) + gd + pv
 
             # Update the non-zero values of the M sparse matrix. A GROUNDED
             # neighbour couples symmetrically (handled below in the else
@@ -431,7 +444,7 @@ end
             # of Dirichlet dofs (fold known value into the coupled rows' rhs,
             # zero both the row and the column for that dof).
             nzval[idxP[ix, iy]] += aP
-            dirichlet_rhs = zero(eltype(rhs))
+            dirichlet_rhs = pv * overburden_head(zb[ix, iy], po[ix, iy], rho_w, ggrav) # pinned cell (pin_enclosed!): pulls h to overburden
             if ix < nx
                 mE = mask[ix+1, iy]
                 (mE == OCEAN || mE == LAND) ? (dirichlet_rhs += aE * dirichlet_head(mE, zb[ix+1, iy], p_atm, rho_w, rho_sw, ggrav)) : (nzval[idxE[ix, iy]] -= aE) # so again first case here is adding the known value to the rhs and the second case is adding a non-diagonal element to the row
@@ -481,7 +494,7 @@ function update_SALS_elliptic!(sals::SparseAssembledLinearSystem, s::State, g::G
     fill!(nzval, 0)
     fill!(rhs, 0)
 
-    @parallel (1:g.nx, 1:g.ny) update_SALS_elliptic_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.zb, s.h, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, s.b, p.b_min, p.b_max, p.clamp_budget, s.D_x, s.D_y, Val(ds isa WithDiffusion))
+    @parallel (1:g.nx, 1:g.ny) update_SALS_elliptic_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.zb, s.h, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, s.b, p.b_min, p.b_max, p.clamp_budget, s.D_x, s.D_y, Val(ds isa WithDiffusion), s.pin, s.po)
 
     return
 
@@ -514,7 +527,7 @@ end
 # Newton-corrected, same as the elliptic kernel) -- one full Parabolic_loop!
 # call still drives all of them to self-consistency across iterations, same
 # as Picard_loop! does.
-@parallel_indices (ix, iy) function update_SALS_parabolic_kernel!(mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, zb, h, h_old, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, e_v, dt, b, b_min, b_max, clamp_budget, D_x, D_y, diffusion_on)
+@parallel_indices (ix, iy) function update_SALS_parabolic_kernel!(mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, zb, h, h_old, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, e_v, dt, b, b_min, b_max, clamp_budget, D_x, D_y, diffusion_on, pin, po)
 
     nx, ny = size(mask, 1), size(mask, 2)
 
@@ -543,10 +556,11 @@ end
             aS = (iy > 1)  ? K_y[ix, iy] / dy2 : zero(dy2)
 
             gs, gd = gap_budget_terms(clamp_budget, b[ix, iy], b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], N[ix, iy], lc[ix, iy], h[ix, iy], rho_w, rho_i, ggrav, n, n_minus_1)
-            aP = (aE + aW + aN + aS) + e_v / dt + gd # diffusion + backward-Euler englacial storage reaction term + Newton-linearized creep closure (same term as update_SALS_elliptic_kernel!'s aP)
+            pv = pin_penalty(pin[ix, iy], aE + aW + aN + aS + gd)
+            aP = (aE + aW + aN + aS) + e_v / dt + gd + pv # diffusion + backward-Euler englacial storage reaction term + Newton-linearized creep closure (same term as update_SALS_elliptic_kernel!'s aP)
 
             nzval[idxP[ix, iy]] += aP
-            dirichlet_rhs = zero(eltype(rhs))
+            dirichlet_rhs = pv * overburden_head(zb[ix, iy], po[ix, iy], rho_w, ggrav) # pinned cell (pin_enclosed!): pulls h to overburden
             if ix < nx
                 mE = mask[ix+1, iy]
                 (mE == OCEAN || mE == LAND) ? (dirichlet_rhs += aE * dirichlet_head(mE, zb[ix+1, iy], p_atm, rho_w, rho_sw, ggrav)) : (nzval[idxE[ix, iy]] -= aE)
@@ -603,7 +617,7 @@ function update_SALS_parabolic!(sals::SparseAssembledLinearSystem, s::State, g::
     fill!(nzval, 0)
     fill!(rhs, 0)
 
-    @parallel (1:g.nx, 1:g.ny) update_SALS_parabolic_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.zb, s.h, h_old, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, p.e_v, dt, s.b, p.b_min, p.b_max, p.clamp_budget, s.D_x, s.D_y, Val(ds isa WithDiffusion))
+    @parallel (1:g.nx, 1:g.ny) update_SALS_parabolic_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.zb, s.h, h_old, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, p.e_v, dt, s.b, p.b_min, p.b_max, p.clamp_budget, s.D_x, s.D_y, Val(ds isa WithDiffusion), s.pin, s.po)
 
     return
 
@@ -615,7 +629,7 @@ end
 # stored as the raw positive face conductances -- stencil_matvec_kernel!
 # below applies the minus sign when it uses them, matching the sign
 # convention update_SALS_elliptic_kernel! bakes directly into nzval.
-@parallel_indices (ix, iy) function update_MFLS_elliptic_kernel!(mask, aP, aE, aW, aN, aS, rhs, zb, h, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, b, b_min, b_max, clamp_budget, D_x, D_y, diffusion_on)
+@parallel_indices (ix, iy) function update_MFLS_elliptic_kernel!(mask, aP, aE, aW, aN, aS, rhs, zb, h, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, b, b_min, b_max, clamp_budget, D_x, D_y, diffusion_on, pin, po)
 
     nx, ny = size(mask, 1), size(mask, 2)
 
@@ -644,13 +658,14 @@ end
             aS_ij = (iy > 1)  ? K_y[ix, iy] / dy2 : zero(dy2)
 
             gs, gd = gap_budget_terms(clamp_budget, b[ix, iy], b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], N[ix, iy], lc[ix, iy], h[ix, iy], rho_w, rho_i, ggrav, n, n_minus_1)
-            aP[ix, iy] = (aE_ij + aW_ij + aN_ij + aS_ij) + gd
+            pv = pin_penalty(pin[ix, iy], aE_ij + aW_ij + aN_ij + aS_ij + gd)
+            aP[ix, iy] = (aE_ij + aW_ij + aN_ij + aS_ij) + gd + pv
 
             # As in update_SALS_elliptic_kernel!: an OCEAN/LAND neighbour's known head
             # is folded into rhs instead of being wired up as a matrix
             # coupling (aE/aW/aN/aS stay at their fill!-ed 0 for that
             # direction), so the operator stays symmetric.
-            dirichlet_rhs = zero(eltype(rhs))
+            dirichlet_rhs = pv * overburden_head(zb[ix, iy], po[ix, iy], rho_w, ggrav) # pinned cell (pin_enclosed!): pulls h to overburden
             if ix < nx
                 mE = mask[ix+1, iy]
                 (mE == OCEAN || mE == LAND) ? (dirichlet_rhs += aE_ij * dirichlet_head(mE, zb[ix+1, iy], p_atm, rho_w, rho_sw, ggrav)) : (aE[ix, iy] = aE_ij)
@@ -695,7 +710,7 @@ function update_MFLS_elliptic!(mfls::MatrixFreeLinearSystem, s::State, g::Grid, 
     fill!(mfls.aS, 0)
     fill!(mfls.rhs, 0)
 
-    @parallel (1:g.nx, 1:g.ny) update_MFLS_elliptic_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.zb, s.h, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, s.b, p.b_min, p.b_max, p.clamp_budget, s.D_x, s.D_y, Val(ds isa WithDiffusion))
+    @parallel (1:g.nx, 1:g.ny) update_MFLS_elliptic_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.zb, s.h, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, s.b, p.b_min, p.b_max, p.clamp_budget, s.D_x, s.D_y, Val(ds isa WithDiffusion), s.pin, s.po)
 
     return
 
@@ -707,7 +722,7 @@ end
 # for the storage-term/Newton-linearization reasoning, and for why `h_old`
 # (fixed for the whole real timestep) must be a separate argument from `h`
 # (the current Picard sub-iterate).
-@parallel_indices (ix, iy) function update_MFLS_parabolic_kernel!(mask, aP, aE, aW, aN, aS, rhs, zb, h, h_old, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, e_v, dt, b, b_min, b_max, clamp_budget, D_x, D_y, diffusion_on)
+@parallel_indices (ix, iy) function update_MFLS_parabolic_kernel!(mask, aP, aE, aW, aN, aS, rhs, zb, h, h_old, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, e_v, dt, b, b_min, b_max, clamp_budget, D_x, D_y, diffusion_on, pin, po)
 
     nx, ny = size(mask, 1), size(mask, 2)
 
@@ -736,9 +751,10 @@ end
             aS_ij = (iy > 1)  ? K_y[ix, iy] / dy2 : zero(dy2)
 
             gs, gd = gap_budget_terms(clamp_budget, b[ix, iy], b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], N[ix, iy], lc[ix, iy], h[ix, iy], rho_w, rho_i, ggrav, n, n_minus_1)
-            aP[ix, iy] = (aE_ij + aW_ij + aN_ij + aS_ij) + e_v / dt + gd # diffusion + backward-Euler englacial storage reaction term + Newton-linearized creep closure (same term as update_MFLS_elliptic_kernel!'s aP)
+            pv = pin_penalty(pin[ix, iy], aE_ij + aW_ij + aN_ij + aS_ij + gd)
+            aP[ix, iy] = (aE_ij + aW_ij + aN_ij + aS_ij) + e_v / dt + gd + pv # diffusion + backward-Euler englacial storage reaction term + Newton-linearized creep closure (same term as update_MFLS_elliptic_kernel!'s aP)
 
-            dirichlet_rhs = zero(eltype(rhs))
+            dirichlet_rhs = pv * overburden_head(zb[ix, iy], po[ix, iy], rho_w, ggrav) # pinned cell (pin_enclosed!): pulls h to overburden
             if ix < nx
                 mE = mask[ix+1, iy]
                 (mE == OCEAN || mE == LAND) ? (dirichlet_rhs += aE_ij * dirichlet_head(mE, zb[ix+1, iy], p_atm, rho_w, rho_sw, ggrav)) : (aE[ix, iy] = aE_ij)
@@ -784,7 +800,7 @@ function update_MFLS_parabolic!(mfls::MatrixFreeLinearSystem, s::State, g::Grid,
     fill!(mfls.aS, 0)
     fill!(mfls.rhs, 0)
 
-    @parallel (1:g.nx, 1:g.ny) update_MFLS_parabolic_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.zb, s.h, h_old, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, p.e_v, dt, s.b, p.b_min, p.b_max, p.clamp_budget, s.D_x, s.D_y, Val(ds isa WithDiffusion))
+    @parallel (1:g.nx, 1:g.ny) update_MFLS_parabolic_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.zb, s.h, h_old, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, p.e_v, dt, s.b, p.b_min, p.b_max, p.clamp_budget, s.D_x, s.D_y, Val(ds isa WithDiffusion), s.pin, s.po)
 
     return
 
