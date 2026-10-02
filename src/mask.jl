@@ -132,8 +132,10 @@ it. Both are on by default (`ModelParameters` `outflow_only_land`/`outflow_only_
 
 The open/closed state is re-decided from the current head on every Picard iteration (see
 `refresh_head_dependents!`). On the 8-dataset check this cost up to ~2x wall time (Thwaites 2 km,
-pan-Antarctica 16 km), likely from faces switching between iterations. If that cost matters, freeze the
-state once per time step (decide from the head at the start of the step, keep it for all iterations).
+pan-Antarctica 16 km). Deciding it once per time step instead was tested (branch
+`outflow-faces-per-step`) and is not the fix: it was slower still (pan-Antarctica 16 km 150 s vs 55 s,
+Helheim 500 m 23 s vs 9 s) and less robust (Helheim 500 m b_max 18.6 m vs 0.25 m), since faces lagged
+by a step let boundary water in. The extra cost is the harder problem with those faces closed.
 """
 function compute_face_masks!(s::State, land::Bool = false, ocean::Bool = false)
     @parallel compute_valid_x_kernel!(s.valid_x, s.mask, s.h, land, ocean)
