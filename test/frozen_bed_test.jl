@@ -202,10 +202,59 @@
             @test state.mask[2, 2] == GROUNDED             # a corner neighbour keeps its other drainage
         end
 
-        @testset "pin_penalty: a weightless GROUNDED row is pulled to overburden" begin
-            @test Shakti.pin_penalty(0.0) == 1e-9          # no faces, no creep: pinned
-            @test Shakti.pin_penalty(2.0) == 0.0           # any weight: untouched
-            @test Shakti.overburden_head(100.0, 9.81e6, 1000.0, 9.81) ≈ 1100.0
+        @testset "closed_cell_head: exact head of a cell with all faces closed" begin
+            q = ModelParameters()
+            zb0, po0, A0, lc0 = 100.0, 4.5e6, 5e-25, 0.01
+            h_of(N0) = zb0 + (po0 - N0) / (q.rho_w * q.g)
+            head(mdot, beta, ub, ieb, Nmin, Nmax) =
+                Shakti.closed_cell_head(zb0, po0, mdot, beta, ub, ieb, 0.0, A0, lc0, q.rho_w, q.rho_i, q.g, q.n, Nmin, Nmax)
+            N_of(h) = po0 - q.rho_w * q.g * (h - zb0)
+            # sliding opens the gap (R0 > 0): N0 > 0 with creep closing exactly at that rate
+            R0 = 1e-3 * 1e-8
+            N0 = N_of(head(0.0, 1e-3, 1e-8, 0.0, -Inf, Inf))
+            @test N0 > 0 && A0 * N0^3 * lc0 ≈ R0
+            # melt leaves a void too: R0 = -mdot*(1/rho_w - 1/rho_i) > 0
+            N0 = N_of(head(1e-6, 0.0, 0.0, 0.0, -Inf, Inf))
+            @test A0 * N0^3 * lc0 ≈ -1e-6 * (1 / q.rho_w - 1 / q.rho_i)
+            # water from above in excess (R0 < 0): N0 < 0 unclamped, overburden under N_min = 0
+            N0 = N_of(head(0.0, 0.0, 0.0, 1e-9, -Inf, Inf))
+            @test N0 < 0 && A0 * N0^3 * lc0 ≈ -1e-9
+            @test head(0.0, 0.0, 0.0, 1e-9, 0.0, Inf) ≈ h_of(0.0)
+            @test head(0.0, 1e-3, 1e-8, 0.0, -Inf, 1e3) ≈ h_of(1e3)          # N_max caps it as compute_N! does
+            # no creep (lc0 = 0): a gap that can only open has zero water pressure, else overburden
+            @test Shakti.closed_cell_head(zb0, po0, 0.0, 1e-3, 1e-8, 0.0, 0.0, A0, 0.0, q.rho_w, q.rho_i, q.g, q.n, -Inf, Inf) ≈ zb0
+            @test Shakti.closed_cell_head(zb0, po0, 0.0, 0.0, 0.0, 1e-9, 0.0, A0, 0.0, q.rho_w, q.rho_i, q.g, q.n, -Inf, Inf) ≈ h_of(0.0)
+            @test Shakti.closed_cell(0.0, 0.0, 0.0, 0.0) && !Shakti.closed_cell(0.0, 1e-12, 0.0, 0.0)
+        end
+
+        @testset "head kernels: a GROUNDED cell enclosed by FROZEN_BED gets its exact head" begin
+            mask = base_mask()
+            for (i, j) in ((2, 3), (4, 3), (3, 2), (3, 4))
+                mask[i, j] = FROZEN_BED                    # set directly: update_frozen_mask! would freeze (3, 3) too
+            end
+            state = State(grid)
+            set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
+            @test state.K_x[3, 3] == 0 && state.K_x[4, 3] == 0 && state.K_y[3, 3] == 0 && state.K_y[3, 4] == 0
+            for N3 in (0.0, 2e5)                           # the zero-diagonal case and an ordinary N
+                state.N[3, 3] = N3
+                sals = SparseAssembledLinearSystem(grid)
+                mfls = MatrixFreeLinearSystem(grid)
+                Shakti.update_SALS_elliptic!(sals, state, grid, p, Arithmetic())
+                Shakti.update_MFLS_elliptic!(mfls, state, grid, p, Arithmetic())
+                h3 = Shakti.closed_cell_head(state.zb[3, 3], state.po[3, 3], state.mdot[3, 3], state.beta[3, 3], state.abs_ub[3, 3],
+                                             state.ieb[3, 3], 0.0, A_visc[3, 3], state.lc[3, 3], p.rho_w, p.rho_i, p.g, p.n, p.N_min, p.N_max)
+                row = 3 + 2nx
+                @test sals.M.nzval[sals.idxP[3, 3]] == 1 && mfls.aP[3, 3] == 1
+                @test sals.rhs[row] ≈ h3 && mfls.rhs[row] ≈ h3
+                @test all(==(0), (sals.M.nzval[sals.idxE[3, 3]], sals.M.nzval[sals.idxW[3, 3]], sals.M.nzval[sals.idxN[3, 3]], sals.M.nzval[sals.idxS[3, 3]]))
+                @test issymmetric(sals.M)
+                @test (sals.M \ sals.rhs)[row] ≈ h3
+            end
+            # the cell's own budget holds at h3: creep closes the gap at the opening rate
+            N3 = state.po[3, 3] - p.rho_w * p.g * (Shakti.closed_cell_head(state.zb[3, 3], state.po[3, 3], state.mdot[3, 3], state.beta[3, 3],
+                     state.abs_ub[3, 3], state.ieb[3, 3], 0.0, A_visc[3, 3], state.lc[3, 3], p.rho_w, p.rho_i, p.g, p.n, -Inf, Inf) - state.zb[3, 3])
+            R3 = state.beta[3, 3] * state.abs_ub[3, 3] - state.mdot[3, 3] * (1 / p.rho_w - 1 / p.rho_i) - state.ieb[3, 3]
+            @test A_visc[3, 3] * abs(N3)^(p.n - 1) * N3 * state.lc[3, 3] ≈ R3
         end
 
         @testset "gap_budget_terms: the budget where b is clamped" begin
