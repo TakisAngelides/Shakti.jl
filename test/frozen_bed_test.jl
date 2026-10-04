@@ -204,26 +204,26 @@
 
         @testset "closed_cell_head: exact head of a cell with all faces closed" begin
             q = ModelParameters()
-            zb, po, A, lc = 100.0, 4.5e6, 5e-25, 0.01
-            h_of(N) = zb + (po - N) / (q.rho_w * q.g)
+            zb0, po0, A0, lc0 = 100.0, 4.5e6, 5e-25, 0.01
+            h_of(N0) = zb0 + (po0 - N0) / (q.rho_w * q.g)
             head(mdot, beta, ub, ieb, Nmin, Nmax) =
-                Shakti.closed_cell_head(zb, po, mdot, beta, ub, ieb, 0.0, A, lc, q.rho_w, q.rho_i, q.g, q.n, Nmin, Nmax)
-            N_of(h) = po - q.rho_w * q.g * (h - zb)
-            # sliding opens the gap (R > 0): N > 0 with creep closing exactly at that rate
-            R = 1e-3 * 1e-8
-            N = N_of(head(0.0, 1e-3, 1e-8, 0.0, -Inf, Inf))
-            @test N > 0 && A * N^3 * lc ≈ R
-            # melt leaves a void too: R = -mdot*(1/rho_w - 1/rho_i) > 0
-            N = N_of(head(1e-6, 0.0, 0.0, 0.0, -Inf, Inf))
-            @test A * N^3 * lc ≈ -1e-6 * (1 / q.rho_w - 1 / q.rho_i)
-            # water from above in excess (R < 0): N < 0 unclamped, overburden under N_min = 0
-            N = N_of(head(0.0, 0.0, 0.0, 1e-9, -Inf, Inf))
-            @test N < 0 && A * N^3 * lc ≈ -1e-9
+                Shakti.closed_cell_head(zb0, po0, mdot, beta, ub, ieb, 0.0, A0, lc0, q.rho_w, q.rho_i, q.g, q.n, Nmin, Nmax)
+            N_of(h) = po0 - q.rho_w * q.g * (h - zb0)
+            # sliding opens the gap (R0 > 0): N0 > 0 with creep closing exactly at that rate
+            R0 = 1e-3 * 1e-8
+            N0 = N_of(head(0.0, 1e-3, 1e-8, 0.0, -Inf, Inf))
+            @test N0 > 0 && A0 * N0^3 * lc0 ≈ R0
+            # melt leaves a void too: R0 = -mdot*(1/rho_w - 1/rho_i) > 0
+            N0 = N_of(head(1e-6, 0.0, 0.0, 0.0, -Inf, Inf))
+            @test A0 * N0^3 * lc0 ≈ -1e-6 * (1 / q.rho_w - 1 / q.rho_i)
+            # water from above in excess (R0 < 0): N0 < 0 unclamped, overburden under N_min = 0
+            N0 = N_of(head(0.0, 0.0, 0.0, 1e-9, -Inf, Inf))
+            @test N0 < 0 && A0 * N0^3 * lc0 ≈ -1e-9
             @test head(0.0, 0.0, 0.0, 1e-9, 0.0, Inf) ≈ h_of(0.0)
             @test head(0.0, 1e-3, 1e-8, 0.0, -Inf, 1e3) ≈ h_of(1e3)          # N_max caps it as compute_N! does
-            # no creep (lc = 0): a gap that can only open has zero water pressure, else overburden
-            @test Shakti.closed_cell_head(zb, po, 0.0, 1e-3, 1e-8, 0.0, 0.0, A, 0.0, q.rho_w, q.rho_i, q.g, q.n, -Inf, Inf) ≈ zb
-            @test Shakti.closed_cell_head(zb, po, 0.0, 0.0, 0.0, 1e-9, 0.0, A, 0.0, q.rho_w, q.rho_i, q.g, q.n, -Inf, Inf) ≈ h_of(0.0)
+            # no creep (lc0 = 0): a gap that can only open has zero water pressure, else overburden
+            @test Shakti.closed_cell_head(zb0, po0, 0.0, 1e-3, 1e-8, 0.0, 0.0, A0, 0.0, q.rho_w, q.rho_i, q.g, q.n, -Inf, Inf) ≈ zb0
+            @test Shakti.closed_cell_head(zb0, po0, 0.0, 0.0, 0.0, 1e-9, 0.0, A0, 0.0, q.rho_w, q.rho_i, q.g, q.n, -Inf, Inf) ≈ h_of(0.0)
             @test Shakti.closed_cell(0.0, 0.0, 0.0, 0.0) && !Shakti.closed_cell(0.0, 1e-12, 0.0, 0.0)
         end
 
