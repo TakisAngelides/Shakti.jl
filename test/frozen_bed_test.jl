@@ -202,6 +202,23 @@
             @test state.mask[2, 2] == GROUNDED             # a corner neighbour keeps its other drainage
         end
 
+        @testset "sliding is kept on faces next to non-GROUNDED cells" begin
+            mask = base_mask()                             # LAND at i = 1, OCEAN at i = nx, OTHER_BASIN at j = 1
+            mask[3, 4] = FROZEN_BED
+            state = State(grid)
+            set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
+            @test state.ub_x[2, 3] == ub_x[2, 3]           # LAND | GROUNDED face
+            @test state.ub_x[nx, 3] == ub_x[nx, 3]         # GROUNDED | OCEAN face
+            @test state.ub_x[4, 4] == ub_x[4, 4]           # FROZEN_BED | GROUNDED face
+            @test state.abs_ub[2, 3] ≈ ub_x[2, 3]          # the margin cell keeps its full sliding speed
+            # basal-stress face values: one-sided where only one side is GROUNDED
+            F = reshape(collect(1.0:nx*ny), nx, ny)
+            @test Shakti.face_x(F, state.mask, 3, 3) == (F[3, 3] + F[2, 3]) / 2      # GROUNDED | GROUNDED
+            @test Shakti.face_x(F, state.mask, 2, 3) == F[2, 3]                      # LAND | GROUNDED
+            @test Shakti.face_y(F, state.mask, 3, 2) == F[3, 2]                      # OTHER_BASIN | GROUNDED
+            @test Shakti.face_x(F, state.mask, 4, 4) == F[4, 4]                      # FROZEN_BED | GROUNDED
+        end
+
         @testset "closed_cell_head: exact head of a cell with all faces closed" begin
             q = ModelParameters()
             zb0, po0, A0, lc0 = 100.0, 4.5e6, 5e-25, 0.01

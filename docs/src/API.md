@@ -35,7 +35,6 @@ OCEAN
 LAND
 OTHER_BASIN
 compute_face_masks!
-apply_mask_to_sliding!
 ```
 
 ## Melt input

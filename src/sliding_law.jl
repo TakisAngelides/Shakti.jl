@@ -147,6 +147,19 @@ counterpart above.
 """
 compute_taub_xy!(s::State, p::ModelParameters, ::PrescribedSlidingLaw) = s
 
+# Face value of a cell-centred field for the basal stress on that face: the mean of the two cells,
+# except on a face between a GROUNDED cell and any other cell (OCEAN, LAND, OTHER_BASIN, FROZEN_BED),
+# where it is the GROUNDED cell's own value. The face lies on that cell's bed, and the other side's N
+# (0 off the hydrology, or a frozen bed's po) says nothing about it.
+@inline function face_x(F, mask, ix, iy)
+    ga, gb = mask[ix, iy] == GROUNDED, mask[ix-1, iy] == GROUNDED
+    return ga == gb ? (F[ix, iy] + F[ix-1, iy]) / 2 : (ga ? F[ix, iy] : F[ix-1, iy])
+end
+@inline function face_y(F, mask, ix, iy)
+    ga, gb = mask[ix, iy] == GROUNDED, mask[ix, iy-1] == GROUNDED
+    return ga == gb ? (F[ix, iy] + F[ix, iy-1]) / 2 : (ga ? F[ix, iy] : F[ix, iy-1])
+end
+
 # taub_x/taub_y regularize on the *joint* sliding speed abs_ub = ‖v_b‖ (not
 # the signed component ub_x/ub_y), then restore direction by projecting onto
 # ub_x/abs_v (ub_y/abs_v) -- see Kazmierczak et al. 2024 Eq. 1 (Joughin et
@@ -169,7 +182,7 @@ compute_taub_xy!(s::State, p::ModelParameters, ::PrescribedSlidingLaw) = s
 # frozen-ice-velocity assumption), compute_abs_ub! must be re-invoked
 # whenever ub_x/ub_y change, before the next compute_taub_x!/_y!/_xy! call,
 # or abs_ub (and therefore taub) will silently go stale.
-@parallel_indices (ix, iy) function compute_taub_x_kernel!(taub_x, N, ub_x, abs_ub, lambda, C, n, inv_n)
+@parallel_indices (ix, iy) function compute_taub_x_kernel!(taub_x, mask, N, ub_x, abs_ub, lambda, C, n, inv_n)
     nx1 = size(taub_x, 1) # nx + 1
     if ix <= nx1 && iy <= size(taub_x, 2)
         if ix == 1
@@ -181,9 +194,9 @@ compute_taub_xy!(s::State, p::ModelParameters, ::PrescribedSlidingLaw) = s
             abs_v = abs_ub[nx1-1, iy]
             taub_x[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[nx1-1, iy]), inv_n) * (ub_x[nx1, iy] / abs_v) : zero(Nf)
         else
-            Nf = (N[ix, iy] + N[ix-1, iy]) / 2
-            lf = (lambda[ix, iy] + lambda[ix-1, iy]) / 2
-            abs_v = (abs_ub[ix, iy] + abs_ub[ix-1, iy]) / 2
+            Nf = face_x(N, mask, ix, iy)
+            lf = face_x(lambda, mask, ix, iy)
+            abs_v = face_x(abs_ub, mask, ix, iy)
             taub_x[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lf), inv_n) * (ub_x[ix, iy] / abs_v) : zero(Nf)
         end
     end
@@ -194,9 +207,9 @@ $(TYPEDSIGNATURES)
 
 Updates `s.taub_x` under [`RegularizedCoulombSlidingLaw`](@ref) from the current `s.N`/`s.ub_x`.
 """
-compute_taub_x!(s::State, p::ModelParameters, sl::RegularizedCoulombSlidingLaw) = (@parallel compute_taub_x_kernel!(s.taub_x, s.N, s.ub_x, s.abs_ub, s.lambda, sl.C, p.n_exp, p.inv_n_exp); s)
+compute_taub_x!(s::State, p::ModelParameters, sl::RegularizedCoulombSlidingLaw) = (@parallel compute_taub_x_kernel!(s.taub_x, s.mask, s.N, s.ub_x, s.abs_ub, s.lambda, sl.C, p.n_exp, p.inv_n_exp); s)
 
-@parallel_indices (ix, iy) function compute_taub_y_kernel!(taub_y, N, ub_y, abs_ub, lambda, C, n, inv_n)
+@parallel_indices (ix, iy) function compute_taub_y_kernel!(taub_y, mask, N, ub_y, abs_ub, lambda, C, n, inv_n)
     ny1 = size(taub_y, 2) # ny + 1
     if ix <= size(taub_y, 1) && iy <= ny1
         if iy == 1
@@ -208,9 +221,9 @@ compute_taub_x!(s::State, p::ModelParameters, sl::RegularizedCoulombSlidingLaw) 
             abs_v = abs_ub[ix, ny1-1]
             taub_y[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[ix, ny1-1]), inv_n) * (ub_y[ix, ny1] / abs_v) : zero(Nf)
         else
-            Nf = (N[ix, iy] + N[ix, iy-1]) / 2
-            lf = (lambda[ix, iy] + lambda[ix, iy-1]) / 2
-            abs_v = (abs_ub[ix, iy] + abs_ub[ix, iy-1]) / 2
+            Nf = face_y(N, mask, ix, iy)
+            lf = face_y(lambda, mask, ix, iy)
+            abs_v = face_y(abs_ub, mask, ix, iy)
             taub_y[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lf), inv_n) * (ub_y[ix, iy] / abs_v) : zero(Nf)
         end
     end
@@ -222,12 +235,12 @@ $(TYPEDSIGNATURES)
 Updates `s.taub_y` under [`RegularizedCoulombSlidingLaw`](@ref), the y-face counterpart of the
 `compute_taub_x!` method above.
 """
-compute_taub_y!(s::State, p::ModelParameters, sl::RegularizedCoulombSlidingLaw) = (@parallel compute_taub_y_kernel!(s.taub_y, s.N, s.ub_y, s.abs_ub, s.lambda, sl.C, p.n_exp, p.inv_n_exp); s)
+compute_taub_y!(s::State, p::ModelParameters, sl::RegularizedCoulombSlidingLaw) = (@parallel compute_taub_y_kernel!(s.taub_y, s.mask, s.N, s.ub_y, s.abs_ub, s.lambda, sl.C, p.n_exp, p.inv_n_exp); s)
 
 # Fused hot-path version: one launch instead of two (see field_gradients.jl's
 # compute_dhdxy! for why passing both differently-shaped face arrays as
 # arguments makes ParallelStencil infer the right union launch range).
-@parallel_indices (ix, iy) function compute_taub_xy_kernel!(taub_x, taub_y, N, ub_x, ub_y, abs_ub, lambda, C, n, inv_n)
+@parallel_indices (ix, iy) function compute_taub_xy_kernel!(taub_x, taub_y, mask, N, ub_x, ub_y, abs_ub, lambda, C, n, inv_n)
     nx1 = size(taub_x, 1) # nx + 1
     if ix <= nx1 && iy <= size(taub_x, 2)
         if ix == 1
@@ -239,9 +252,9 @@ compute_taub_y!(s::State, p::ModelParameters, sl::RegularizedCoulombSlidingLaw) 
             abs_v = abs_ub[nx1-1, iy]
             taub_x[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[nx1-1, iy]), inv_n) * (ub_x[nx1, iy] / abs_v) : zero(Nf)
         else
-            Nf = (N[ix, iy] + N[ix-1, iy]) / 2
-            lf = (lambda[ix, iy] + lambda[ix-1, iy]) / 2
-            abs_v = (abs_ub[ix, iy] + abs_ub[ix-1, iy]) / 2
+            Nf = face_x(N, mask, ix, iy)
+            lf = face_x(lambda, mask, ix, iy)
+            abs_v = face_x(abs_ub, mask, ix, iy)
             taub_x[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lf), inv_n) * (ub_x[ix, iy] / abs_v) : zero(Nf)
         end
     end
@@ -256,9 +269,9 @@ compute_taub_y!(s::State, p::ModelParameters, sl::RegularizedCoulombSlidingLaw) 
             abs_v = abs_ub[ix, ny1-1]
             taub_y[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[ix, ny1-1]), inv_n) * (ub_y[ix, ny1] / abs_v) : zero(Nf)
         else
-            Nf = (N[ix, iy] + N[ix, iy-1]) / 2
-            lf = (lambda[ix, iy] + lambda[ix, iy-1]) / 2
-            abs_v = (abs_ub[ix, iy] + abs_ub[ix, iy-1]) / 2
+            Nf = face_y(N, mask, ix, iy)
+            lf = face_y(lambda, mask, ix, iy)
+            abs_v = face_y(abs_ub, mask, ix, iy)
             taub_y[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lf), inv_n) * (ub_y[ix, iy] / abs_v) : zero(Nf)
         end
     end
@@ -270,7 +283,7 @@ $(TYPEDSIGNATURES)
 Fused version of `compute_taub_x!` + `compute_taub_y!` under [`RegularizedCoulombSlidingLaw`](@ref):
 one `@parallel` launch instead of two.
 """
-compute_taub_xy!(s::State, p::ModelParameters, sl::RegularizedCoulombSlidingLaw) = (@parallel compute_taub_xy_kernel!(s.taub_x, s.taub_y, s.N, s.ub_x, s.ub_y, s.abs_ub, s.lambda, sl.C, p.n_exp, p.inv_n_exp); s)
+compute_taub_xy!(s::State, p::ModelParameters, sl::RegularizedCoulombSlidingLaw) = (@parallel compute_taub_xy_kernel!(s.taub_x, s.taub_y, s.mask, s.N, s.ub_x, s.ub_y, s.abs_ub, s.lambda, sl.C, p.n_exp, p.inv_n_exp); s)
 
 """
 $(TYPEDSIGNATURES)
@@ -305,7 +318,7 @@ end
 
 initialize_taub!(::RegularizedCoulombFieldSlidingLaw, state::State, taub_x::AbstractArray, taub_y::AbstractArray) = state # recomputed every Picard iteration, same as RegularizedCoulombSlidingLaw
 
-@parallel_indices (ix, iy) function compute_taub_x_field_kernel!(taub_x, N, ub_x, abs_ub, lambda, Cx, n, inv_n)
+@parallel_indices (ix, iy) function compute_taub_x_field_kernel!(taub_x, mask, N, ub_x, abs_ub, lambda, Cx, n, inv_n)
     nx1 = size(taub_x, 1) # nx + 1
     if ix <= nx1 && iy <= size(taub_x, 2)
         if ix == 1
@@ -317,9 +330,9 @@ initialize_taub!(::RegularizedCoulombFieldSlidingLaw, state::State, taub_x::Abst
             abs_v = abs_ub[nx1-1, iy]
             taub_x[ix, iy] = abs_v > 0 ? Nf * Cx[ix, iy] * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[nx1-1, iy]), inv_n) * (ub_x[nx1, iy] / abs_v) : zero(Nf)
         else
-            Nf = (N[ix, iy] + N[ix-1, iy]) / 2
-            lf = (lambda[ix, iy] + lambda[ix-1, iy]) / 2
-            abs_v = (abs_ub[ix, iy] + abs_ub[ix-1, iy]) / 2
+            Nf = face_x(N, mask, ix, iy)
+            lf = face_x(lambda, mask, ix, iy)
+            abs_v = face_x(abs_ub, mask, ix, iy)
             taub_x[ix, iy] = abs_v > 0 ? Nf * Cx[ix, iy] * pow(abs_v / (abs_v + pow(abs(Nf), n) * lf), inv_n) * (ub_x[ix, iy] / abs_v) : zero(Nf)
         end
     end
@@ -330,9 +343,9 @@ $(TYPEDSIGNATURES)
 
 Updates `s.taub_x` under [`RegularizedCoulombFieldSlidingLaw`](@ref) from the current `s.N`/`s.ub_x`.
 """
-compute_taub_x!(s::State, p::ModelParameters, sl::RegularizedCoulombFieldSlidingLaw) = (@parallel compute_taub_x_field_kernel!(s.taub_x, s.N, s.ub_x, s.abs_ub, s.lambda, sl.Cx, p.n_exp, p.inv_n_exp); s)
+compute_taub_x!(s::State, p::ModelParameters, sl::RegularizedCoulombFieldSlidingLaw) = (@parallel compute_taub_x_field_kernel!(s.taub_x, s.mask, s.N, s.ub_x, s.abs_ub, s.lambda, sl.Cx, p.n_exp, p.inv_n_exp); s)
 
-@parallel_indices (ix, iy) function compute_taub_y_field_kernel!(taub_y, N, ub_y, abs_ub, lambda, Cy, n, inv_n)
+@parallel_indices (ix, iy) function compute_taub_y_field_kernel!(taub_y, mask, N, ub_y, abs_ub, lambda, Cy, n, inv_n)
     ny1 = size(taub_y, 2) # ny + 1
     if ix <= size(taub_y, 1) && iy <= ny1
         if iy == 1
@@ -344,9 +357,9 @@ compute_taub_x!(s::State, p::ModelParameters, sl::RegularizedCoulombFieldSliding
             abs_v = abs_ub[ix, ny1-1]
             taub_y[ix, iy] = abs_v > 0 ? Nf * Cy[ix, iy] * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[ix, ny1-1]), inv_n) * (ub_y[ix, ny1] / abs_v) : zero(Nf)
         else
-            Nf = (N[ix, iy] + N[ix, iy-1]) / 2
-            lf = (lambda[ix, iy] + lambda[ix, iy-1]) / 2
-            abs_v = (abs_ub[ix, iy] + abs_ub[ix, iy-1]) / 2
+            Nf = face_y(N, mask, ix, iy)
+            lf = face_y(lambda, mask, ix, iy)
+            abs_v = face_y(abs_ub, mask, ix, iy)
             taub_y[ix, iy] = abs_v > 0 ? Nf * Cy[ix, iy] * pow(abs_v / (abs_v + pow(abs(Nf), n) * lf), inv_n) * (ub_y[ix, iy] / abs_v) : zero(Nf)
         end
     end
@@ -358,9 +371,9 @@ $(TYPEDSIGNATURES)
 Updates `s.taub_y` under [`RegularizedCoulombFieldSlidingLaw`](@ref), the y-face counterpart of the
 `compute_taub_x!` method above.
 """
-compute_taub_y!(s::State, p::ModelParameters, sl::RegularizedCoulombFieldSlidingLaw) = (@parallel compute_taub_y_field_kernel!(s.taub_y, s.N, s.ub_y, s.abs_ub, s.lambda, sl.Cy, p.n_exp, p.inv_n_exp); s)
+compute_taub_y!(s::State, p::ModelParameters, sl::RegularizedCoulombFieldSlidingLaw) = (@parallel compute_taub_y_field_kernel!(s.taub_y, s.mask, s.N, s.ub_y, s.abs_ub, s.lambda, sl.Cy, p.n_exp, p.inv_n_exp); s)
 
-@parallel_indices (ix, iy) function compute_taub_xy_field_kernel!(taub_x, taub_y, N, ub_x, ub_y, abs_ub, lambda, Cx, Cy, n, inv_n)
+@parallel_indices (ix, iy) function compute_taub_xy_field_kernel!(taub_x, taub_y, mask, N, ub_x, ub_y, abs_ub, lambda, Cx, Cy, n, inv_n)
     nx1 = size(taub_x, 1) # nx + 1
     if ix <= nx1 && iy <= size(taub_x, 2)
         if ix == 1
@@ -372,9 +385,9 @@ compute_taub_y!(s::State, p::ModelParameters, sl::RegularizedCoulombFieldSliding
             abs_v = abs_ub[nx1-1, iy]
             taub_x[ix, iy] = abs_v > 0 ? Nf * Cx[ix, iy] * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[nx1-1, iy]), inv_n) * (ub_x[nx1, iy] / abs_v) : zero(Nf)
         else
-            Nf = (N[ix, iy] + N[ix-1, iy]) / 2
-            lf = (lambda[ix, iy] + lambda[ix-1, iy]) / 2
-            abs_v = (abs_ub[ix, iy] + abs_ub[ix-1, iy]) / 2
+            Nf = face_x(N, mask, ix, iy)
+            lf = face_x(lambda, mask, ix, iy)
+            abs_v = face_x(abs_ub, mask, ix, iy)
             taub_x[ix, iy] = abs_v > 0 ? Nf * Cx[ix, iy] * pow(abs_v / (abs_v + pow(abs(Nf), n) * lf), inv_n) * (ub_x[ix, iy] / abs_v) : zero(Nf)
         end
     end
@@ -389,9 +402,9 @@ compute_taub_y!(s::State, p::ModelParameters, sl::RegularizedCoulombFieldSliding
             abs_v = abs_ub[ix, ny1-1]
             taub_y[ix, iy] = abs_v > 0 ? Nf * Cy[ix, iy] * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[ix, ny1-1]), inv_n) * (ub_y[ix, ny1] / abs_v) : zero(Nf)
         else
-            Nf = (N[ix, iy] + N[ix, iy-1]) / 2
-            lf = (lambda[ix, iy] + lambda[ix, iy-1]) / 2
-            abs_v = (abs_ub[ix, iy] + abs_ub[ix, iy-1]) / 2
+            Nf = face_y(N, mask, ix, iy)
+            lf = face_y(lambda, mask, ix, iy)
+            abs_v = face_y(abs_ub, mask, ix, iy)
             taub_y[ix, iy] = abs_v > 0 ? Nf * Cy[ix, iy] * pow(abs_v / (abs_v + pow(abs(Nf), n) * lf), inv_n) * (ub_y[ix, iy] / abs_v) : zero(Nf)
         end
     end
@@ -403,7 +416,7 @@ $(TYPEDSIGNATURES)
 Fused version of `compute_taub_x!` + `compute_taub_y!` under [`RegularizedCoulombFieldSlidingLaw`](@ref):
 one `@parallel` launch instead of two.
 """
-compute_taub_xy!(s::State, p::ModelParameters, sl::RegularizedCoulombFieldSlidingLaw) = (@parallel compute_taub_xy_field_kernel!(s.taub_x, s.taub_y, s.N, s.ub_x, s.ub_y, s.abs_ub, s.lambda, sl.Cx, sl.Cy, p.n_exp, p.inv_n_exp); s)
+compute_taub_xy!(s::State, p::ModelParameters, sl::RegularizedCoulombFieldSlidingLaw) = (@parallel compute_taub_xy_field_kernel!(s.taub_x, s.taub_y, s.mask, s.N, s.ub_x, s.ub_y, s.abs_ub, s.lambda, sl.Cx, sl.Cy, p.n_exp, p.inv_n_exp); s)
 
 """
 $(TYPEDSIGNATURES)
@@ -445,7 +458,7 @@ end
 
 initialize_taub!(::RegularizedCoulombV0SlidingLaw, state::State, taub_x::AbstractArray, taub_y::AbstractArray) = state # recomputed every Picard iteration, same as the other two regularized-Coulomb laws
 
-@parallel_indices (ix, iy) function compute_taub_x_v0_kernel!(taub_x, N, ub_x, abs_ub, Cx, v0, inv_n)
+@parallel_indices (ix, iy) function compute_taub_x_v0_kernel!(taub_x, mask, N, ub_x, abs_ub, Cx, v0, inv_n)
     nx1 = size(taub_x, 1) # nx + 1
     if ix <= nx1 && iy <= size(taub_x, 2)
         if ix == 1
@@ -457,8 +470,8 @@ initialize_taub!(::RegularizedCoulombV0SlidingLaw, state::State, taub_x::Abstrac
             abs_v = abs_ub[nx1-1, iy]
             taub_x[ix, iy] = abs_v > 0 ? Nf * Cx[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_x[nx1, iy] / abs_v) : zero(Nf)
         else
-            Nf = (N[ix, iy] + N[ix-1, iy]) / 2
-            abs_v = (abs_ub[ix, iy] + abs_ub[ix-1, iy]) / 2
+            Nf = face_x(N, mask, ix, iy)
+            abs_v = face_x(abs_ub, mask, ix, iy)
             taub_x[ix, iy] = abs_v > 0 ? Nf * Cx[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_x[ix, iy] / abs_v) : zero(Nf)
         end
     end
@@ -469,9 +482,9 @@ $(TYPEDSIGNATURES)
 
 Updates `s.taub_x` under [`RegularizedCoulombV0SlidingLaw`](@ref) from the current `s.N`/`s.ub_x`.
 """
-compute_taub_x!(s::State, p::ModelParameters, sl::RegularizedCoulombV0SlidingLaw) = (@parallel compute_taub_x_v0_kernel!(s.taub_x, s.N, s.ub_x, s.abs_ub, sl.Cx, sl.v0, sl.q); s)
+compute_taub_x!(s::State, p::ModelParameters, sl::RegularizedCoulombV0SlidingLaw) = (@parallel compute_taub_x_v0_kernel!(s.taub_x, s.mask, s.N, s.ub_x, s.abs_ub, sl.Cx, sl.v0, sl.q); s)
 
-@parallel_indices (ix, iy) function compute_taub_y_v0_kernel!(taub_y, N, ub_y, abs_ub, Cy, v0, inv_n)
+@parallel_indices (ix, iy) function compute_taub_y_v0_kernel!(taub_y, mask, N, ub_y, abs_ub, Cy, v0, inv_n)
     ny1 = size(taub_y, 2) # ny + 1
     if ix <= size(taub_y, 1) && iy <= ny1
         if iy == 1
@@ -483,8 +496,8 @@ compute_taub_x!(s::State, p::ModelParameters, sl::RegularizedCoulombV0SlidingLaw
             abs_v = abs_ub[ix, ny1-1]
             taub_y[ix, iy] = abs_v > 0 ? Nf * Cy[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_y[ix, ny1] / abs_v) : zero(Nf)
         else
-            Nf = (N[ix, iy] + N[ix, iy-1]) / 2
-            abs_v = (abs_ub[ix, iy] + abs_ub[ix, iy-1]) / 2
+            Nf = face_y(N, mask, ix, iy)
+            abs_v = face_y(abs_ub, mask, ix, iy)
             taub_y[ix, iy] = abs_v > 0 ? Nf * Cy[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_y[ix, iy] / abs_v) : zero(Nf)
         end
     end
@@ -496,9 +509,9 @@ $(TYPEDSIGNATURES)
 Updates `s.taub_y` under [`RegularizedCoulombV0SlidingLaw`](@ref), the y-face counterpart of the
 `compute_taub_x!` method above.
 """
-compute_taub_y!(s::State, p::ModelParameters, sl::RegularizedCoulombV0SlidingLaw) = (@parallel compute_taub_y_v0_kernel!(s.taub_y, s.N, s.ub_y, s.abs_ub, sl.Cy, sl.v0, sl.q); s)
+compute_taub_y!(s::State, p::ModelParameters, sl::RegularizedCoulombV0SlidingLaw) = (@parallel compute_taub_y_v0_kernel!(s.taub_y, s.mask, s.N, s.ub_y, s.abs_ub, sl.Cy, sl.v0, sl.q); s)
 
-@parallel_indices (ix, iy) function compute_taub_xy_v0_kernel!(taub_x, taub_y, N, ub_x, ub_y, abs_ub, Cx, Cy, v0, inv_n)
+@parallel_indices (ix, iy) function compute_taub_xy_v0_kernel!(taub_x, taub_y, mask, N, ub_x, ub_y, abs_ub, Cx, Cy, v0, inv_n)
     nx1 = size(taub_x, 1) # nx + 1
     if ix <= nx1 && iy <= size(taub_x, 2)
         if ix == 1
@@ -510,8 +523,8 @@ compute_taub_y!(s::State, p::ModelParameters, sl::RegularizedCoulombV0SlidingLaw
             abs_v = abs_ub[nx1-1, iy]
             taub_x[ix, iy] = abs_v > 0 ? Nf * Cx[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_x[nx1, iy] / abs_v) : zero(Nf)
         else
-            Nf = (N[ix, iy] + N[ix-1, iy]) / 2
-            abs_v = (abs_ub[ix, iy] + abs_ub[ix-1, iy]) / 2
+            Nf = face_x(N, mask, ix, iy)
+            abs_v = face_x(abs_ub, mask, ix, iy)
             taub_x[ix, iy] = abs_v > 0 ? Nf * Cx[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_x[ix, iy] / abs_v) : zero(Nf)
         end
     end
@@ -526,8 +539,8 @@ compute_taub_y!(s::State, p::ModelParameters, sl::RegularizedCoulombV0SlidingLaw
             abs_v = abs_ub[ix, ny1-1]
             taub_y[ix, iy] = abs_v > 0 ? Nf * Cy[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_y[ix, ny1] / abs_v) : zero(Nf)
         else
-            Nf = (N[ix, iy] + N[ix, iy-1]) / 2
-            abs_v = (abs_ub[ix, iy] + abs_ub[ix, iy-1]) / 2
+            Nf = face_y(N, mask, ix, iy)
+            abs_v = face_y(abs_ub, mask, ix, iy)
             taub_y[ix, iy] = abs_v > 0 ? Nf * Cy[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_y[ix, iy] / abs_v) : zero(Nf)
         end
     end
@@ -539,7 +552,7 @@ $(TYPEDSIGNATURES)
 Fused version of `compute_taub_x!` + `compute_taub_y!` under [`RegularizedCoulombV0SlidingLaw`](@ref):
 one `@parallel` launch instead of two.
 """
-compute_taub_xy!(s::State, p::ModelParameters, sl::RegularizedCoulombV0SlidingLaw) = (@parallel compute_taub_xy_v0_kernel!(s.taub_x, s.taub_y, s.N, s.ub_x, s.ub_y, s.abs_ub, sl.Cx, sl.Cy, sl.v0, sl.q); s)
+compute_taub_xy!(s::State, p::ModelParameters, sl::RegularizedCoulombV0SlidingLaw) = (@parallel compute_taub_xy_v0_kernel!(s.taub_x, s.taub_y, s.mask, s.N, s.ub_x, s.ub_y, s.abs_ub, sl.Cx, sl.Cy, sl.v0, sl.q); s)
 
 # taub = C^2*N*u_b (LinearSlidingLaw, see its struct docstring above): N
 # staggered onto the face with the same boundary-duplicate/interior-average
@@ -547,10 +560,10 @@ compute_taub_xy!(s::State, p::ModelParameters, sl::RegularizedCoulombV0SlidingLa
 # staggered+squared once at construction. No abs_ub/lambda/n/inv_n needed --
 # this law is linear straight through ub=0, unlike the regularized-Coulomb
 # power-law ratio.
-@parallel_indices (ix, iy) function compute_taub_x_linear_kernel!(taub_x, N, ub_x, Cx2)
+@parallel_indices (ix, iy) function compute_taub_x_linear_kernel!(taub_x, mask, N, ub_x, Cx2)
     nx1 = size(taub_x, 1) # nx + 1
     if ix <= nx1 && iy <= size(taub_x, 2)
-        Nf = ix == 1 ? N[1, iy] : ix == nx1 ? N[nx1-1, iy] : (N[ix, iy] + N[ix-1, iy]) / 2
+        Nf = ix == 1 ? N[1, iy] : ix == nx1 ? N[nx1-1, iy] : face_x(N, mask, ix, iy)
         taub_x[ix, iy] = Cx2[ix, iy] * Nf * ub_x[ix, iy]
     end
     return
@@ -560,12 +573,12 @@ $(TYPEDSIGNATURES)
 
 Updates `s.taub_x` under [`LinearSlidingLaw`](@ref) from the current `s.N`/`s.ub_x`.
 """
-compute_taub_x!(s::State, p::ModelParameters, sl::LinearSlidingLaw) = (@parallel compute_taub_x_linear_kernel!(s.taub_x, s.N, s.ub_x, sl.Cx2); s)
+compute_taub_x!(s::State, p::ModelParameters, sl::LinearSlidingLaw) = (@parallel compute_taub_x_linear_kernel!(s.taub_x, s.mask, s.N, s.ub_x, sl.Cx2); s)
 
-@parallel_indices (ix, iy) function compute_taub_y_linear_kernel!(taub_y, N, ub_y, Cy2)
+@parallel_indices (ix, iy) function compute_taub_y_linear_kernel!(taub_y, mask, N, ub_y, Cy2)
     ny1 = size(taub_y, 2) # ny + 1
     if ix <= size(taub_y, 1) && iy <= ny1
-        Nf = iy == 1 ? N[ix, 1] : iy == ny1 ? N[ix, ny1-1] : (N[ix, iy] + N[ix, iy-1]) / 2
+        Nf = iy == 1 ? N[ix, 1] : iy == ny1 ? N[ix, ny1-1] : face_y(N, mask, ix, iy)
         taub_y[ix, iy] = Cy2[ix, iy] * Nf * ub_y[ix, iy]
     end
     return
@@ -576,18 +589,18 @@ $(TYPEDSIGNATURES)
 Updates `s.taub_y` under [`LinearSlidingLaw`](@ref), the y-face counterpart of the
 `compute_taub_x!` method above.
 """
-compute_taub_y!(s::State, p::ModelParameters, sl::LinearSlidingLaw) = (@parallel compute_taub_y_linear_kernel!(s.taub_y, s.N, s.ub_y, sl.Cy2); s)
+compute_taub_y!(s::State, p::ModelParameters, sl::LinearSlidingLaw) = (@parallel compute_taub_y_linear_kernel!(s.taub_y, s.mask, s.N, s.ub_y, sl.Cy2); s)
 
 # Fused hot-path version, same rationale as compute_taub_xy_kernel! above.
-@parallel_indices (ix, iy) function compute_taub_xy_linear_kernel!(taub_x, taub_y, N, ub_x, ub_y, Cx2, Cy2)
+@parallel_indices (ix, iy) function compute_taub_xy_linear_kernel!(taub_x, taub_y, mask, N, ub_x, ub_y, Cx2, Cy2)
     nx1 = size(taub_x, 1) # nx + 1
     if ix <= nx1 && iy <= size(taub_x, 2)
-        Nf = ix == 1 ? N[1, iy] : ix == nx1 ? N[nx1-1, iy] : (N[ix, iy] + N[ix-1, iy]) / 2
+        Nf = ix == 1 ? N[1, iy] : ix == nx1 ? N[nx1-1, iy] : face_x(N, mask, ix, iy)
         taub_x[ix, iy] = Cx2[ix, iy] * Nf * ub_x[ix, iy]
     end
     ny1 = size(taub_y, 2) # ny + 1
     if ix <= size(taub_y, 1) && iy <= ny1
-        Nf = iy == 1 ? N[ix, 1] : iy == ny1 ? N[ix, ny1-1] : (N[ix, iy] + N[ix, iy-1]) / 2
+        Nf = iy == 1 ? N[ix, 1] : iy == ny1 ? N[ix, ny1-1] : face_y(N, mask, ix, iy)
         taub_y[ix, iy] = Cy2[ix, iy] * Nf * ub_y[ix, iy]
     end
     return
@@ -598,4 +611,4 @@ $(TYPEDSIGNATURES)
 Fused version of `compute_taub_x!` + `compute_taub_y!` under [`LinearSlidingLaw`](@ref): one
 `@parallel` launch instead of two.
 """
-compute_taub_xy!(s::State, p::ModelParameters, sl::LinearSlidingLaw) = (@parallel compute_taub_xy_linear_kernel!(s.taub_x, s.taub_y, s.N, s.ub_x, s.ub_y, sl.Cx2, sl.Cy2); s)
+compute_taub_xy!(s::State, p::ModelParameters, sl::LinearSlidingLaw) = (@parallel compute_taub_xy_linear_kernel!(s.taub_x, s.taub_y, s.mask, s.N, s.ub_x, s.ub_y, sl.Cx2, sl.Cy2); s)

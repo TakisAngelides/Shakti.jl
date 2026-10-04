@@ -124,7 +124,7 @@ export State
 
 # mask.jl
 export GROUNDED, OCEAN, LAND, OTHER_BASIN, FROZEN_BED
-export compute_face_masks!, apply_mask_to_sliding!
+export compute_face_masks!
 
 # melt_input.jl
 export AbstractMeltInput, ConstantMeltInput, SeasonalMeltInput, GaussianMoulinMeltInput, update_ieb!

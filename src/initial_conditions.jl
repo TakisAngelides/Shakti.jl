@@ -74,7 +74,9 @@ function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, sl::Abst
     # Basal velocity
     @. s.ub_x = ub_x
     @. s.ub_y = ub_y
-    apply_mask_to_sliding!(s) # valid_x, valid_y are multiplied on the ub_x and ub_y face fields respectively to zero out any face with a non-zero velocity that touches a cell which is OTHER_BASIN, this should be called every time the ub fields are updated e.g. from an ice flow model
+    # ub_x/ub_y are kept as given on every face, including faces next to non-GROUNDED cells: sliding
+    # opening and frictional heat belong to the grounded cell's own bed. Water flow across those faces is
+    # cut separately (valid_x/valid_y, compute_face_masks!).
     compute_abs_ub!(s) # this is the magnitude of the basal velocity vector
 
     s.ieb .= ieb # englacial to subglacial water input i₍e → b₎, seeded as-is; per-timestep evolution (if any) is handled by update_ieb!
