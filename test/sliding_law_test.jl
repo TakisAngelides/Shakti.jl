@@ -35,8 +35,11 @@
 
             # taub = C^2*N*u_b exactly -- see sliding_law.jl's LinearSlidingLaw docstring for the
             # magnitude/direction cancellation that makes this exact, not just an approximation.
+            # face N: mean of the two cells, or the GROUNDED cell's own N on a face it shares with a
+            # non-GROUNDED cell (sliding is kept on those faces)
+            gr(i, j) = state.mask[i, j] == GROUNDED
             for j in 1:ny, i in 2:nx
-                Nf = (state.N[i, j] + state.N[i-1, j]) / 2
+                Nf = gr(i, j) == gr(i-1, j) ? (state.N[i, j] + state.N[i-1, j]) / 2 : (gr(i, j) ? state.N[i, j] : state.N[i-1, j])
                 @test state.taub_x[i, j] ≈ C^2 * Nf * state.ub_x[i, j]
             end
 
