@@ -35,7 +35,7 @@ is harmless, not an error).
 Sets `b:=0` and `pw:=0` on those cells, then refreshes everything that depends on `s.mask`/`s.b`/
 `s.pw`: `s.h` via [`compute_h!`](@ref) (`pw=0` gives `h=zb` exactly), `s.K` via
 [`compute_K!`](@ref) (`b=0` gives `K=0` exactly), `s.valid_x`/`s.valid_y` via
-[`compute_face_masks!`](@ref), `s.ub_x`/`s.ub_y` via [`apply_mask_to_sliding!`](@ref), and
+[`compute_face_masks!`](@ref), and
 `s.N` via [`compute_N!`](@ref) -- which, per `FROZEN_BED`'s own convention, evaluates to `po - 0
 = po` exactly there: full overburden, no water pressure. `s.dpwdx`/`s.dpwdy` are left stale here
 deliberately -- they're recomputed from the current `h`/`pw` at the top of every Picard iteration
@@ -62,7 +62,6 @@ function freeze_cells!(s::State, p::ModelParameters, freeze_mask::AbstractMatrix
     compute_h!(s, p)
     compute_K!(s, p)
     compute_face_masks!(s)
-    apply_mask_to_sliding!(s)
     compute_N!(s, p)
     return s
 end
@@ -79,7 +78,7 @@ Reseeds `b:=p.b_min` (a cell can't re-enter the dynamic assembly at literal `b=0
 normally from here on). `pw`/`h` are deliberately left untouched: a thawing cell starts from
 whatever it was while frozen (`pw=0`/dry/high-`N` if it was actually frozen via
 [`freeze_cells!`](@ref)) and the head equation evolves it from there on the next solve -- no
-water is magically added. Refreshes `s.K`/`s.valid_x`/`s.valid_y`/`s.ub_x`/`s.ub_y`/`s.N` the same
+water is magically added. Refreshes `s.K`/`s.valid_x`/`s.valid_y`/`s.N` the same
 way [`freeze_cells!`](@ref) does.
 """
 function thaw_cells!(s::State, p::ModelParameters, thaw_mask::AbstractMatrix{Bool})
@@ -89,7 +88,6 @@ function thaw_cells!(s::State, p::ModelParameters, thaw_mask::AbstractMatrix{Boo
     refresh_b_dependents!(s, p) # without this a thawed cell keeps lc = 0 (from its frozen b = 0) until the next step_b!, i.e. no creep-closure term in the first head solve
     compute_K!(s, p)
     compute_face_masks!(s)
-    apply_mask_to_sliding!(s)
     compute_N!(s, p)
     return s
 end
@@ -202,7 +200,6 @@ function set_mask!(s::State, p::ModelParameters, new_mask::AbstractMatrix)
     compute_h!(s, p)
     compute_K!(s, p)
     compute_face_masks!(s)
-    apply_mask_to_sliding!(s)
     compute_N!(s, p)
     n_isolated = freeze_isolated!(s, p)   # kept FROZEN_BED cells can cut a new GROUNDED cell off from every drainage path
     return (n_on = n_on, n_off = n_off, discarded_b = discarded_b, n_isolated = n_isolated)
