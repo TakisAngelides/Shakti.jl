@@ -99,6 +99,7 @@ include("elliptic_solver.jl")
 include("newton_solver.jl")
 include("parabolic_solver.jl")
 include("gap_height.jl")
+include("unfilled_cavities.jl") # must precede simulation.jl: Simulation type-annotates its `cf` field with AbstractCavityFilling
 include("cell_gap_clamping.jl")
 include("head_extrapolation.jl")
 include("simulation.jl")
@@ -122,6 +123,9 @@ export Grid
 # state.jl
 export State
 
+# unfilled_cavities.jl
+export AbstractCavityFilling, FilledCavities, UnfilledCavities, update_b_empty!, update_b_empty_budget!, clamp_b_empty!, set_cavity_storage!, compute_b_w!
+
 # mask.jl
 export GROUNDED, OCEAN, LAND, OTHER_BASIN, FROZEN_BED
 export compute_face_masks!
@@ -130,7 +134,7 @@ export compute_face_masks!
 export AbstractMeltInput, ConstantMeltInput, SeasonalMeltInput, GaussianMoulinMeltInput, update_ieb!
 
 # k_face_scheme.jl
-export AbstractKFaceScheme, Arithmetic, Harmonic, compute_K_face, face_conductance
+export AbstractKFaceScheme, Arithmetic, Harmonic, Upwind, compute_K_face, face_conductance
 
 # linear_solver.jl
 # (update_SALS_elliptic!/update_MFLS_elliptic! are internal assembly plumbing, not part of the

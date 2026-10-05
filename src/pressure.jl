@@ -1,6 +1,7 @@
-@parallel_indices (ix, iy) function compute_pw_kernel!(pw, h, zb, rho_w, ggrav)
+@parallel_indices (ix, iy) function compute_pw_kernel!(pw, h, zb, rho_w, ggrav, stor)
     if ix <= size(pw, 1) && iy <= size(pw, 2)
-        pw[ix, iy] = rho_w * ggrav * (h[ix, iy] - zb[ix, iy])
+        hw = h[ix, iy] - zb[ix, iy]
+        pw[ix, iy] = rho_w * ggrav * (stor[ix, iy] > 0 ? max(hw, zero(hw)) : hw) # unfilled cavities (stor > 0): a head below the bed is the empty depth of the gap, pw = 0 there (unfilled_cavities.jl)
     end
     return
 end
@@ -8,9 +9,9 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Updates the `s.pw` (water pressure) from the current `s.h` (hydraulic head): `pw = rho_w*g*(h - zb)`.
+Updates the `s.pw` (water pressure) from the current `s.h` (hydraulic head): `pw = rho_w*g*(h - zb)`, floored at 0 in cells with unfilled cavities (`s.stor > 0`, see [`UnfilledCavities`](@ref)).
 """
-compute_pw!(s::State, p::ModelParameters) = (@parallel compute_pw_kernel!(s.pw, s.h, s.zb, p.rho_w, p.g); s)
+compute_pw!(s::State, p::ModelParameters) = (@parallel compute_pw_kernel!(s.pw, s.h, s.zb, p.rho_w, p.g, s.stor); s)
 
 @parallel_indices (ix, iy) function compute_N_kernel!(N, po, pw, mask, N_min, N_max)
     if ix <= size(N, 1) && iy <= size(N, 2)

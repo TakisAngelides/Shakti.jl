@@ -17,6 +17,10 @@ struct State{A <: AbstractArray}
     pw::A         # water pressure
     po::A         # ice overburden pressure
     b::A          # water depth
+    b_w::A        # water depth at the current head iterate [m] (b - empty part, floored); what the face conductances are built from (unfilled_cavities.jl). Equals b exactly under FilledCavities
+    w_old::A      # water per bed area [m] at the start of the step, b - b_empty (UnfilledCavities, see update_b_empty_budget!)
+    stor::A       # water storage coefficient of an unfilled cavity [1/s]: 1/dt on GROUNDED cells under UnfilledCavities, 0 otherwise (0 = legacy, always-filled gap)
+    b_empty::A    # empty (water-free) part of the gap per unit bed area [m], >= 0; only used under UnfilledCavities (unfilled_cavities.jl), zero otherwise. Water actually present is b - b_empty
     beta::A       # parameter for opening by sliding over bedrock bumps
     lc::A         # ice-creep length scale (see AbstractCreepLengthScheme, gap_height.jl); equals b under StandardCreep
     abs_ub::A     # absolute value of the sliding velocity
@@ -99,6 +103,10 @@ function State(g::Grid)
     pw        = initialize_center_field(g)
     po        = initialize_center_field(g)
     b         = initialize_center_field(g)
+    b_empty   = initialize_center_field(g)
+    b_w       = initialize_center_field(g)
+    stor      = initialize_center_field(g)
+    w_old     = initialize_center_field(g)
     beta      = initialize_center_field(g)
     lc        = initialize_center_field(g)
     abs_ub    = initialize_center_field(g)
@@ -145,7 +153,7 @@ function State(g::Grid)
     valid_y = @fill(1.0, g.nx, g.ny+1) # float 1.0 = valid; recomputed in compute_face_masks!
 
     return State(
-        h, pw, po, b, beta, lc, abs_ub, mdot, mdot_min, Q_b, Q_diss, Q_sens, Re, K, G, q_T, zb, zs, H, ieb, lambda, A_visc, N, mask,
+        h, pw, po, b, b_w, w_old, stor, b_empty, beta, lc, abs_ub, mdot, mdot_min, Q_b, Q_diss, Q_sens, Re, K, G, q_T, zb, zs, H, ieb, lambda, A_visc, N, mask,
         dhdx, q_x, Re_x, b_x, ub_x, taub_x, dpwdx, D_x, K_x, valid_x,
         dhdy, q_y, Re_y, b_y, ub_y, taub_y, dpwdy, D_y, K_y, valid_y,
     )

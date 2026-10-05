@@ -189,7 +189,7 @@ and every "which scheme/law" choice (head, gap, melt-rate terms, K-face, melt-in
 bundled together with the observer that records output. Build one with the keyword constructor
 below (not this positional one directly), then call [`run!`](@ref).
 """
-struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHeadScheme, GS <: AbstractGapScheme, MT <: MeltTerms, OSS <: AbstractOpenBySlidingScheme, CLS <: AbstractCreepLengthScheme, DS <: AbstractDiffusionScheme, O <: AbstractObserver, G <: Grid, S <: State, MI <: AbstractMeltInput, KFS <: AbstractKFaceScheme, SL <: AbstractSlidingLaw, CGC <: AbstractCellGapClamping, CNC <: AbstractCellNClamping, TS <: AbstractTimeStepScheme, HE <: AbstractHeadExtrapolation}
+struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHeadScheme, GS <: AbstractGapScheme, MT <: MeltTerms, OSS <: AbstractOpenBySlidingScheme, CLS <: AbstractCreepLengthScheme, DS <: AbstractDiffusionScheme, O <: AbstractObserver, G <: Grid, S <: State, MI <: AbstractMeltInput, KFS <: AbstractKFaceScheme, SL <: AbstractSlidingLaw, CGC <: AbstractCellGapClamping, CNC <: AbstractCellNClamping, TS <: AbstractTimeStepScheme, HE <: AbstractHeadExtrapolation, CF <: AbstractCavityFilling}
     tsteps::Int
     dt::Base.RefValue{F} # a Ref so AdaptiveTimeStep can update it in place each step, same reason total_time is a Ref despite Simulation itself being immutable
     p::P
@@ -211,6 +211,7 @@ struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHea
     cnc::CNC # per-cell N-clamping override, see cell_N_clamping.jl; NoCellNClamping() (a no-op) by default
     ts::TS # AbstractTimeStepScheme; FixedTimeStep() (a no-op, dt never changes) by default
     he::HE # AbstractHeadExtrapolation: the head solve's initial guess, see head_extrapolation.jl
+    cf::CF # AbstractCavityFilling: FilledCavities() (legacy, gap always water-filled) by default, see unfilled_cavities.jl
 end
 
 """
@@ -238,13 +239,17 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
   `ModelParameters` field (there's no single physical parameter that makes the diffusion term
   identically zero the way `p.br`/`p.b_c` do): pass `WithDiffusion(ls)` explicitly, with `ls` a
   second, independent [`AbstractLinearSolver`](@ref) instance for `b`'s own diffusion operator.
-- `k_face_choice`: `"arithmetic"` or `"harmonic"` (see [`AbstractKFaceScheme`](@ref)).
+- `k_face_choice`: `"arithmetic"`, `"harmonic"` or `"upwind"` (see [`AbstractKFaceScheme`](@ref)); by default
+  `"arithmetic"`, or `"upwind"` under [`UnfilledCavities`](@ref).
 - `cell_gap_clamping`: [`NoCellGapClamping`](@ref) (default, no-op) or a [`CellGapClamping`](@ref)
   overriding specific cells' `b_min`/`b_max` on top of `p`'s global values (see
   `cell_gap_clamping.jl`).
 - `cell_N_clamping`: [`NoCellNClamping`](@ref) (default, no-op) or a [`CellNClamping`](@ref)
   overriding specific cells' `N_min`/`N_max` on top of `p`'s global values (see
   `cell_N_clamping.jl`).
+- `cavity_filling`: [`FilledCavities`](@ref) (default, legacy: the gap is always full of water) or
+  [`UnfilledCavities`](@ref) (the gap may be partly empty, with `p_w = 0` there; see
+  `unfilled_cavities.jl`).
 - Observer: [`NoObserver`](@ref) if `tracked_obs` is empty; otherwise `which_observer` must be
   `"IO"` (writes to `path` via `which_file_writer`, one of `"NetCDF"`/`"HDF5"`/`"JLD2"`/`"CSV"`,
   at `tracked_times`) or `"Live"` (keeps `tracked_times` in memory instead of writing to disk).
@@ -257,7 +262,7 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
   initial guess ([`HeadExtrapolation`](@ref); default `1`, linear). `0` starts every solve from the
   previous step's head. Ignored (always `0`) under [`ParabolicHeadScheme`](@ref).
 """
-function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::Vector{String}, mi::AbstractMeltInput, sl::AbstractSlidingLaw; ps = nothing, pps = nothing, which_observer = nothing, which_file_writer = nothing, tracked_times = nothing, path = nothing, k_face_choice = "arithmetic", verbose = false, cell_gap_clamping::AbstractCellGapClamping = NoCellGapClamping(), cell_N_clamping::AbstractCellNClamping = NoCellNClamping(), timestep_scheme::AbstractTimeStepScheme = FixedTimeStep(), diffusion_scheme::AbstractDiffusionScheme = NoDiffusion(), head_extrapolation_order::Int = 1)
+function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::Vector{String}, mi::AbstractMeltInput, sl::AbstractSlidingLaw; ps = nothing, pps = nothing, which_observer = nothing, which_file_writer = nothing, tracked_times = nothing, path = nothing, k_face_choice = nothing, verbose = false, cell_gap_clamping::AbstractCellGapClamping = NoCellGapClamping(), cell_N_clamping::AbstractCellNClamping = NoCellNClamping(), timestep_scheme::AbstractTimeStepScheme = FixedTimeStep(), diffusion_scheme::AbstractDiffusionScheme = NoDiffusion(), head_extrapolation_order::Int = 1, cavity_filling::AbstractCavityFilling = FilledCavities())
 
     # Check that all tracked observables are valid State fields
     for name in tracked_obs
@@ -296,11 +301,15 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
     # factor in creep_length's cutoff branch, see gap_height.jl) is nonzero.
     cls = iszero(p.b_c) ? StandardCreep() : CreepCutoff()
 
-    # K-face averaging scheme setup
+    # K-face averaging scheme setup. Unfilled cavities need the donor-cell (upwind) face conductance, see Upwind
+    # (k_face_scheme.jl): with an average, a nearly empty cell discharges through its neighbour's much larger conductance.
+    k_face_choice === nothing && (k_face_choice = cavity_filling isa UnfilledCavities ? "upwind" : "arithmetic")
     if k_face_choice == "arithmetic"
         kfs = Arithmetic()
     elseif k_face_choice == "harmonic"
         kfs = Harmonic()
+    elseif k_face_choice == "upwind"
+        kfs = Upwind()
     else
         error("Unknown k_face_choice: \"$k_face_choice\" (expected \"arithmetic\" or \"harmonic\")")
     end
@@ -343,6 +352,6 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
     head_extrapolation_order >= 0 || error("head_extrapolation_order must be >= 0 (got $head_extrapolation_order)")
     he = (head_extrapolation_order == 0 || hs isa ParabolicHeadScheme) ? NoHeadExtrapolation() : HeadExtrapolation(grid; order = head_extrapolation_order)
 
-    return Simulation(tsteps, Ref(dt), p, hs, gs, mt, oss, cls, diffusion_scheme, observer, grid, state, mi, kfs, sl, verbose, Ref(zero(dt)), cell_gap_clamping, cell_N_clamping, timestep_scheme, he)
+    return Simulation(tsteps, Ref(dt), p, hs, gs, mt, oss, cls, diffusion_scheme, observer, grid, state, mi, kfs, sl, verbose, Ref(zero(dt)), cell_gap_clamping, cell_N_clamping, timestep_scheme, he, cavity_filling)
 
 end

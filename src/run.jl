@@ -163,7 +163,9 @@ function step!(sim::Simulation)
     prepare_head_solve!(sim)
     step_h!(sim.hs, sim)
     record_head!(sim.he, sim.state, sim.dt[], first(picard_status(sim.hs)))
+    update_b_empty!(sim.state, sim.cf) # from the solved head, before step_b! evolves b
     step_b!(sim)
+    sim.hs isa EllipticHeadScheme && update_b_empty_budget!(sim.state, sim.grid, sim.p, sim.dt[], sim.cf) # empty volume from the water budget, now that the gap is final
 end
 
 """
@@ -189,6 +191,7 @@ function prepare_head_solve!(sim::Simulation)
     s = sim.state
     compute_H!(s)
     compute_po!(s, sim.p)
+    set_cavity_storage!(s, sim.dt[], sim.cf) # 1/dt marks cells that may be partly empty, read by the head rows and compute_pw!
     if sim.p.limit_freeze_on   # freeze-on floor for this step, from the start-of-step gap
         freeze_on_capacity!(s.mdot_min, sim)
         s.mdot_min .*= -sim.p.rho_i
@@ -304,6 +307,8 @@ Freeze-on capacity [m/s of ice] of every `GROUNDED` cell for a host's capacity b
 condition, from the current state (call it before the host's thermodynamic step, i.e. with this
 step's `b` and the last step's `N` and `|u_b|`): the fastest freezing the next gap update can absorb
 without `b` falling below `p.b_min`, see [`freeze_on_capacity_cell`](@ref). Zero off `GROUNDED`.
+Under [`UnfilledCavities`](@ref) (`water_limited = true`, the default; `false` restores the gap-room limit alone) the capacity is also capped by the water actually present, `(rho_w/rho_i)*(b - b_empty)/dt`: freezing
+consumes water, which an empty cavity does not have. Without the cap a dry cell can freeze water that is not there (about 3 times the melt supply on Greenland 16 km).
 Freezing closes the gap by the ice thickness and expels the excess water into the flow, so the limit
 is gap room, not water mass, and the result is local (no inflow term).
 
@@ -322,7 +327,7 @@ is a stock, available once per host step, so spreading it over Shakti's short st
 evaluated at the current gap rather than at `b_min`: over many Shakti steps creep keeps closing the
 gap at its actual size, and evaluating it at `b_min` (right for one implicit step) overstated `C`.
 """
-function freeze_on_capacity!(C, sim::Simulation; dt = sim.dt[])
+function freeze_on_capacity!(C, sim::Simulation; dt = sim.dt[], water_limited = true)
     s, p = sim.state, sim.p
     diffusion = sim.ds isa WithDiffusion
     # Over a host step longer than Shakti's own, creep and sliding act on the current gap for most
@@ -332,7 +337,8 @@ function freeze_on_capacity!(C, sim::Simulation; dt = sim.dt[])
                                   sim.gs isa FullyImplicitGapScheme ? (true, true) :
                                   sim.gs isa ImplicitGapScheme ? (false, true) : (false, false)
     @parallel freeze_on_capacity_kernel!(C, s.mask, s.b, s.beta, s.lc, s.abs_ub, s.A_visc, s.N, p.n_minus_1_exp, dt,
-                                         p.b_min, p.br, p.lr, sim.cls, p.b_c, beta_at_bmin, creep_at_bmin, diffusion)
+                                         p.b_min, p.br, p.lr, sim.cls, p.b_c, beta_at_bmin, creep_at_bmin, diffusion,
+                                         s.b_empty, p.rho_w / p.rho_i, sim.cf isa UnfilledCavities && water_limited)
     return C
 end
 
@@ -399,6 +405,7 @@ function step_b!(sim::Simulation)
     s, p = sim.state, sim.p
 
     compute_b!(sim)          # updates b based on the new state variables (GROUNDED cells only)
+    clamp_b_empty!(s, sim.cf) # the empty part cannot exceed the (just updated) gap
     apply_cell_gap_clamping!(s, sim.cgc) # optional per-cell b_min/b_max override on top of p's global clamp -- no-op under the default NoCellGapClamping()
 
     compute_beta!(s, p, sim.oss) # opening-by-sliding parameter depends on the new b

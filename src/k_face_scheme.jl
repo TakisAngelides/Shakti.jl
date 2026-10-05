@@ -42,6 +42,29 @@ Scalar form of [`compute_K_face`](@ref): the arithmetic or harmonic mean of two 
 """
 $(TYPEDSIGNATURES)
 
+Upwind (donor-cell) face conductance: the value of the cell the water flows OUT of, i.e. of the
+higher-head cell (the smaller one when the head difference is zero). A cell that is nearly empty then
+cannot discharge through the (much larger) conductance of the cell it flows into, which an average
+would allow: outflow is limited by the water depth of the donor, as for free-surface flow. Needs the
+head difference across the face, `dh = h[i] - h[i-1]`; the K-face schemes that do not use it ignore it.
+Evaluated from the previous Picard iterate's head (like every other coefficient); a face coefficient is
+still one number per face, so the assembled matrix stays symmetric.
+"""
+struct Upwind <: AbstractKFaceScheme end
+
+@inline face_mean(::Upwind, a, b) = min(a, b)
+"""
+$(TYPEDSIGNATURES)
+
+[`face_mean`](@ref) with the head difference `dh = h_b - h_a` across the face available (`a` the cell
+at the low index, `b` at the high index): only [`Upwind`](@ref) uses it.
+"""
+@inline face_mean(kfs::AbstractKFaceScheme, a, b, dh) = face_mean(kfs, a, b)
+@inline face_mean(::Upwind, a, b, dh) = dh > 0 ? b : (dh < 0 ? a : min(a, b))
+
+"""
+$(TYPEDSIGNATURES)
+
 `true` for the two Dirichlet drainage-boundary mask values (`OCEAN`/`LAND`).
 """
 @inline is_dirichlet(m) = (m == OCEAN) | (m == LAND)
@@ -60,10 +83,10 @@ therefore exactly what the linear system assembles:
 - anything else (a face touching `OTHER_BASIN`/`FROZEN_BED`, or between two non-solved cells): `0`,
   a zero-flux face.
 """
-@inline function face_conductance(kfs::AbstractKFaceScheme, Ka, ma, Kb, mb)
+@inline function face_conductance(kfs::AbstractKFaceScheme, Ka, ma, Kb, mb, dh = zero(Ka))
     ga, gb = ma == GROUNDED, mb == GROUNDED
     if ga & gb
-        return face_mean(kfs, Ka, Kb)
+        return face_mean(kfs, Ka, Kb, dh)
     elseif ga & is_dirichlet(mb)
         return Ka
     elseif gb & is_dirichlet(ma)

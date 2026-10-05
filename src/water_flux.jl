@@ -269,7 +269,7 @@ end
 @parallel_indices (ix, iy) function compute_face_flux_kernel!(K_x, K_y, q_x, q_y, Re_x, Re_y, b, mask, dhdx, dhdy, valid_x, valid_y, c0, nu, omega, kfs::AbstractKFaceScheme)
     nx, ny = size(b, 1), size(b, 2)
     if ix <= size(K_x, 1) && iy <= size(K_x, 2)
-        K0 = (ix > 1 && ix <= nx) ? face_conductance(kfs, c0 * b[ix-1, iy]^3, mask[ix-1, iy], c0 * b[ix, iy]^3, mask[ix, iy]) * valid_x[ix, iy] : zero(c0)
+        K0 = (ix > 1 && ix <= nx) ? face_conductance(kfs, c0 * b[ix-1, iy]^3, mask[ix-1, iy], c0 * b[ix, iy]^3, mask[ix, iy], dhdx[ix, iy]) * valid_x[ix, iy] : zero(c0)
         D = K0 * abs(dhdx[ix, iy]) / nu
         Re = 2 * D / (1 + sqrt(1 + 4 * omega * D))
         Kf = K0 / (1 + omega * Re)
@@ -278,7 +278,7 @@ end
         q_x[ix, iy] = -Kf * dhdx[ix, iy]
     end
     if ix <= size(K_y, 1) && iy <= size(K_y, 2)
-        K0 = (iy > 1 && iy <= ny) ? face_conductance(kfs, c0 * b[ix, iy-1]^3, mask[ix, iy-1], c0 * b[ix, iy]^3, mask[ix, iy]) * valid_y[ix, iy] : zero(c0)
+        K0 = (iy > 1 && iy <= ny) ? face_conductance(kfs, c0 * b[ix, iy-1]^3, mask[ix, iy-1], c0 * b[ix, iy]^3, mask[ix, iy], dhdy[ix, iy]) * valid_y[ix, iy] : zero(c0)
         D = K0 * abs(dhdy[ix, iy]) / nu
         Re = 2 * D / (1 + sqrt(1 + 4 * omega * D))
         Kf = K0 / (1 + omega * Re)
@@ -293,7 +293,8 @@ end
 $(TYPEDSIGNATURES)
 
 Updates the face transmissivities `s.K_x`/`s.K_y`, fluxes `s.q_x`/`s.q_y` and Reynolds numbers
-`s.Re_x`/`s.Re_y` together, lag-free, from the current `s.b`/`s.dhdx`/`s.dhdy` -- the version
+`s.Re_x`/`s.Re_y` together, lag-free, from the current `s.b_w` (the water depth, `s.b` unless cavities are
+unfilled, see [`compute_b_w!`](@ref))/`s.dhdx`/`s.dhdy` -- the version
 used in the Picard loop ([`refresh_head_dependents!`](@ref)).
 
 # Notes
@@ -307,4 +308,4 @@ Dirichlet cell's placeholder `b = 0` would cut the outlet flux by a factor of 8)
 `Re = 2*D / (1 + sqrt(1 + 4*omega*D))` (see [`compute_q_and_Re_x!`](@ref)).
 """
 compute_face_flux!(s::State, p::ModelParameters, kfs::AbstractKFaceScheme = Arithmetic()) =
-    (@parallel compute_face_flux_kernel!(s.K_x, s.K_y, s.q_x, s.q_y, s.Re_x, s.Re_y, s.b, s.mask, s.dhdx, s.dhdy, s.valid_x, s.valid_y, p.g / (12 * p.nu), p.nu, p.omega, kfs); s)
+    (compute_b_w!(s, p); @parallel compute_face_flux_kernel!(s.K_x, s.K_y, s.q_x, s.q_y, s.Re_x, s.Re_y, s.b_w, s.mask, s.dhdx, s.dhdy, s.valid_x, s.valid_y, p.g / (12 * p.nu), p.nu, p.omega, kfs); s)

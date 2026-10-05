@@ -451,7 +451,11 @@ limit), creep with `C <= 0` is explicit (`C*lc`), and opening by sliding is impl
     return max(zero(b), (b - b_min) / dt + sliding - creep)
 end
 
-@parallel_indices (ix, iy) function freeze_on_capacity_kernel!(Cap, mask, b, beta, lc, abs_ub, A_visc, N, n_minus_1, dt, b_min, br, lr, cls::AbstractCreepLengthScheme, b_c, beta_at_bmin, creep_at_bmin, diffusion)
+# Freezing turns water into ice: at rate `f` (ice thickness per time) it consumes `f*rho_i/rho_w` of water per
+# bed area, so a cell holding little water (a nearly empty cavity, see UnfilledCavities) cannot take more
+# than its water stock `W = b - b_empty` per host step: f <= (rho_w/rho_i)*W/dt. Only applied when
+# `water_limited` (unfilled cavities on); with a water-filled gap (W = b) the gap room above is the limit.
+@parallel_indices (ix, iy) function freeze_on_capacity_kernel!(Cap, mask, b, beta, lc, abs_ub, A_visc, N, n_minus_1, dt, b_min, br, lr, cls::AbstractCreepLengthScheme, b_c, beta_at_bmin, creep_at_bmin, diffusion, b_empty, water_ratio, water_limited)
     if ix <= size(Cap, 1) && iy <= size(Cap, 2)
         if mask[ix, iy] == GROUNDED
             bb = b[ix, iy]
@@ -460,6 +464,9 @@ end
                 freeze_on_capacity_cell_diffusion(bb, beta[ix, iy], abs_ub[ix, iy], Cn, lc[ix, iy], dt, b_min, br, lr) :
                 freeze_on_capacity_cell(bb, abs_ub[ix, iy], Cn, dt, b_min, br, lr, cls, b_c,
                                         beta_at_bmin ? b_min : bb, creep_at_bmin ? b_min : bb)
+            if water_limited
+                Cap[ix, iy] = min(Cap[ix, iy], max(zero(bb), bb - b_empty[ix, iy]) * water_ratio / dt)
+            end
         else
             Cap[ix, iy] = zero(eltype(Cap))
         end
