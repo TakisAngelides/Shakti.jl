@@ -6,29 +6,57 @@ time -- multiple dispatch on the concrete subtype picks a fixed field ([`Constan
 a time-varying seasonal cycle ([`SeasonalMeltInput`](@ref)), or a spatially-localized,
 time-ramped point source ([`GaussianMoulinMeltInput`](@ref)). Every subtype implements
 [`update_ieb!`](@ref) (called once per real timestep, outside the Picard loop, so `s.ieb` stays
-fixed across every Picard iteration within that timestep). `s.ieb` itself is seeded directly (`s.ieb
-.= ieb`) during [`set_initial_conditions!`](@ref) and read directly (`ieb[i, j]`) inside
-`linear_solver.jl`'s `@parallel` assembly kernels -- neither of those needs to dispatch on the
-concrete `AbstractMeltInput` subtype.
+fixed across every Picard iteration within that timestep).
+
+`s.ieb` is the sum of two parts, formed by [`combine_ieb!`](@ref): `s.ieb_own`, Shakti's own input
+(seeded by [`set_initial_conditions!`](@ref) and, for the time-varying subtypes, rewritten by
+[`update_ieb!`](@ref)), and `s.ieb_external`, water supplied by a coupled model (e.g. Yelmo's
+englacial drainage `melt_int`), set with [`set_ieb_external!`](@ref) and zero when Shakti runs
+standalone. `s.ieb` is read directly (`ieb[i, j]`) inside `linear_solver.jl`'s `@parallel` assembly
+kernels -- neither of those needs to dispatch on the concrete `AbstractMeltInput` subtype.
 """
 abstract type AbstractMeltInput end
 
 """
 $(TYPEDSIGNATURES)
 
-A time-independent `ieb` field: whatever was seeded into `state.ieb` during
-[`set_initial_conditions!`](@ref) is used unchanged for the whole run ([`update_ieb!`](@ref) is a
-no-op).
+Forms the englacial-to-bed input the solve uses, `state.ieb = state.ieb_own + state.ieb_external`:
+Shakti's own input plus the water a coupled model supplies (zero when standalone).
+"""
+@inline function combine_ieb!(state::State)
+    state.ieb .= state.ieb_own .+ state.ieb_external
+    return state
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Sets the part of the englacial-to-bed input supplied by a coupled model [m/s water], e.g. Yelmo's
+englacial drainage `melt_int`, and re-forms `state.ieb`. Call it before each [`step!`](@ref) whose
+input changed; it is added to Shakti's own input ([`AbstractMeltInput`](@ref)) rather than
+replacing it. `ieb_external` can be a CPU `Array`: it is copied to the state's backend.
+"""
+function set_ieb_external!(state::State, ieb_external)
+    copyto!(state.ieb_external, Data.Array(ieb_external))
+    return combine_ieb!(state)
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+A time-independent own input: whatever was seeded into `state.ieb_own` during
+[`set_initial_conditions!`](@ref) is used unchanged for the whole run. [`update_ieb!`](@ref) only
+re-forms `ieb = ieb_own + ieb_external`, so a coupled model's `ieb_external` is picked up each step.
 """
 struct ConstantMeltInput <: AbstractMeltInput end
 
 """
 $(TYPEDSIGNATURES)
 
-No-op: `ieb` never changes after [`set_initial_conditions!`](@ref) under
-[`ConstantMeltInput`](@ref), so there's nothing to do per timestep.
+`ieb_own` never changes after [`set_initial_conditions!`](@ref) under [`ConstantMeltInput`](@ref);
+only re-forms `ieb = ieb_own + ieb_external` (identical to `ieb_own` when `ieb_external` is zero).
 """
-@inline update_ieb!(::ConstantMeltInput, state::State, t) = state
+@inline update_ieb!(::ConstantMeltInput, state::State, t) = combine_ieb!(state)
 
 """
 $(TYPEDSIGNATURES)
@@ -75,7 +103,7 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Updates `state.ieb` (uniformly over the whole domain) for the current simulation time `t`
+Updates `state.ieb_own` (uniformly over the whole domain) for the current simulation time `t`
 (elapsed seconds, see `run.jl`'s `total_time`), following `mi`'s cosine-shaped seasonal cycle.
 
 # Notes
@@ -90,8 +118,8 @@ for the whole run. The `t` input is elapsed simulation time in seconds.
     i_ma = (mi.t_start <= yf <= mi.t_start + mi.period) ? # if we are within the window of cosine input
            (mi.offset - mi.amplitude * cos(mi.omega * (yf - mi.t_start))) : # give this cosine input
             mi.i_min # otherwise give this minimum background input only
-    state.ieb .= i_ma / mi.seconds_per_year # uniform over the whole domain; m a^-1 -> m s^-1
-    return state
+    state.ieb_own .= i_ma / mi.seconds_per_year # uniform over the whole domain; m a^-1 -> m s^-1
+    return combine_ieb!(state)
 end
 
 """
@@ -139,12 +167,12 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Updates `state.ieb` to `mi.shape * Q_max * min(t/ramp_duration, 1)` -- the fixed spatial Gaussian
+Updates `state.ieb_own` to `mi.shape * Q_max * min(t/ramp_duration, 1)` -- the fixed spatial Gaussian
 footprint scaled by the current point on the linear ramp (elapsed simulation time `t`, seconds).
 """
 @inline function update_ieb!(mi::GaussianMoulinMeltInput, state::State, t)
     F = eltype(state.ieb)
     ramp = min(t / mi.ramp_duration, one(F))
-    state.ieb .= mi.shape .* mi.Q_max .* ramp
-    return state
+    state.ieb_own .= mi.shape .* mi.Q_max .* ramp
+    return combine_ieb!(state)
 end

@@ -131,7 +131,7 @@ export GROUNDED, OCEAN, LAND, OTHER_BASIN, FROZEN_BED
 export compute_face_masks!
 
 # melt_input.jl
-export AbstractMeltInput, ConstantMeltInput, SeasonalMeltInput, GaussianMoulinMeltInput, update_ieb!
+export AbstractMeltInput, ConstantMeltInput, SeasonalMeltInput, GaussianMoulinMeltInput, update_ieb!, combine_ieb!, set_ieb_external!
 
 # k_face_scheme.jl
 export AbstractKFaceScheme, Arithmetic, Harmonic, Upwind, compute_K_face, face_conductance

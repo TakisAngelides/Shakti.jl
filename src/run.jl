@@ -159,7 +159,7 @@ gap height ([`step_b!`](@ref)).
 """
 function step!(sim::Simulation)
     update_dt!(sim) # no-op under FixedTimeStep; must run before step_h!/step_b! since both read sim.dt[]
-    update_ieb!(sim.mi, sim.state, sim.total_time[]) # no-op for ConstantMeltInput; rescales state.ieb for e.g. SeasonalMeltInput -- done once per timestep, before step_h!, since ieb only feeds the head equation (step_b! never reads it)
+    update_ieb!(sim.mi, sim.state, sim.total_time[]) # writes Shakti's own input (state.ieb_own) for e.g. SeasonalMeltInput, then state.ieb = ieb_own + ieb_external -- done once per timestep, before step_h!, since ieb only feeds the head equation (step_b! never reads it)
     prepare_head_solve!(sim)
     step_h!(sim.hs, sim)
     record_head!(sim.he, sim.state, sim.dt[], first(picard_status(sim.hs)))

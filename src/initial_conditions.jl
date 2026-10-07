@@ -79,7 +79,8 @@ function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, sl::Abst
     # cut separately (valid_x/valid_y, compute_face_masks!).
     compute_abs_ub!(s) # this is the magnitude of the basal velocity vector
 
-    s.ieb .= ieb # englacial to subglacial water input i₍e → b₎, seeded as-is; per-timestep evolution (if any) is handled by update_ieb!
+    s.ieb_own .= ieb # Shakti's own englacial-to-bed input i₍e → b₎, seeded as-is; per-timestep evolution (if any) is handled by update_ieb!
+    combine_ieb!(s)  # ieb = ieb_own + ieb_external (the coupled model's part, zero when standalone)
 
     initialize_taub!(sl, s, taub_x, taub_y) # basal shear stress, the `sl` determines the sliding law
 

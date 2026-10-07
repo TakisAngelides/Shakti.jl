@@ -22,4 +22,5 @@ using CSV
     include("unfilled_cavities_test.jl")
     include("diffusion_test.jl")
     include("consistency_test.jl")
+    include("ieb_external_test.jl")
 end

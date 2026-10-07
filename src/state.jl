@@ -38,7 +38,9 @@ struct State{A <: AbstractArray}
     zb::A         # bedrock elevation
     zs::A         # ice surface elevation
     H::A          # ice thickness
-    ieb::A        # input from moulins
+    ieb::A        # englacial-to-bed water input i_e->b [m/s] used by the solve: ieb_own + ieb_external (combine_ieb!)
+    ieb_own::A    # Shakti's own part of ieb: seeded by set_initial_conditions! (ConstantMeltInput) or written by update_ieb! (SeasonalMeltInput, GaussianMoulinMeltInput)
+    ieb_external::A # part of ieb supplied by a coupled model (e.g. Yelmo's englacial drainage), set with set_ieb_external!; zero when Shakti runs standalone
     lambda::A     # ratio of controlling bedrock bump wavelength to maximum slope
     A_visc::A     # Glen's flow law rate factor
     N::A          # effective pressure
@@ -123,6 +125,8 @@ function State(g::Grid)
     zs        = initialize_center_field(g)
     H         = initialize_center_field(g)
     ieb       = initialize_center_field(g)
+    ieb_own   = initialize_center_field(g)
+    ieb_external = initialize_center_field(g)
     lambda    = initialize_center_field(g)
     A_visc    = initialize_center_field(g)
     N         = initialize_center_field(g)
@@ -153,7 +157,7 @@ function State(g::Grid)
     valid_y = @fill(1.0, g.nx, g.ny+1) # float 1.0 = valid; recomputed in compute_face_masks!
 
     return State(
-        h, pw, po, b, b_w, w_old, stor, b_empty, beta, lc, abs_ub, mdot, mdot_min, Q_b, Q_diss, Q_sens, Re, K, G, q_T, zb, zs, H, ieb, lambda, A_visc, N, mask,
+        h, pw, po, b, b_w, w_old, stor, b_empty, beta, lc, abs_ub, mdot, mdot_min, Q_b, Q_diss, Q_sens, Re, K, G, q_T, zb, zs, H, ieb, ieb_own, ieb_external, lambda, A_visc, N, mask,
         dhdx, q_x, Re_x, b_x, ub_x, taub_x, dpwdx, D_x, K_x, valid_x,
         dhdy, q_y, Re_y, b_y, ub_y, taub_y, dpwdy, D_y, K_y, valid_y,
     )
