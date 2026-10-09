@@ -27,7 +27,7 @@ using NetCDF
 using HDF5
 using JLD2
 using CSV
-using CairoMakie
+# CairoMakie is a weak dependency: animation.jl declares make_mp4_mid/make_mp4_2d, and ext/ShaktiCairoMakieExt.jl implements them once the user loads CairoMakie
 using DocStringExtensions
 
 """
@@ -38,6 +38,17 @@ Which array/compute backend Shakti runs on: `"Threads"` (CPU), `"CUDA"`, or `"Me
 """
 const backend = @load_preference("backend", "Threads")
 const floattype_str = @load_preference("floattype", "Float64")
+
+"""
+Whether the CUDA/CUDSS stack is loaded and `CUDSSDirectSolver` is available. Always true under the
+`"CUDA"` backend; under `"Threads"` it is controlled by the `Preferences` key `cudss` (default `true`, so
+existing scripts that use `CUDSSDirectSolver` keep working). Loading CUDA.jl/CUDSS.jl costs minutes on a cold
+shared filesystem and only `CUDSSDirectSolver` needs them, so CPU-only workflows should switch it off:
+`using Preferences; set_preferences!(Shakti, "cudss" => false)` (or a `[Shakti] cudss = false` entry in the
+`LocalPreferences.toml` of the environment) before `using Shakti`. Heavy plotting (CairoMakie) is a weak
+dependency: `using CairoMakie` activates the extension providing `make_mp4_mid`/`make_mp4_2d`.
+"""
+const use_cudss = backend == "CUDA" || (backend == "Threads" && @load_preference("cudss", true))
 
 """
 The floating-point element type every `State`/`Grid`/`ModelParameters` field is stored as
@@ -72,7 +83,7 @@ end
 # want. Loading CUDA.jl without a GPU present is safe (it degrades gracefully -- only *using* a
 # GPU function would error), already confirmed working this same session on a driver-less login
 # node.
-@static if backend == "Threads"
+@static if backend == "Threads" && use_cudss
     using CUDA
     using CUDA.CUSPARSE
     using CUDSS
@@ -89,8 +100,10 @@ include("melt_input.jl")
 include("k_face_scheme.jl")
 include("preconditioner.jl")
 include("linear_solver.jl")
-@static if backend == "Threads" || backend == "CUDA"
-    include("gpu_direct_solver.jl") # CUDSSDirectSolver -- requires CUDA/CUDSS to be loaded, true under either of these two backends (see above); NOT available under Metal
+@static if use_cudss
+    include("gpu_direct_solver.jl") # CUDSSDirectSolver -- requires CUDA/CUDSS to be loaded (CUDA backend, or Threads backend with the `cudss` preference); NOT available under Metal
+else
+    CUDSSDirectSolver(args...; kwargs...) = error("CUDSSDirectSolver needs CUDA.jl/CUDSS.jl, which Shakti only loads when the `cudss` preference is true (or backend = \"CUDA\"): run `using Preferences, Shakti; set_preferences!(Shakti, \"cudss\" => true)` and restart Julia.")
 end
 include("observer.jl")
 include("sliding_law.jl")
@@ -144,7 +157,7 @@ export AbstractKFaceScheme, Arithmetic, Harmonic, Upwind, compute_K_face, face_c
 export AbstractLinearSolver, AbstractDirectSolver, AbstractIterativeSolver
 export AbstractLinearSystem, SparseAssembledLinearSystem, MatrixFreeLinearSystem
 export CholeskyDirectSolver, CGIterativeSolver
-@static if backend == "Threads" || backend == "CUDA"
+@static if backend != "Metal"
     export CUDSSDirectSolver
 end
 export solve_elliptic_linear_system!, solve_parabolic_linear_system!
