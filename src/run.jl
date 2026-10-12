@@ -177,7 +177,9 @@ has just been evolved by the previous [`step_b!`](@ref), and an ice-flow model m
 
 1. `H`/`po` from the current `b` ([`compute_H!`](@ref)/[`compute_po!`](@ref); `H = zs - (zb + b)`),
    so a large gap (a wide channel at fine resolution) lowers the overburden it sits under. Two
-   elementwise kernels, negligible next to one linear solve.
+   elementwise kernels, negligible next to one linear solve. Under [`SheetTopPotential`](@ref) also
+   the gap jumps across faces ([`update_gap_jumps!`](@ref)) from the same `b`, so that the flux is
+   driven by `h + b` throughout the step.
 2. The initial head guess ([`extrapolate_head!`](@ref), per `sim.he`; a no-op under
    [`NoHeadExtrapolation`](@ref) or until two converged heads exist).
 3. Every field derived from `h` and `b` ([`refresh_head_dependents!`](@ref): `pw`, `N`, face
@@ -192,6 +194,7 @@ function prepare_head_solve!(sim::Simulation)
     compute_H!(s)
     compute_po!(s, sim.p)
     set_cavity_storage!(s, sim.dt[], sim.cf) # 1/dt marks cells that may be partly empty, read by the head rows and compute_pw!
+    update_gap_jumps!(s, sim.hp) # SheetTopPotential: gap jumps across faces from the start-of-step b, added to the driving gradient (no-op under BedPotential)
     if sim.p.limit_freeze_on   # freeze-on floor for this step, from the start-of-step gap
         freeze_on_capacity!(s.mdot_min, sim)
         s.mdot_min .*= -sim.p.rho_i

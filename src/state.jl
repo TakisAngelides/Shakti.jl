@@ -27,7 +27,7 @@ struct State{A <: AbstractArray}
     mdot::A       # melt rate
     mdot_min::A   # floor on mdot this step, -rho_i*C (freeze-on capacity); applied when p.limit_freeze_on
     Q_b::A        # frictional (sliding) heat |u_b . taub| [W/m^2], written by compute_mdot! (0 when that term is off)
-    Q_diss::A     # heat dissipated by water flowing down the head gradient rho_w*g*|q . grad(h)| [W/m^2] (0 when off)
+    Q_diss::A     # heat dissipated by water flowing down the driving head gradient rho_w*g*|q . grad(h)| [W/m^2] (grad(h + b) under SheetTopPotential; 0 when off)
     Q_sens::A     # sensible heat ct*cw*rho_w*(q . grad(pw)) [W/m^2] (0 when off)
     Re::A         # Reynolds number
     K::A          # hydraulic conductivity
@@ -47,7 +47,8 @@ struct State{A <: AbstractArray}
     mask::A       # 0 grounded, 1 ocean, 2 land, 3 other grounded-ice basin (static per run)
 
     # XFace fields
-    dhdx::A       # gradient of hydraulic head in x direction
+    dhdx::A       # gradient of the head that drives the flux in x direction: of h, or of h + b under SheetTopPotential (hydraulic_potential.jl)
+    db_x::A       # jump of the gap height across the x-face, b[i] - b[i-1] [m], between two GROUNDED cells under SheetTopPotential; zero otherwise
     q_x::A        # water flux in x direction
     Re_x::A       # Reynolds number in x direction
     b_x::A        # water depth in x direction
@@ -59,7 +60,8 @@ struct State{A <: AbstractArray}
     valid_x::A    # 1.0 where the x-face does NOT touch an OTHER_BASIN or FROZEN_BED cell, else 0.0
 
     # YFace fields
-    dhdy::A       # gradient of hydraulic head in y direction
+    dhdy::A       # gradient of the head that drives the flux in y direction, the y-face counterpart of dhdx
+    db_y::A       # jump of the gap height across the y-face, the y-face counterpart of db_x
     q_y::A        # water flux in y direction
     Re_y::A       # Reynolds number in y direction
     b_y::A        # water depth in y direction
@@ -134,6 +136,7 @@ function State(g::Grid)
 
     # XFace fields
     dhdx    = initialize_xface_field(g)
+    db_x    = initialize_xface_field(g)
     q_x     = initialize_xface_field(g)
     Re_x    = initialize_xface_field(g)
     b_x     = initialize_xface_field(g)
@@ -146,6 +149,7 @@ function State(g::Grid)
 
     # YFace fields
     dhdy    = initialize_yface_field(g)
+    db_y    = initialize_yface_field(g)
     q_y     = initialize_yface_field(g)
     Re_y    = initialize_yface_field(g)
     b_y     = initialize_yface_field(g)
@@ -158,8 +162,8 @@ function State(g::Grid)
 
     return State(
         h, pw, po, b, b_w, w_old, stor, b_empty, beta, lc, abs_ub, mdot, mdot_min, Q_b, Q_diss, Q_sens, Re, K, G, q_T, zb, zs, H, ieb, ieb_own, ieb_external, lambda, A_visc, N, mask,
-        dhdx, q_x, Re_x, b_x, ub_x, taub_x, dpwdx, D_x, K_x, valid_x,
-        dhdy, q_y, Re_y, b_y, ub_y, taub_y, dpwdy, D_y, K_y, valid_y,
+        dhdx, db_x, q_x, Re_x, b_x, ub_x, taub_x, dpwdx, D_x, K_x, valid_x,
+        dhdy, db_y, q_y, Re_y, b_y, ub_y, taub_y, dpwdy, D_y, K_y, valid_y,
     )
 
 end

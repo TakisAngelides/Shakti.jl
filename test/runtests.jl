@@ -20,6 +20,7 @@ using CSV
     include("frozen_bed_test.jl")
     include("gap_height_test.jl")
     include("unfilled_cavities_test.jl")
+    include("hydraulic_potential_test.jl")
     include("diffusion_test.jl")
     include("consistency_test.jl")
     include("ieb_external_test.jl")

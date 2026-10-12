@@ -31,9 +31,12 @@ struct FilledCavities <: AbstractCavityFilling end
 """
 $(TYPEDSIGNATURES)
 
-The gap may be partly empty (free-surface regime, `p_w = 0`), see this file's header. Work in
-progress: so far only `State.b_empty` is maintained, from the solved head, and nothing in the head
-or gap equations reads it yet.
+The gap may be partly empty (free-surface regime, `p_w = 0`), see this file's header. A `GROUNDED`
+cell whose head falls below the bed takes the unfilled head row ([`cavity_head_terms`](@ref),
+`linear_solver.jl`): `N = po`, and the empty depth `zb - h` is the cell's storage. `State.b_empty`
+records the empty depth (from the water budget after the gap update, [`update_b_empty_budget!`](@ref)),
+the face conductances use the water depth `b - b_empty` ([`compute_b_w!`](@ref)), and `p_w` is
+floored at 0.
 """
 struct UnfilledCavities <: AbstractCavityFilling end
 
