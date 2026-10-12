@@ -189,7 +189,7 @@ and every "which scheme/law" choice (head, gap, melt-rate terms, K-face, melt-in
 bundled together with the observer that records output. Build one with the keyword constructor
 below (not this positional one directly), then call [`run!`](@ref).
 """
-struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHeadScheme, GS <: AbstractGapScheme, MT <: MeltTerms, OSS <: AbstractOpenBySlidingScheme, CLS <: AbstractCreepLengthScheme, DS <: AbstractDiffusionScheme, O <: AbstractObserver, G <: Grid, S <: State, MI <: AbstractMeltInput, KFS <: AbstractKFaceScheme, SL <: AbstractSlidingLaw, CGC <: AbstractCellGapClamping, CNC <: AbstractCellNClamping, TS <: AbstractTimeStepScheme, HE <: AbstractHeadExtrapolation, CF <: AbstractCavityFilling, HP <: AbstractHydraulicPotential, UP <: AbstractIceUplift}
+struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHeadScheme, GS <: AbstractGapScheme, MT <: MeltTerms, OSS <: AbstractOpenBySlidingScheme, CLS <: AbstractCreepLengthScheme, DS <: AbstractDiffusionScheme, O <: AbstractObserver, G <: Grid, S <: State, MI <: AbstractMeltInput, KFS <: AbstractKFaceScheme, SL <: AbstractSlidingLaw, CGC <: AbstractCellGapClamping, CNC <: AbstractCellNClamping, TS <: AbstractTimeStepScheme, HE <: AbstractHeadExtrapolation, CF <: AbstractCavityFilling, HP <: AbstractHydraulicPotential, UP <: AbstractIceUplift, GCP <: AbstractGapCoupling}
     tsteps::Int
     dt::Base.RefValue{F} # a Ref so AdaptiveTimeStep can update it in place each step, same reason total_time is a Ref despite Simulation itself being immutable
     p::P
@@ -214,6 +214,7 @@ struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHea
     cf::CF # AbstractCavityFilling: FilledCavities() (legacy, gap always water-filled) by default, see unfilled_cavities.jl
     hp::HP # AbstractHydraulicPotential: BedPotential() (legacy, q = -K grad(h)) by default, see hydraulic_potential.jl
     up::UP # AbstractIceUplift: NoUplift() (legacy, pw may exceed po) by default, see ice_uplift.jl
+    gcp::GCP # AbstractGapCoupling: ExplicitGapCoupling() (legacy) by default, see linear_solver.jl
 end
 
 """
@@ -241,11 +242,13 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
   `ModelParameters` field (there's no single physical parameter that makes the diffusion term
   identically zero the way `p.br`/`p.b_c` do): pass `WithDiffusion(ls)` explicitly, with `ls` a
   second, independent [`AbstractLinearSolver`](@ref) instance for `b`'s own diffusion operator.
-- `k_face_choice`: `"arithmetic"`, `"harmonic"` or `"upwind"` (see [`AbstractKFaceScheme`](@ref)); by default
-  `"arithmetic"`, or `"upwind"` under [`UnfilledCavities`](@ref) or [`IceUplift`](@ref): where the water depth
-  is free (a free surface or an uplift layer) the flux is a kinematic wave in it, `q ~ K(W)*grad(zb)`, with `W`
-  lagged to the start of the step, and a face mean is then unstable (explicit central advection) at any `dt`;
-  upwind is stable for `dt < dx*W/(3|q|)`.
+- `k_face_choice`: `"arithmetic"`, `"harmonic"`, `"upwind"` or `"implicit_upwind"` (see [`AbstractKFaceScheme`](@ref));
+  by default `"arithmetic"`, or `"upwind"` under [`UnfilledCavities`](@ref) or [`IceUplift`](@ref): where the water
+  depth is free (a free surface or an uplift layer) the flux is a kinematic wave in it, `q ~ K(W)*grad(zb)`, with
+  `W` lagged to the start of the step, and a face mean is then unstable (explicit central advection) at any `dt`;
+  upwind is stable for `dt < dx*W/(3|q|)`. `"implicit_upwind"` ([`ImplicitUpwind`](@ref)) takes `W` at the end of
+  the step and is stable at any `dt`; it needs [`LUDirectSolver`](@ref) or `CUDSSDirectSolver(grid; structure =
+  :general)` in `ps`/`pps`.
 - `cell_gap_clamping`: [`NoCellGapClamping`](@ref) (default, no-op) or a [`CellGapClamping`](@ref)
   overriding specific cells' `b_min`/`b_max` on top of `p`'s global values (see
   `cell_gap_clamping.jl`).
@@ -266,6 +269,12 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
 - Observer: [`NoObserver`](@ref) if `tracked_obs` is empty; otherwise `which_observer` must be
   `"IO"` (writes to `path` via `which_file_writer`, one of `"NetCDF"`/`"HDF5"`/`"JLD2"`/`"CSV"`,
   at `tracked_times`) or `"Live"` (keeps `tracked_times` in memory instead of writing to disk).
+- `gap_coupling`: [`ExplicitGapCoupling`](@ref) (legacy: the head rows assume the gap changes by `dt*rate(N, b_old)`) or
+  [`ConsistentGapCoupling`](@ref) (they assume the change the gap scheme itself makes, so the head equation and the gap update
+  store the same water at any `dt`; needed with the implicit and fully implicit gap schemes when `dt*A*|N|^(n-1)*N` is not
+  small, and with [`UnfilledCavities`](@ref)/[`IceUplift`](@ref) at large `dt`). Default: `ConsistentGapCoupling()` with
+  `k_face_choice = "implicit_upwind"` (whose conductance then takes the end-of-step gap as well, so the head-gap step is
+  implicit throughout), `ExplicitGapCoupling()` otherwise.
 - `timestep_scheme`: [`FixedTimeStep`](@ref) (default, `dt` never changes) or
   [`AdaptiveTimeStep`](@ref) (`dt` recomputed every step from `C+gamma`). With the latter, `dt` is
   still the *first* step's value (until the first recomputation) and `tsteps` should be sized from
@@ -275,7 +284,7 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
   initial guess ([`HeadExtrapolation`](@ref); default `1`, linear). `0` starts every solve from the
   previous step's head. Ignored (always `0`) under [`ParabolicHeadScheme`](@ref).
 """
-function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::Vector{String}, mi::AbstractMeltInput, sl::AbstractSlidingLaw; ps = nothing, pps = nothing, which_observer = nothing, which_file_writer = nothing, tracked_times = nothing, path = nothing, k_face_choice = nothing, verbose = false, cell_gap_clamping::AbstractCellGapClamping = NoCellGapClamping(), cell_N_clamping::AbstractCellNClamping = NoCellNClamping(), timestep_scheme::AbstractTimeStepScheme = FixedTimeStep(), diffusion_scheme::AbstractDiffusionScheme = NoDiffusion(), head_extrapolation_order::Int = 1, cavity_filling::AbstractCavityFilling = FilledCavities(), hydraulic_potential::AbstractHydraulicPotential = BedPotential(), uplift::AbstractIceUplift = NoUplift())
+function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::Vector{String}, mi::AbstractMeltInput, sl::AbstractSlidingLaw; ps = nothing, pps = nothing, which_observer = nothing, which_file_writer = nothing, tracked_times = nothing, path = nothing, k_face_choice = nothing, verbose = false, cell_gap_clamping::AbstractCellGapClamping = NoCellGapClamping(), cell_N_clamping::AbstractCellNClamping = NoCellNClamping(), timestep_scheme::AbstractTimeStepScheme = FixedTimeStep(), diffusion_scheme::AbstractDiffusionScheme = NoDiffusion(), head_extrapolation_order::Int = 1, cavity_filling::AbstractCavityFilling = FilledCavities(), hydraulic_potential::AbstractHydraulicPotential = BedPotential(), uplift::AbstractIceUplift = NoUplift(), gap_coupling::Union{Nothing, AbstractGapCoupling} = nothing)
 
     # Check that all tracked observables are valid State fields
     for name in tracked_obs
@@ -323,8 +332,18 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
         kfs = Harmonic()
     elseif k_face_choice == "upwind"
         kfs = Upwind()
+    elseif k_face_choice == "implicit_upwind"
+        kfs = ImplicitUpwind()
     else
-        error("Unknown k_face_choice: \"$k_face_choice\" (expected \"arithmetic\" or \"harmonic\")")
+        error("Unknown k_face_choice: \"$k_face_choice\" (expected \"arithmetic\", \"harmonic\", \"upwind\" or \"implicit_upwind\")")
+    end
+    if kfs isa ImplicitUpwind
+        # The Newton terms of the donors' water depths make the head matrix non-symmetric (add_water_depth_newton!).
+        solver = hs isa EllipticHeadScheme ? hs.ps : hs.pps
+        hasproperty(solver, :ls) && supports_nonsymmetric(solver.ls) ||
+            error("k_face_choice = \"implicit_upwind\" assembles a non-symmetric head matrix: it needs a Picard solver (PicardSolver/ParabolicPicardSolver) " *
+                  "with LUDirectSolver(grid) or CUDSSDirectSolver(grid; structure = :general) as its linear solver, got $(nameof(typeof(solver)))" *
+                  (hasproperty(solver, :ls) ? " with $(nameof(typeof(solver.ls)))" : ""))
     end
 
     # Observer setup
@@ -365,6 +384,16 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
     head_extrapolation_order >= 0 || error("head_extrapolation_order must be >= 0 (got $head_extrapolation_order)")
     he = (head_extrapolation_order == 0 || hs isa ParabolicHeadScheme) ? NoHeadExtrapolation() : HeadExtrapolation(grid; order = head_extrapolation_order)
 
-    return Simulation(tsteps, Ref(dt), p, hs, gs, mt, oss, cls, diffusion_scheme, observer, grid, state, mi, kfs, sl, verbose, Ref(zero(dt)), cell_gap_clamping, cell_N_clamping, timestep_scheme, he, cavity_filling, hydraulic_potential, uplift)
+    # Gap coupling: by default the original one, except with the implicit water depth, whose conductance then also takes the
+    # end-of-step gap (compute_b_w_iterate!), so that the whole head-gap step is implicit (ImplicitUpwind is new: nothing
+    # existing changes).
+    gap_coupling === nothing && (gap_coupling = (kfs isa ImplicitUpwind && !(diffusion_scheme isa WithDiffusion) &&
+                                                 (hs isa ParabolicHeadScheme || hs.ps isa PicardSolver)) ? ConsistentGapCoupling() : ExplicitGapCoupling())
+    if gap_coupling isa ConsistentGapCoupling
+        diffusion_scheme isa WithDiffusion && error("gap_coupling = ConsistentGapCoupling() is not available with WithDiffusion (its gap update is a coupled linear system)")
+        hs isa EllipticHeadScheme && !(hs.ps isa PicardSolver) && error("gap_coupling = ConsistentGapCoupling() needs a PicardSolver (not tested with $(nameof(typeof(hs.ps))))")
+    end
+
+    return Simulation(tsteps, Ref(dt), p, hs, gs, mt, oss, cls, diffusion_scheme, observer, grid, state, mi, kfs, sl, verbose, Ref(zero(dt)), cell_gap_clamping, cell_N_clamping, timestep_scheme, he, cavity_filling, hydraulic_potential, uplift, gap_coupling)
 
 end

@@ -22,6 +22,7 @@ using CSV
     include("unfilled_cavities_test.jl")
     include("hydraulic_potential_test.jl")
     include("ice_uplift_test.jl")
+    include("implicit_upwind_test.jl")
     include("diffusion_test.jl")
     include("consistency_test.jl")
     include("ieb_external_test.jl")

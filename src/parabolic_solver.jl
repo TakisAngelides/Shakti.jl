@@ -24,16 +24,16 @@ block (still used standalone in `parabolic_solver_test.jl`); [`ParabolicHeadSche
 same reasoning as [`elliptic_solver!`](@ref): this file is included before `simulation.jl`, so
 `ParabolicHeadScheme{PPS}` can use a proper `PPS <: ParabolicPicardSolver` bound.
 """
-function parabolic_solver!(ls::AbstractLinearSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, dt; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion())
+function parabolic_solver!(ls::AbstractLinearSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, dt; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
 
     s, g = state, grid
 
     # s.h itself is a valid h_old here: nothing has touched it yet this call, so "current s.h"
     # and "s.h at the start of this timestep" genuinely coincide -- unlike Parabolic_iteration!
     # below, where the same read would be a bug (see update_SALS_parabolic_kernel!'s docstring).
-    solve_parabolic_linear_system!(ls, s, g, p, kfs, dt, s.h, ds) # update the h field, including the -div(D*grad(b)) source term under WithDiffusion
+    solve_parabolic_linear_system!(ls, s, g, p, kfs, dt, s.h, ds, gc) # update the h field, including the -div(D*grad(b)) source term under WithDiffusion
 
-    refresh_head_dependents!(s, g, p, mt, kfs, sl; cnc, ds)
+    refresh_head_dependents!(s, g, p, mt, kfs, sl; cnc, ds, gc)
 
 end
 
@@ -120,12 +120,13 @@ which does change every call) are deliberately two different arguments -- see
 [`update_SALS_parabolic_kernel!`](@ref)'s docstring (`linear_solver.jl`) for why passing the same
 array for both breaks convergence.
 """
-function Parabolic_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation, s::State, g::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, dt, h_old, h_prev; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion())
+function Parabolic_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation, s::State, g::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, dt, h_old, h_prev; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
 
-    solve_parabolic_linear_system!(ls, s, g, p, kfs, dt, h_old, ds)
+    solve_parabolic_linear_system!(ls, s, g, p, kfs, dt, h_old, ds, gc)
     relax_h!(hr, s, h_prev)
+    limit_regime_crossing!(kfs, s, h_prev, p) # ImplicitUpwind: stop at the bed/overburden head when crossing it (unfilled_cavities.jl); no-op otherwise
 
-    refresh_head_dependents!(s, g, p, mt, kfs, sl; cnc, ds)
+    refresh_head_dependents!(s, g, p, mt, kfs, sl; cnc, ds, gc)
 
 end
 
@@ -142,7 +143,7 @@ that same fixed starting point, not from whatever the previous sub-iteration hap
 just bookkeeping: conflating the two is a real bug that prevented this loop from converging at
 all on stiff cells, confirmed on the real Greenland grid).
 """
-function Parabolic_loop!(pps::ParabolicPicardSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, dt; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion())
+function Parabolic_loop!(pps::ParabolicPicardSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, dt; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
 
     s = state
 
@@ -155,7 +156,7 @@ function Parabolic_loop!(pps::ParabolicPicardSolver, state::State, grid::Grid, p
 
         @. pps.h_prev = s.h
 
-        Parabolic_iteration!(pps.ls, pps.hr, state, grid, p, mt, kfs, sl, dt, pps.h_old, pps.h_prev; cnc, ds)
+        Parabolic_iteration!(pps.ls, pps.hr, state, grid, p, mt, kfs, sl, dt, pps.h_old, pps.h_prev; cnc, ds, gc)
 
         @. pps.delta_h = s.h - pps.h_prev
 
