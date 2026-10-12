@@ -242,7 +242,10 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
   identically zero the way `p.br`/`p.b_c` do): pass `WithDiffusion(ls)` explicitly, with `ls` a
   second, independent [`AbstractLinearSolver`](@ref) instance for `b`'s own diffusion operator.
 - `k_face_choice`: `"arithmetic"`, `"harmonic"` or `"upwind"` (see [`AbstractKFaceScheme`](@ref)); by default
-  `"arithmetic"`, or `"upwind"` under [`UnfilledCavities`](@ref).
+  `"arithmetic"`, or `"upwind"` under [`UnfilledCavities`](@ref) or [`IceUplift`](@ref): where the water depth
+  is free (a free surface or an uplift layer) the flux is a kinematic wave in it, `q ~ K(W)*grad(zb)`, with `W`
+  lagged to the start of the step, and a face mean is then unstable (explicit central advection) at any `dt`;
+  upwind is stable for `dt < dx*W/(3|q|)`.
 - `cell_gap_clamping`: [`NoCellGapClamping`](@ref) (default, no-op) or a [`CellGapClamping`](@ref)
   overriding specific cells' `b_min`/`b_max` on top of `p`'s global values (see
   `cell_gap_clamping.jl`).
@@ -313,7 +316,7 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
 
     # K-face averaging scheme setup. Unfilled cavities need the donor-cell (upwind) face conductance, see Upwind
     # (k_face_scheme.jl): with an average, a nearly empty cell discharges through its neighbour's much larger conductance.
-    k_face_choice === nothing && (k_face_choice = cavity_filling isa UnfilledCavities ? "upwind" : "arithmetic")
+    k_face_choice === nothing && (k_face_choice = (cavity_filling isa UnfilledCavities || uplift isa IceUplift) ? "upwind" : "arithmetic")
     if k_face_choice == "arithmetic"
         kfs = Arithmetic()
     elseif k_face_choice == "harmonic"

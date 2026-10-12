@@ -18,7 +18,7 @@ struct State{A <: AbstractArray}
     po::A         # ice overburden pressure
     b::A          # water depth
     b_w::A        # water depth at the current head iterate [m] (b - empty part, floored); what the face conductances are built from (unfilled_cavities.jl). Equals b exactly under FilledCavities
-    w_old::A      # water per bed area [m] at the start of the step, b - b_empty (UnfilledCavities, see update_b_empty_budget!)
+    w_old::A      # water per bed area [m] at the start of the step, b - b_empty + b_uplift (UnfilledCavities, see update_b_empty_budget!)
     stor::A       # water storage coefficient of an unfilled cavity [1/s]: 1/dt on GROUNDED cells under UnfilledCavities, 0 otherwise (0 = legacy, always-filled gap)
     b_empty::A    # empty (water-free) part of the gap per unit bed area [m], >= 0; only used under UnfilledCavities (unfilled_cavities.jl), zero otherwise. Water actually present is b - b_empty
     stor_up::A    # storage coefficient of the uplift layer [1/s]: 1/dt on GROUNDED cells under IceUplift, 0 otherwise (0 = legacy, no cap on pw)
