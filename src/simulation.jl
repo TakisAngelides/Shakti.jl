@@ -189,7 +189,7 @@ and every "which scheme/law" choice (head, gap, melt-rate terms, K-face, melt-in
 bundled together with the observer that records output. Build one with the keyword constructor
 below (not this positional one directly), then call [`run!`](@ref).
 """
-struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHeadScheme, GS <: AbstractGapScheme, MT <: MeltTerms, OSS <: AbstractOpenBySlidingScheme, CLS <: AbstractCreepLengthScheme, DS <: AbstractDiffusionScheme, O <: AbstractObserver, G <: Grid, S <: State, MI <: AbstractMeltInput, KFS <: AbstractKFaceScheme, SL <: AbstractSlidingLaw, CGC <: AbstractCellGapClamping, CNC <: AbstractCellNClamping, TS <: AbstractTimeStepScheme, HE <: AbstractHeadExtrapolation, CF <: AbstractCavityFilling, HP <: AbstractHydraulicPotential}
+struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHeadScheme, GS <: AbstractGapScheme, MT <: MeltTerms, OSS <: AbstractOpenBySlidingScheme, CLS <: AbstractCreepLengthScheme, DS <: AbstractDiffusionScheme, O <: AbstractObserver, G <: Grid, S <: State, MI <: AbstractMeltInput, KFS <: AbstractKFaceScheme, SL <: AbstractSlidingLaw, CGC <: AbstractCellGapClamping, CNC <: AbstractCellNClamping, TS <: AbstractTimeStepScheme, HE <: AbstractHeadExtrapolation, CF <: AbstractCavityFilling, HP <: AbstractHydraulicPotential, UP <: AbstractIceUplift}
     tsteps::Int
     dt::Base.RefValue{F} # a Ref so AdaptiveTimeStep can update it in place each step, same reason total_time is a Ref despite Simulation itself being immutable
     p::P
@@ -213,6 +213,7 @@ struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHea
     he::HE # AbstractHeadExtrapolation: the head solve's initial guess, see head_extrapolation.jl
     cf::CF # AbstractCavityFilling: FilledCavities() (legacy, gap always water-filled) by default, see unfilled_cavities.jl
     hp::HP # AbstractHydraulicPotential: BedPotential() (legacy, q = -K grad(h)) by default, see hydraulic_potential.jl
+    up::UP # AbstractIceUplift: NoUplift() (legacy, pw may exceed po) by default, see ice_uplift.jl
 end
 
 """
@@ -254,6 +255,11 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
 - `hydraulic_potential`: [`BedPotential`](@ref) (default, legacy: the flux is driven by the bed-referenced
   head, `q = -K grad(h)`) or [`SheetTopPotential`](@ref) (the potential includes the thickness of the
   flowing water, GlaDS-2 Eq. 7: `q = -K grad(h + b)`; see `hydraulic_potential.jl`).
+- `uplift`: [`NoUplift`](@ref) (default, legacy: the water pressure may exceed the overburden, `N < 0`) or
+  [`IceUplift`](@ref) (the pressure is capped at the overburden and the extra water lifts the ice, stored
+  in an uplift layer at `N = 0`; see `ice_uplift.jl`). With `cavity_filling = UnfilledCavities()` and
+  `hydraulic_potential = SheetTopPotential()` this is the sheet of GlaDS-2 (Wells et al. 2026), with the
+  pressure bounded by `0 <= p_w <= p_o`.
 - Observer: [`NoObserver`](@ref) if `tracked_obs` is empty; otherwise `which_observer` must be
   `"IO"` (writes to `path` via `which_file_writer`, one of `"NetCDF"`/`"HDF5"`/`"JLD2"`/`"CSV"`,
   at `tracked_times`) or `"Live"` (keeps `tracked_times` in memory instead of writing to disk).
@@ -266,7 +272,7 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
   initial guess ([`HeadExtrapolation`](@ref); default `1`, linear). `0` starts every solve from the
   previous step's head. Ignored (always `0`) under [`ParabolicHeadScheme`](@ref).
 """
-function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::Vector{String}, mi::AbstractMeltInput, sl::AbstractSlidingLaw; ps = nothing, pps = nothing, which_observer = nothing, which_file_writer = nothing, tracked_times = nothing, path = nothing, k_face_choice = nothing, verbose = false, cell_gap_clamping::AbstractCellGapClamping = NoCellGapClamping(), cell_N_clamping::AbstractCellNClamping = NoCellNClamping(), timestep_scheme::AbstractTimeStepScheme = FixedTimeStep(), diffusion_scheme::AbstractDiffusionScheme = NoDiffusion(), head_extrapolation_order::Int = 1, cavity_filling::AbstractCavityFilling = FilledCavities(), hydraulic_potential::AbstractHydraulicPotential = BedPotential())
+function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::Vector{String}, mi::AbstractMeltInput, sl::AbstractSlidingLaw; ps = nothing, pps = nothing, which_observer = nothing, which_file_writer = nothing, tracked_times = nothing, path = nothing, k_face_choice = nothing, verbose = false, cell_gap_clamping::AbstractCellGapClamping = NoCellGapClamping(), cell_N_clamping::AbstractCellNClamping = NoCellNClamping(), timestep_scheme::AbstractTimeStepScheme = FixedTimeStep(), diffusion_scheme::AbstractDiffusionScheme = NoDiffusion(), head_extrapolation_order::Int = 1, cavity_filling::AbstractCavityFilling = FilledCavities(), hydraulic_potential::AbstractHydraulicPotential = BedPotential(), uplift::AbstractIceUplift = NoUplift())
 
     # Check that all tracked observables are valid State fields
     for name in tracked_obs
@@ -356,6 +362,6 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
     head_extrapolation_order >= 0 || error("head_extrapolation_order must be >= 0 (got $head_extrapolation_order)")
     he = (head_extrapolation_order == 0 || hs isa ParabolicHeadScheme) ? NoHeadExtrapolation() : HeadExtrapolation(grid; order = head_extrapolation_order)
 
-    return Simulation(tsteps, Ref(dt), p, hs, gs, mt, oss, cls, diffusion_scheme, observer, grid, state, mi, kfs, sl, verbose, Ref(zero(dt)), cell_gap_clamping, cell_N_clamping, timestep_scheme, he, cavity_filling, hydraulic_potential)
+    return Simulation(tsteps, Ref(dt), p, hs, gs, mt, oss, cls, diffusion_scheme, observer, grid, state, mi, kfs, sl, verbose, Ref(zero(dt)), cell_gap_clamping, cell_N_clamping, timestep_scheme, he, cavity_filling, hydraulic_potential, uplift)
 
 end

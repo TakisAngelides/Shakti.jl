@@ -57,10 +57,10 @@ of water. A no-op under [`FilledCavities`](@ref).
 update_b_empty!(s::State, ::FilledCavities) = s
 update_b_empty!(s::State, ::UnfilledCavities) = (@parallel update_b_empty_kernel!(s.b_empty, s.mask, s.h, s.zb); s)
 
-@parallel_indices (ix, iy) function set_cavity_storage_kernel!(stor, w_old, mask, b, b_empty, inv_dt)
+@parallel_indices (ix, iy) function set_cavity_storage_kernel!(stor, w_old, mask, b, b_empty, b_uplift, inv_dt)
     if ix <= size(stor, 1) && iy <= size(stor, 2)
         stor[ix, iy] = (mask[ix, iy] == GROUNDED) * inv_dt
-        w_old[ix, iy] = max(zero(inv_dt), b[ix, iy] - b_empty[ix, iy]) # the water present as the step starts
+        w_old[ix, iy] = max(zero(inv_dt), b[ix, iy] - b_empty[ix, iy]) + b_uplift[ix, iy] # the water present as the step starts (b_uplift: IceUplift, zero otherwise)
     end
     return
 end
@@ -72,12 +72,12 @@ Marks, via `s.stor = 1/dt` on `GROUNDED` cells, where the gap may be partly empt
 under [`FilledCavities`](@ref) (`s.stor` stays 0, selecting the legacy equations everywhere).
 """
 set_cavity_storage!(s::State, dt, ::FilledCavities) = s
-set_cavity_storage!(s::State, dt, ::UnfilledCavities) = (@parallel set_cavity_storage_kernel!(s.stor, s.w_old, s.mask, s.b, s.b_empty, inv(dt)); s)
+set_cavity_storage!(s::State, dt, ::UnfilledCavities) = (@parallel set_cavity_storage_kernel!(s.stor, s.w_old, s.mask, s.b, s.b_empty, s.b_uplift, inv(dt)); s)
 
-@parallel_indices (ix, iy) function compute_b_w_kernel!(b_w, b, b_empty, b_min)
+@parallel_indices (ix, iy) function compute_b_w_kernel!(b_w, b, b_empty, b_min, b_uplift)
     if ix <= size(b_w, 1) && iy <= size(b_w, 2)
         bb = b[ix, iy]
-        b_w[ix, iy] = max(bb - b_empty[ix, iy], min(bb, b_min))
+        b_w[ix, iy] = max(bb - b_empty[ix, iy] + b_uplift[ix, iy], min(bb, b_min))
     end
     return
 end
@@ -85,14 +85,21 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Water depth `s.b_w = b - b_empty` as the step starts, never below `min(b, p.b_min)` so an empty
+Water depth `s.b_w = b - b_empty + b_uplift` as the step starts (`b_uplift` the lifted water layer under
+[`IceUplift`](@ref), zero otherwise), never below `min(b, p.b_min)` so an empty
 cavity still conducts a little; exactly `b` while `b_empty` is zero (always, under
 [`FilledCavities`](@ref)). The face conductances ([`compute_face_flux!`](@ref)) are built from it, so
 an empty cavity neither carries nor draws water. It is deliberately the water present at the start
 of the step, not at the current head iterate: like `b` in the legacy equations it stays fixed during
 the Picard loop, since a cubic conductance that follows the unknown makes the iteration oscillate.
+That lag makes the water-depth dependence of the flux explicit in time where the water depth is free
+(an unfilled or uplifted cell): a step longer than the time such a cell takes to fill or drain, about
+`dx*W/(3|q|)` (minutes at 100 m for a thin free-surface layer), overshoots, and the solution oscillates
+from step to step or Picard cycles. Taking the depth at the head iterate instead does not help: the
+one-cell Picard map then has slope ~ -3(W + dzb)/W, and neither Anderson acceleration nor
+[`NewtonJFNKSolver`](@ref) converged on the SHW12 benchmark at dt = 6 h.
 """
-compute_b_w!(s::State, p::ModelParameters) = (@parallel compute_b_w_kernel!(s.b_w, s.b, s.b_empty, p.b_min); s)
+compute_b_w!(s::State, p::ModelParameters) = (@parallel compute_b_w_kernel!(s.b_w, s.b, s.b_empty, p.b_min, s.b_uplift); s)
 
 @parallel_indices (ix, iy) function clamp_b_empty_kernel!(b_empty, b)
     if ix <= size(b_empty, 1) && iy <= size(b_empty, 2)
@@ -111,13 +118,19 @@ after a Picard loop that did not converge. A no-op under [`FilledCavities`](@ref
 clamp_b_empty!(s::State, ::FilledCavities) = s
 clamp_b_empty!(s::State, ::UnfilledCavities) = (@parallel clamp_b_empty_kernel!(s.b_empty, s.b); s)
 
-@parallel_indices (ix, iy) function update_b_empty_budget_kernel!(b_empty, mask, b, w_old, q_x, q_y, mdot, ieb, dx, dy, dt, rho_w)
+@parallel_indices (ix, iy) function update_b_empty_budget_kernel!(b_empty, mask, b, w_old, q_x, q_y, mdot, ieb, dx, dy, dt, rho_w, b_uplift, stor_up, h, zb, po, ggrav)
     if ix <= size(b_empty, 1) && iy <= size(b_empty, 2)
         if mask[ix, iy] == GROUNDED
             div = (q_x[ix+1, iy] - q_x[ix, iy]) / dx + (q_y[ix, iy+1] - q_y[ix, iy]) / dy
             W = max(zero(dt), w_old[ix, iy] + dt * (mdot[ix, iy] / rho_w + ieb[ix, iy] - div)) # water now, from the water budget
             bb = b[ix, iy]
-            b_empty[ix, iy] = clamp(bb - W, -bb, bb)
+            if stor_up[ix, iy] > 0 && h[ix, iy] > zb[ix, iy] + po[ix, iy] / (rho_w * ggrav)
+                # uplifted cell (ice_uplift.jl): the water beyond the gap is the uplift layer
+                b_uplift[ix, iy] = max(zero(dt), W - bb)
+                b_empty[ix, iy] = clamp(bb - W, zero(dt), bb)
+            else
+                b_empty[ix, iy] = clamp(bb - W, -bb, bb)
+            end
         else
             b_empty[ix, iy] = zero(dt)
         end
@@ -136,10 +149,11 @@ head equation assumed, a held `b_max`/`b_min`, ...) the difference is kept in `b
 lost: positive when the gap is larger than the water (partly empty), negative when there is more water
 than gap (stored above the gap volume, released as a source the next step). `W` is floored at 0, and
 `b_empty` limited to `[-b, b]`; water beyond these limits is the only water the bookkeeping can still
-create or lose. Called after the gap update; the head-based [`update_b_empty!`](@ref) stays for the
+create or lose. Under [`IceUplift`](@ref), in a cell whose head is above the overburden head the water
+beyond the gap is the uplift layer instead, `b_uplift = W - b` (no upper limit), and `b_empty >= 0`. Called after the gap update; the head-based [`update_b_empty!`](@ref) stays for the
 parabolic scheme, whose storage terms the water budget above does not include. A no-op under
 [`FilledCavities`](@ref).
 """
 update_b_empty_budget!(s::State, g::Grid, p::ModelParameters, dt, ::FilledCavities) = s
 update_b_empty_budget!(s::State, g::Grid, p::ModelParameters, dt, ::UnfilledCavities) =
-    (@parallel update_b_empty_budget_kernel!(s.b_empty, s.mask, s.b, s.w_old, s.q_x, s.q_y, s.mdot, s.ieb, g.dx, g.dy, dt, p.rho_w); s)
+    (@parallel update_b_empty_budget_kernel!(s.b_empty, s.mask, s.b, s.w_old, s.q_x, s.q_y, s.mdot, s.ieb, g.dx, g.dy, dt, p.rho_w, s.b_uplift, s.stor_up, s.h, s.zb, s.po, p.g); s)

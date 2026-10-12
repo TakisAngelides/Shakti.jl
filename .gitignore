@@ -17,6 +17,7 @@
 !/test/gap_height_test.jl
 !/test/unfilled_cavities_test.jl
 !/test/hydraulic_potential_test.jl
+!/test/ice_uplift_test.jl
 !/test/diffusion_test.jl
 !/test/consistency_test.jl
 

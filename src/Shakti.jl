@@ -114,6 +114,7 @@ include("parabolic_solver.jl")
 include("gap_height.jl")
 include("unfilled_cavities.jl") # must precede simulation.jl: Simulation type-annotates its `cf` field with AbstractCavityFilling
 include("hydraulic_potential.jl") # must precede simulation.jl (the `hp` field), after mask.jl (GROUNDED)
+include("ice_uplift.jl") # must precede simulation.jl (the `up` field)
 include("cell_gap_clamping.jl")
 include("head_extrapolation.jl")
 include("simulation.jl")
@@ -140,6 +141,7 @@ export State
 # unfilled_cavities.jl
 export AbstractCavityFilling, FilledCavities, UnfilledCavities, update_b_empty!, update_b_empty_budget!, clamp_b_empty!, set_cavity_storage!, compute_b_w!
 export AbstractHydraulicPotential, BedPotential, SheetTopPotential, update_gap_jumps!
+export AbstractIceUplift, NoUplift, IceUplift, set_uplift_storage!, update_b_uplift!
 
 # mask.jl
 export GROUNDED, OCEAN, LAND, OTHER_BASIN, FROZEN_BED

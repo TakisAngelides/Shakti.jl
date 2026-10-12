@@ -1,7 +1,8 @@
-@parallel_indices (ix, iy) function compute_pw_kernel!(pw, h, zb, rho_w, ggrav, stor)
+@parallel_indices (ix, iy) function compute_pw_kernel!(pw, h, zb, rho_w, ggrav, stor, stor_up, po)
     if ix <= size(pw, 1) && iy <= size(pw, 2)
         hw = h[ix, iy] - zb[ix, iy]
-        pw[ix, iy] = rho_w * ggrav * (stor[ix, iy] > 0 ? max(hw, zero(hw)) : hw) # unfilled cavities (stor > 0): a head below the bed is the empty depth of the gap, pw = 0 there (unfilled_cavities.jl)
+        p = rho_w * ggrav * (stor[ix, iy] > 0 ? max(hw, zero(hw)) : hw) # unfilled cavities (stor > 0): a head below the bed is the empty depth of the gap, pw = 0 there (unfilled_cavities.jl)
+        pw[ix, iy] = stor_up[ix, iy] > 0 ? min(p, po[ix, iy]) : p # ice uplift (stor_up > 0): a head above the overburden head is the uplift layer, pw = po there (ice_uplift.jl)
     end
     return
 end
@@ -9,9 +10,9 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Updates the `s.pw` (water pressure) from the current `s.h` (hydraulic head): `pw = rho_w*g*(h - zb)`, floored at 0 in cells with unfilled cavities (`s.stor > 0`, see [`UnfilledCavities`](@ref)).
+Updates the `s.pw` (water pressure) from the current `s.h` (hydraulic head): `pw = rho_w*g*(h - zb)`, floored at 0 in cells with unfilled cavities (`s.stor > 0`, see [`UnfilledCavities`](@ref)) and capped at `po` where the ice may be lifted (`s.stor_up > 0`, see [`IceUplift`](@ref)).
 """
-compute_pw!(s::State, p::ModelParameters) = (@parallel compute_pw_kernel!(s.pw, s.h, s.zb, p.rho_w, p.g, s.stor); s)
+compute_pw!(s::State, p::ModelParameters) = (@parallel compute_pw_kernel!(s.pw, s.h, s.zb, p.rho_w, p.g, s.stor, s.stor_up, s.po); s)
 
 @parallel_indices (ix, iy) function compute_N_kernel!(N, po, pw, mask, N_min, N_max)
     if ix <= size(N, 1) && iy <= size(N, 2)

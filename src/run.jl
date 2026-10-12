@@ -164,6 +164,7 @@ function step!(sim::Simulation)
     step_h!(sim.hs, sim)
     record_head!(sim.he, sim.state, sim.dt[], first(picard_status(sim.hs)))
     update_b_empty!(sim.state, sim.cf) # from the solved head, before step_b! evolves b
+    update_b_uplift!(sim.state, sim.p, sim.up) # IceUplift: the uplift layer from the solved head (no-op under NoUplift)
     step_b!(sim)
     sim.hs isa EllipticHeadScheme && update_b_empty_budget!(sim.state, sim.grid, sim.p, sim.dt[], sim.cf) # empty volume from the water budget, now that the gap is final
 end
@@ -194,6 +195,7 @@ function prepare_head_solve!(sim::Simulation)
     compute_H!(s)
     compute_po!(s, sim.p)
     set_cavity_storage!(s, sim.dt[], sim.cf) # 1/dt marks cells that may be partly empty, read by the head rows and compute_pw!
+    set_uplift_storage!(s, sim.dt[], sim.up) # 1/dt marks cells where the ice may be lifted (no-op under NoUplift)
     update_gap_jumps!(s, sim.hp) # SheetTopPotential: gap jumps across faces from the start-of-step b, added to the driving gradient (no-op under BedPotential)
     if sim.p.limit_freeze_on   # freeze-on floor for this step, from the start-of-step gap
         freeze_on_capacity!(s.mdot_min, sim)
