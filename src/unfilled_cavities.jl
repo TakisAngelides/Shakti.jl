@@ -182,13 +182,13 @@ store_start_of_step_melt!(::ImplicitUpwind, s::State) = (copyto!(s.mdot0, s.mdot
         if stor[ix, iy] > 0
             hp >= z && hn < z && (hn = z - ins) # filled -> unfilled: stop just below the bed (the unfilled row next)
             hp < z && hn > z && (hn = z)        # unfilled -> filled: stop at the bed (the filled row next)
-            hp < z && (hn = max(hn, hp - max(3 * bc / 4, 3 * (z - hp)))) # within unfilled: the head's depth below the bed grows at most 4-fold per iteration, or by 3/4 of the gap
+            hp < z && (hn = max(hn, hp - max(3 * bc / 4, z - hp))) # within unfilled: the head's depth below the bed at most doubles per iteration, or by 3/4 of the gap
         end
         if stor_up[ix, iy] > 0
             ho = z + po[ix, iy] / (rho_w * ggrav)
             hp <= ho && hn > ho && (hn = ho + ins) # filled -> uplifted
             hp > ho && hn < ho && (hn = ho)        # uplifted -> filled
-            hp > ho && (hn = min(hn, hp + 3 * (bc + hp - ho))) # within uplifted: the water depth grows at most 4-fold per iteration
+            hp > ho && (hn = min(hn, hp + (bc + hp - ho))) # within uplifted: the water depth at most doubles per iteration
         end
         d, dl = hn - hp, dh_it[ix, iy]
         d * dl < 0 && abs(d) > abs(dl) / 2 && (hn = hp + copysign(abs(dl) / 2, d)) # step reverses without contracting: at most half the previous one
@@ -211,11 +211,12 @@ depth hits its floor and the Newton terms vanish, and the next step lands far ba
 at dt = 1 h). From a point at the boundary the row is convex on the unfilled and uplifted side and concave on the filled
 side, so Newton then approaches the root without crossing back. The same remedy as the "chopping" of phase transitions in
 fully implicit reservoir simulators. Inside the unfilled and uplifted regimes the step is limited too, as reservoir
-simulators limit the saturation change per Newton iteration: an uplifted cell's water depth grows at most 4-fold per
-iteration, and the head of an unfilled cell sinks below the bed at most 4-fold per iteration, or by 3/4 of the gap if that
-is more (the gap empties in two iterations; below `zb - b` the water depth is at its floor and the head of a dry cell
-reaches its value, which can be tens of metres below the bed, in about ten iterations instead of one step of 3/4 of the gap
-at a time). Without it, a
+simulators limit the saturation change per Newton iteration: an uplifted cell's water depth at most doubles per
+iteration, and the head of an unfilled cell sinks below the bed at most twice as deep per iteration, or by 3/4 of the gap if
+that is more (the gap empties in two iterations; below `zb - b` the water depth is at its floor and the head of a dry cell
+reaches its value, which can be tens of metres below the bed, in about fifteen iterations instead of one step of 3/4 of the
+gap at a time). The factor 2 costs no time against 4 on Drang Drung (dt = 1 h to 1 day) and gives the same solution; at 8
+a dt = 1 day run fails (a singular head matrix after a runaway step). Without it, a
 Newton step from a thin layer, where the conductance and its Newton terms are small, can land kilometres away (seen on
 Drang Drung at dt = 1 h: one cell 1.1 km below the bed, then a neighbour 67 km above the overburden, then overflow). A
 converged head is a fixed point of the limited iteration too, so the solution is unchanged. Last, a step that reverses

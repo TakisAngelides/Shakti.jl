@@ -247,9 +247,9 @@
             @test limited(z + 1, ho + 5) ≈ ho + ins                  # filled -> uplifted: just above the overburden head
             @test limited(ho + 1e-3, z + 1) == ho                    # uplifted -> filled: at the overburden head
             @test limited(z - ins, z - 1000) ≈ z - ins - 0.75 * bc  # unfilled: from the bed, 3/4 of the gap
-            @test limited(z - 2e-3, z - 1000) ≈ z - 2e-3 - max(0.75 * bc, 6e-3)
-            @test limited(z - 50, z - 1000) ≈ z - 200               # below the bed: the depth grows at most 4-fold
-            @test limited(ho + 1e-2, ho + 1e4) ≈ ho + 1e-2 + 3 * (bc + 1e-2) # uplift layer grows at most 4-fold
+            @test limited(z - 2e-3, z - 1000) ≈ z - 2e-3 - max(0.75 * bc, 2e-3)
+            @test limited(z - 50, z - 1000) ≈ z - 100               # below the bed: the depth at most doubles
+            @test limited(ho + 1e-2, ho + 1e4) ≈ ho + 1e-2 + (bc + 1e-2) # the uplift layer at most doubles
             @test limited(z - 2e-3, z - 2.1e-3) == z - 2.1e-3        # small steps are untouched
             @test limited(ho + 1e-2, ho + 2e-2) == ho + 2e-2
             @test limited(z - 2e-3, z - 2e-3) == z - 2e-3            # a fixed point stays one
