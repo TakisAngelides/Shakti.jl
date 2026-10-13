@@ -187,11 +187,11 @@
             s.b .= 1e-3
             s.b_empty .= 0.0
             s.b_empty[3, 3] = 9e-4  # nearly dry
-            s.b_empty[4, 3] = 1e-3  # dry: floored at b_min
+            s.b_empty[4, 3] = 1e-3  # dry: no water, no conductance (no floor at b_min)
             Shakti.compute_b_w!(s, un.p)
             s.dhdx .= 0.0; s.dhdy .= 0.0 # no gradient: the upwind face takes the smaller cell
             @test s.b_w[3, 3] ≈ 1e-4
-            @test s.b_w[4, 3] ≈ un.p.b_min
+            @test s.b_w[4, 3] == 0
             @test s.b_w[2, 3] == 1e-3
             Shakti.compute_face_flux!(s, un.p, un.kfs)
             # the face between the nearly-dry cell and a full neighbour is far less conductive than a full-full face

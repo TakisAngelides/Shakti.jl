@@ -74,10 +74,9 @@ under [`FilledCavities`](@ref) (`s.stor` stays 0, selecting the legacy equations
 set_cavity_storage!(s::State, dt, ::FilledCavities) = s
 set_cavity_storage!(s::State, dt, ::UnfilledCavities) = (@parallel set_cavity_storage_kernel!(s.stor, s.w_old, s.mask, s.b, s.b_empty, s.b_uplift, inv(dt)); s)
 
-@parallel_indices (ix, iy) function compute_b_w_kernel!(b_w, b, b_empty, b_min, b_uplift)
+@parallel_indices (ix, iy) function compute_b_w_kernel!(b_w, b, b_empty, b_uplift)
     if ix <= size(b_w, 1) && iy <= size(b_w, 2)
-        bb = b[ix, iy]
-        b_w[ix, iy] = max(bb - b_empty[ix, iy] + b_uplift[ix, iy], min(bb, b_min))
+        b_w[ix, iy] = max(b[ix, iy] - b_empty[ix, iy] + b_uplift[ix, iy], zero(eltype(b_w)))
     end
     return
 end
@@ -86,10 +85,14 @@ end
 $(TYPEDSIGNATURES)
 
 Water depth `s.b_w = b - b_empty + b_uplift` as the step starts (`b_uplift` the lifted water layer under
-[`IceUplift`](@ref), zero otherwise), never below `min(b, p.b_min)` so an empty
-cavity still conducts a little; exactly `b` while `b_empty` is zero (always, under
+[`IceUplift`](@ref), zero otherwise), never below 0; exactly `b` while `b_empty` is zero (always, under
 [`FilledCavities`](@ref)). The face conductances ([`compute_face_flux!`](@ref)) are built from it, so
-an empty cavity neither carries nor draws water. It is the water present at the start of the step,
+an empty cavity neither carries nor draws water. No floor at `min(b, p.b_min)`: a dry cell (`W = 0`)
+that kept that conductance drained water it did not have wherever its head stayed above a neighbour's
+(a margin cell on a slope next to `LAND`), and [`update_b_empty_budget!`](@ref)'s floor `W >= 0` then
+created it: 1.4 m^3/s on Drang Drung at 25 m, 21 times the melt input. Without the floor a dry cell's
+outflow vanishes with its water; its row stays regular through the unfilled storage `1/dt`
+([`cavity_head_terms`](@ref)), or is a closed cell's once all its faces carry no water. It is the water present at the start of the step,
 not at the current head iterate: like `b` in the legacy equations it stays fixed during the Picard
 loop. That lag makes the water-depth dependence of the flux explicit in time where the water depth is
 free (an unfilled or uplifted cell): a step longer than the time such a cell takes to fill or drain,
@@ -100,7 +103,7 @@ acceleration nor [`NewtonJFNKSolver`](@ref) converged on the SHW12 benchmark at 
 the end-of-step depth together with the Newton terms of its dependence on the head,
 [`ImplicitUpwind`](@ref) ([`compute_b_w_iterate!`](@ref)).
 """
-compute_b_w!(s::State, p::ModelParameters) = (@parallel compute_b_w_kernel!(s.b_w, s.b, s.b_empty, p.b_min, s.b_uplift); s)
+compute_b_w!(s::State, p::ModelParameters) = (@parallel compute_b_w_kernel!(s.b_w, s.b, s.b_empty, s.b_uplift); s)
 
 # The gap at the end of the step that the head rows assume (linear_solver.jl): the start-of-step gap under
 # ExplicitGapCoupling (the original scheme, which lags the gap in the conductance), the gap scheme's update G(N) under
@@ -133,9 +136,8 @@ end
             W = end_of_step_gap(gc, bb, b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], Nv, rho_i, n_minus_1)
             slope = end_of_step_gap_slope(gc, bb, b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], Nv, rho_i, n_minus_1, rho_w, ggrav)
         end
-        floor_w = min(bb, b_min)
-        b_w[ix, iy]    = W > floor_w ? W : floor_w
-        dbw_dh[ix, iy] = W > floor_w ? slope : zero(bb)
+        b_w[ix, iy]    = W > 0 ? W : zero(bb) # no water, no conductance (compute_b_w!)
+        dbw_dh[ix, iy] = W > 0 ? slope : zero(bb)
     end
     return
 end
@@ -146,7 +148,7 @@ $(TYPEDSIGNATURES)
 Water depth at the end of the step as a function of the current head iterate, for [`ImplicitUpwind`](@ref), and its slope
 `s.dbw_dh = dW/dh`. With the gap `G` the head rows assume for the end of the step (`gc`): `W = G(p_o) - (zb - h)` where the
 gap may be partly empty (`s.stor > 0`, [`UnfilledCavities`](@ref)) and `h < zb`, `W = G(0) + (h - h_o)` where the ice may be
-lifted (`s.stor_up > 0`, [`IceUplift`](@ref)) and `h > h_o`, `W = G(N)` otherwise, never below `min(b, p.b_min)`. These are
+lifted (`s.stor_up > 0`, [`IceUplift`](@ref)) and `h > h_o`, `W = G(N)` otherwise, never below 0 (no floor, see [`compute_b_w!`](@ref)). These are
 the head rows' own water: the depth they conserve (with the melt opening of `G` from the start of the step,
 [`store_start_of_step_melt!`](@ref)). Under [`ExplicitGapCoupling`](@ref) `G` is the start-of-step gap `b`
 (the head rows add the gap change only to the water budget), so a filled cell's depth is `b` with slope 0 (the gap is lagged
