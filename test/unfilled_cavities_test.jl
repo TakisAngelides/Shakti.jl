@@ -97,6 +97,13 @@
             @test all(iszero, sims[2].state.b_empty .* 0) # b_empty not touched by the solve itself
         end
 
+        @testset "averaged faces with unfilled cavities warn" begin
+            @test_logs (:warn, r"does not conserve water") make_sim(UnfilledCavities(); kface = "arithmetic")
+            @test_logs (:warn, r"never refills") make_sim(UnfilledCavities(); kface = "harmonic")
+            @test_logs make_sim(UnfilledCavities(); kface = "upwind")
+            @test_logs make_sim(FilledCavities(); kface = "arithmetic")
+        end
+
         @testset "stuck cells: legacy gives pw < 0, unfilled cavities keep pw >= 0" begin
             fi = make_sim(FilledCavities())
             step!(fi)

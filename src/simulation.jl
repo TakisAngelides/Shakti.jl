@@ -337,6 +337,16 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
     else
         error("Unknown k_face_choice: \"$k_face_choice\" (expected \"arithmetic\", \"harmonic\", \"upwind\" or \"implicit_upwind\")")
     end
+    # An averaged face lets an unfilled cell's outflow outgrow its water: the arithmetic mean gives a dry cell half its
+    # neighbour's conductance, and the water it then delivers is created by the W >= 0 floor of update_b_empty_budget!
+    # (Thwaites 2 km, uplift, dt = 1 h: 1.7e7 m^3/s after 12 h against 500 m^3/s of melt, lifting the ice by hundreds of
+    # metres). The harmonic mean closes every face of a dry cell, so it never wets again.
+    if (cavity_filling isa UnfilledCavities || uplift isa IceUplift) && (kfs isa Arithmetic || kfs isa Harmonic)
+        @warn "k_face_choice = \"$k_face_choice\" with $(nameof(typeof(cavity_filling)))/$(nameof(typeof(uplift))) does not conserve water: " *
+              (kfs isa Arithmetic ? "a dry cell discharges through half its neighbour's conductance and the water it lacks is created. " :
+                                    "a dry cell's faces have no conductance, so it never refills. ") *
+              "Use \"implicit_upwind\" (or \"upwind\" at a time step below the free-surface limit, see compute_b_w!)."
+    end
     if kfs isa ImplicitUpwind
         # The Newton terms of the donors' water depths make the head matrix non-symmetric (add_water_depth_newton!).
         solver = hs isa EllipticHeadScheme ? hs.ps : hs.pps
