@@ -257,6 +257,7 @@ mutable struct PicardSolver{F <: AbstractFloat, LS <: AbstractLinearSolver, HR <
     h_prev::A     # previous-iteration head, for the Picard convergence check and under-relaxation
     delta_h::A    # change in head between iterations, for the Picard convergence check
     check_every::Int # convergence check forces a GPU->CPU sync (the reduction result has to reach the host for the `if`); only check every this many iterations rather than every one, trading a few possible extra (cheap, async) Picard iterations for fewer syncs -- see below
+    atol::F # absolute tolerance on max|delta_h| [m]: > 0 replaces the relative check (head_converged), 0 = off (the default)
 end
 
 # Measured (both Threads and Metal, 32x32) check_every=1 having equal-or-lower
@@ -269,6 +270,18 @@ end
 # where each iteration does enough real work to make the sync proportionally
 # cheaper, might tip this the other way.
 """
+$(TYPEDSIGNATURES)
+
+Convergence test of the Picard loops on the largest head update `dh_max` [m]: relative to the largest head `h_max`,
+`dh_max / (h_max + eps) < tol`, or, when `atol > 0`, absolute, `dh_max < atol`. The relative test ties the accuracy to
+the glacier's elevation (h is the bed elevation plus the pressure head, about 4.5 km on Drang Drung, so `tol = 1e-6`
+allows about 4 mm of head and the step's mass residual scales with it); `atol` sets it in metres of head, which in a
+free-surface or uplifted cell is metres of water depth. On Drang Drung (ImplicitUpwind, one year) `atol = 1e-3`
+converged every step at dt = 1 h and 1 day for about 40% more iterations than `tol = 1e-6`; `1e-4` failed steps.
+"""
+@inline head_converged(dh_max, h_max, tol, atol) = atol > 0 ? dh_max < atol : dh_max / (h_max + eps(typeof(h_max))) < tol
+
+"""
 Default value of [`PicardSolver`](@ref)'s `check_every`: `1` (check convergence every
 iteration).
 """
@@ -279,9 +292,10 @@ $(TYPEDSIGNATURES)
 
 Builds a [`PicardSolver`](@ref) with up to `iters` iterations, relative tolerance `tol`, linear
 solver `ls`, on grid `g`. `alpha` (in `(0, 1]`) enables [`UnderHeadRelaxation`](@ref) if given,
-otherwise [`NoHeadRelaxation`](@ref) is used.
+otherwise [`NoHeadRelaxation`](@ref) is used. `atol > 0` [m] replaces the relative check by
+`max|delta_h| < atol` (see [`head_converged`](@ref)).
 """
-function PicardSolver(iters, tol, ls::AbstractLinearSolver, g::Grid; alpha = nothing, check_every::Int = DEFAULT_CHECK_EVERY)
+function PicardSolver(iters, tol, ls::AbstractLinearSolver, g::Grid; alpha = nothing, check_every::Int = DEFAULT_CHECK_EVERY, atol = 0)
 
     if alpha === nothing
         hr = NoHeadRelaxation()
@@ -292,7 +306,7 @@ function PicardSolver(iters, tol, ls::AbstractLinearSolver, g::Grid; alpha = not
     h_prev  = initialize_center_field(g)
     delta_h = initialize_center_field(g)
 
-    return PicardSolver(iters, floattype(tol), ls, false, 0, hr, h_prev, delta_h, check_every)
+    return PicardSolver(iters, floattype(tol), ls, false, 0, hr, h_prev, delta_h, check_every, floattype(atol))
 end
 
 """
@@ -327,7 +341,8 @@ $(TYPEDSIGNATURES)
 
 Repeatedly calls [`Picard_iteration!`](@ref) (up to `ps.iters` times), checking convergence every
 `ps.check_every` iterations via a relative max-norm on the head update
-(`max|delta_h| / (max|h| + eps) < ps.tol`), and sets `ps.converged`/`ps.last_iter` accordingly.
+(`max|delta_h| / (max|h| + eps) < ps.tol`, or `max|delta_h| < ps.atol` when `ps.atol > 0`, see
+[`head_converged`](@ref)), and sets `ps.converged`/`ps.last_iter` accordingly.
 """
 function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
 
@@ -357,7 +372,7 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
             # ldiv! bug, JuliaSparse/SparseArrays.jl#726, unrelated to this call) -- this fix reduces allocation/GC pressure, nothing more.
             delta_h_max = raw_update_max(ps.hr, ps.delta_h) # the UNrelaxed update, see raw_update_max
             h_max = mapreduce(abs, max, s.h; init = zero(eltype(s.h)))
-            if delta_h_max / (h_max + eps(eltype(s.h))) < ps.tol
+            if head_converged(delta_h_max, h_max, ps.tol, ps.atol)
                 if npol < MAX_DONOR_POLISH_ROUNDS && polish_donors!(kfs, s) > 0 # faces left frozen downstream: refrozen, iterate on
                     npol += 1
                     refresh_head_dependents!(s, grid, p, mt, kfs, sl; cnc, ds, gc)

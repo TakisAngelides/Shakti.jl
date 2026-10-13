@@ -7,7 +7,7 @@
         # gap faster than the melt fills it in the upper part (free surface, pw = 0), the lower part is filled; LAND margin
         # in the last column. Melt terms off, so the melt input m is the only source and mdot does not depend on the head.
         function ramp(; kface = "implicit_upwind", solver = :auto, dt = 3600.0, m_mmd = 5.0, omega = 1e-4, e_v = 0.0,
-                        cf = UnfilledCavities(), up = NoUplift(), hp = BedPotential(), gap = "implicit", gc = ExplicitGapCoupling())
+                        cf = UnfilledCavities(), up = NoUplift(), hp = BedPotential(), gap = "implicit", gc = ExplicitGapCoupling(), atol = 0)
             nx, ny = 40, 3
             grid = Grid(nx, ny, 3.9e3, 200.0)
             x = Array(grid.x)
@@ -22,7 +22,7 @@
                                     fill(ub, nx + 1, ny), zeros(nx, ny + 1), fill(m_mmd / 1000 / 86400, nx, ny), zeros(nx + 1, ny), zeros(nx, ny + 1))
             solver === :auto && (solver = kface == "implicit_upwind" ? :lu : :cholesky)
             ls = solver === :lu ? LUDirectSolver(grid) : CholeskyDirectSolver(grid)
-            kw = e_v == 0 ? (; ps = PicardSolver(200, floattype(1e-11), ls, grid)) : (; pps = ParabolicPicardSolver(200, floattype(1e-11), ls, grid))
+            kw = e_v == 0 ? (; ps = PicardSolver(200, floattype(1e-11), ls, grid; atol)) : (; pps = ParabolicPicardSolver(200, floattype(1e-11), ls, grid; atol))
             return Simulation(grid, state, 1, floattype(dt), p, gap, String[], ConstantMeltInput(), sl;
                               k_face_choice = kface, cavity_filling = cf, uplift = up, hydraulic_potential = hp, gap_coupling = gc, kw...)
         end
@@ -293,6 +293,19 @@
             @test Shakti.polish_donors!(ImplicitUpwind(), sim.state) == 1
             @test Array(sim.state.don_x)[k] == Shakti.DONOR_REFROZEN * sign(dh[k])
             @test Shakti.polish_donors!(Upwind(), sim.state) == 0
+        end
+
+        @testset "absolute Picard tolerance (atol, metres of head)" begin
+            @test Shakti.head_converged(1e-3, 4500.0, 1e-6, 0.0) && !Shakti.head_converged(1e-2, 4500.0, 1e-6, 0.0) # relative: 1e-6 of 4.5 km
+            @test Shakti.head_converged(1e-4, 4500.0, 1e-12, 1e-3) && !Shakti.head_converged(2e-3, 4500.0, 1.0, 1e-3) # atol > 0 replaces it
+            for e_v in (0.0, 1e-4)
+                a, b = ramp(dt = 86400.0, e_v = e_v), ramp(dt = 86400.0, e_v = e_v, atol = 1e-4)
+                sa, sb = e_v == 0 ? (a.hs.ps, b.hs.ps) : (a.hs.pps, b.hs.pps)
+                @test sa.atol == 0 && sb.atol == 1e-4
+                step!(a); step!(b)
+                @test sb.converged && sb.last_iter < sa.last_iter                  # 1e-4 m is looser than 1e-11 of the head
+                @test maximum(abs, Array(a.state.h) .- Array(b.state.h)) < 1e-3
+            end
         end
 
         @testset "needs a solver for non-symmetric matrices" begin
