@@ -7,14 +7,14 @@
         # gap faster than the melt fills it in the upper part (free surface, pw = 0), the lower part is filled; LAND margin
         # in the last column. Melt terms off, so the melt input m is the only source and mdot does not depend on the head.
         function ramp(; kface = "implicit_upwind", solver = :auto, dt = 3600.0, m_mmd = 5.0, omega = 1e-4, e_v = 0.0,
-                        cf = UnfilledCavities(), up = NoUplift(), hp = BedPotential(), gap = "implicit", gc = ExplicitGapCoupling(), atol = 0)
+                        cf = UnfilledCavities(), up = NoUplift(), hp = BedPotential(), gap = "implicit", gc = ExplicitGapCoupling(), atol = 0, b_min = 1e-6)
             nx, ny = 40, 3
             grid = Grid(nx, ny, 3.9e3, 200.0)
             x = Array(grid.x)
             zb = repeat(80.0 .* (1 .- x ./ x[end]), 1, ny)
             H  = repeat([400.0 * sqrt(max(0.0, 1 - xi / x[end])) for xi in x], 1, ny)
             mask = fill(GROUNDED, nx, ny); mask[end, :] .= LAND
-            p = ModelParameters(; br = 0.1, lr = 2.0, b_min = 1e-6, e_v = e_v, omega = omega,
+            p = ModelParameters(; br = 0.1, lr = 2.0, b_min = b_min, e_v = e_v, omega = omega,
                                 mdot_includes_G = false, mdot_includes_frictional = false, mdot_includes_potential = false,
                                 mdot_includes_sensible = false, mdot_includes_qT = false, limit_freeze_on = false)
             state = State(grid)
@@ -124,6 +124,26 @@
             @test any(unfilled(a))
             @test Array(a.state.h)[g] ≈ Array(b.state.h)[g] rtol = 1e-6
             @test Array(a.state.b_w)[g] ≈ Array(b.state.b_w)[g] rtol = 1e-3
+        end
+
+        @testset "dry cells next to the LAND margin drain no water they do not have ($kface)" for kface in ("upwind", "implicit_upwind")
+            # Cells with no water (b_empty = b) whose head stays above the LAND neighbour's: with a conductance floor at
+            # min(b, b_min) they kept draining, and update_b_empty_budget!'s W >= 0 floor created that water (Drang Drung at 25 m:
+            # 1.4 m^3/s, 21 times the melt input; here ~6 % of the input under Upwind). The water depth now has no floor.
+            sim = ramp(kface = kface, b_min = 1e-3)
+            s, nx = sim.state, sim.grid.nx
+            s.b_empty[nx-4:nx-1, :] .= s.b[nx-4:nx-1, :]
+            W_old = water(s)
+            step!(sim)
+            @test first(Shakti.picard_status(sim.hs))
+            g = grounded(sim)
+            res = budget_residual(sim, W_old)
+            @test maximum(abs, res[g]) < 1e-9 * maximum(abs, Array(s.ieb)[g])
+            @test abs(sum(res[g])) < 1e-9 * sum(Array(s.ieb)[g])
+            if kface == "upwind" # start-of-step water depth: the dry cells stay dry and discharge nothing into LAND
+                @test all(iszero, Array(s.b_w)[nx-4:nx-1, :])
+                @test all(iszero, Array(s.q_x)[nx, :])
+            end
         end
 
         @testset "gap scheme $gap at dt = 1 day" for gap in ("explicit", "implicit", "fully_implicit")
