@@ -84,6 +84,10 @@ struct ImplicitUpwind <: AbstractKFaceScheme end
 
 @inline face_mean(::ImplicitUpwind, a, b) = min(a, b)
 @inline face_mean(::ImplicitUpwind, a, b, dh) = dh > 0 ? b : (dh < 0 ? a : min(a, b))
+# The argument compute_face_flux_kernel! (water_flux.jl) hands face_mean: under ImplicitUpwind the face donor s.don_x/
+# s.don_y, mapped to 0 (the thinner cell, min) on a DONOR_THINNER face (polish_donors!); the head gradient otherwise.
+@inline face_select(::AbstractKFaceScheme, d) = d
+@inline face_select(::ImplicitUpwind, d) = abs(d) >= DONOR_THINNER ? zero(d) : d
 
 """
 $(TYPEDSIGNATURES)

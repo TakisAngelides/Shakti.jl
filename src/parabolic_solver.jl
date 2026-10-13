@@ -151,6 +151,7 @@ function Parabolic_loop!(pps::ParabolicPicardSolver, state::State, grid::Grid, p
 
     pps.converged = false
     pps.last_iter = 0
+    npol = 0 # donor polishing rounds this step (polish_donors!, ImplicitUpwind)
 
     @inbounds for iter in 1:pps.iters
 
@@ -164,6 +165,11 @@ function Parabolic_loop!(pps::ParabolicPicardSolver, state::State, grid::Grid, p
             delta_h_max = raw_update_max(pps.hr, pps.delta_h) # the UNrelaxed update, see raw_update_max (elliptic_solver.jl)
             h_max = mapreduce(abs, max, s.h; init = zero(eltype(s.h)))
             if delta_h_max / (h_max + eps(eltype(s.h))) < pps.tol
+                if npol < MAX_DONOR_POLISH_ROUNDS && polish_donors!(kfs, s) > 0 # faces left frozen downstream: refrozen, iterate on
+                    npol += 1
+                    refresh_head_dependents!(s, grid, p, mt, kfs, sl; cnc, ds, gc)
+                    continue
+                end
                 pps.converged = true
                 pps.last_iter = iter
                 return

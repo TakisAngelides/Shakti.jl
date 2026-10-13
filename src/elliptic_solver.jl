@@ -337,6 +337,7 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
     ps.converged = false
     ps.last_iter = 0
     reset_relaxation!(ps.hr) # no-op except for AndersonHeadRelaxation, whose history is only valid within one timestep's fixed-point map
+    npol = 0 # donor polishing rounds this step (polish_donors!, ImplicitUpwind)
 
     @inbounds for iter in 1:ps.iters # start the Picard loop
 
@@ -357,6 +358,11 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
             delta_h_max = raw_update_max(ps.hr, ps.delta_h) # the UNrelaxed update, see raw_update_max
             h_max = mapreduce(abs, max, s.h; init = zero(eltype(s.h)))
             if delta_h_max / (h_max + eps(eltype(s.h))) < ps.tol
+                if npol < MAX_DONOR_POLISH_ROUNDS && polish_donors!(kfs, s) > 0 # faces left frozen downstream: refrozen, iterate on
+                    npol += 1
+                    refresh_head_dependents!(s, grid, p, mt, kfs, sl; cnc, ds, gc)
+                    continue
+                end
                 ps.converged = true
                 ps.last_iter = iter
                 return

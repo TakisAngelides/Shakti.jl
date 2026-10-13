@@ -63,7 +63,7 @@ struct State{A <: AbstractArray}
     D_x::A        # channel-wall diffusion coefficient in x direction (SUHMO Eq. 10, WithDiffusion only -- see AbstractDiffusionScheme, linear_solver.jl)
     K_x::A        # face transmissivity in x direction: what the linear system assembles and q_x is built from (compute_face_flux!, water_flux.jl)
     Jw_x::A       # ImplicitUpwind: Newton coefficient of the x-face flux in the donor's head through its water depth [m/s], signed by donor side (water_depth_newton_kernel!); zero otherwise
-    don_x::A      # ImplicitUpwind: donor side of the x-face this step, sign(+1 high index, -1 low index) * (1 + number of donor flips), 0 = not set (update_donor_kernel!, water_flux.jl); zero otherwise
+    don_x::A      # ImplicitUpwind: donor side of the x-face this step, sign(+1 high index, -1 low index) * (1 + number of donor flips), 0 = not set (update_donor_kernel!, water_flux.jl), DONOR_REFROZEN/DONOR_THINNER after polishing (polish_donors!); zero otherwise
     valid_x::A    # 1.0 where the x-face does NOT touch an OTHER_BASIN or FROZEN_BED cell, else 0.0
 
     # YFace fields

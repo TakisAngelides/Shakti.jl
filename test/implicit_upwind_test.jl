@@ -270,11 +270,29 @@
                 @test sign(d) == (isodd(k) ? -1 : 1) && abs(d) == k + 1          # each reversal switches donor and counts
             end
             @test nd(d, -1.0) == d                                               # after 4 flips the donor stays
+            # polishing at the converged head: a face frozen downstream is refrozen upwind, one that reverses again takes the thinner cell
+            pd(d, dh) = Shakti.polished_donor(d, dh, 4)
+            R, T = Shakti.DONOR_REFROZEN, Shakti.DONOR_THINNER
+            @test pd(-5.0, 1.0) == R && pd(5.0, -1.0) == -R                       # frozen downstream: refrozen on the upwind side
+            @test pd(5.0, 1.0) == 5 && pd(-3.0, 1.0) == -3 && pd(0.0, 1.0) == 0 && pd(-5.0, 0.0) == -5 # frozen upwind, not frozen, not set, no flow: kept
+            @test pd(-R, 2.0) == T && pd(T, -1.0) == T                            # refrozen and reversed: the thinner cell, then fixed
+            @test nd(R, -1.0) == R && nd(-T, 1.0) == -T                           # the flip counter leaves polished faces alone
+            @test Shakti.donor_side(T, 1.0, 0.5) == 1 && Shakti.donor_side(-T, 0.5, 1.0) == -1 && Shakti.donor_side(-R, 0.5, 1.0) == -1
+            iu = ImplicitUpwind()
+            @test Shakti.face_conductance(iu, 3.0, GROUNDED, 2.0, GROUNDED, Shakti.face_select(iu, -T)) == 2.0 # thinner cell's conductance
+            @test Shakti.face_conductance(iu, 3.0, GROUNDED, 2.0, GROUNDED, Shakti.face_select(iu, -R)) == 3.0 # refrozen donor's
             # a step on the ramp starts with every donor reset, and the steady result is that of Upwind's donors
             sim = ramp(up = IceUplift())
             step!(sim)
             dx_ = Array(sim.state.don_x); dh = Array(sim.state.dhdx)
             @test all(sign.(dx_[dh .!= 0]) .== sign.(dh[dh .!= 0]))
+            # polish_donors! on the converged ramp head, with every donor upwind and then one face frozen downstream
+            copyto!(sim.state.don_x, sign.(dh)); copyto!(sim.state.don_y, sign.(Array(sim.state.dhdy)))
+            @test Shakti.polish_donors!(ImplicitUpwind(), sim.state) == 0
+            dx_ = sign.(dh); k = findfirst(!=(0), dh); dx_[k] = -5 * sign(dh[k]); copyto!(sim.state.don_x, dx_)
+            @test Shakti.polish_donors!(ImplicitUpwind(), sim.state) == 1
+            @test Array(sim.state.don_x)[k] == Shakti.DONOR_REFROZEN * sign(dh[k])
+            @test Shakti.polish_donors!(Upwind(), sim.state) == 0
         end
 
         @testset "needs a solver for non-symmetric matrices" begin
