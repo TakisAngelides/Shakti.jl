@@ -257,6 +257,7 @@ mutable struct PicardSolver{F <: AbstractFloat, LS <: AbstractLinearSolver, HR <
     h_prev::A     # previous-iteration head, for the Picard convergence check and under-relaxation
     delta_h::A    # change in head between iterations, for the Picard convergence check
     check_every::Int # convergence check forces a GPU->CPU sync (the reduction result has to reach the host for the `if`); only check every this many iterations rather than every one, trading a few possible extra (cheap, async) Picard iterations for fewer syncs -- see below
+    atol::F # absolute tolerance on max|delta_h| [m]: > 0 replaces the relative check (head_converged), 0 = off (the default)
 end
 
 # Measured (both Threads and Metal, 32x32) check_every=1 having equal-or-lower
@@ -269,6 +270,18 @@ end
 # where each iteration does enough real work to make the sync proportionally
 # cheaper, might tip this the other way.
 """
+$(TYPEDSIGNATURES)
+
+Convergence test of the Picard loops on the largest head update `dh_max` [m]: relative to the largest head `h_max`,
+`dh_max / (h_max + eps) < tol`, or, when `atol > 0`, absolute, `dh_max < atol`. The relative test ties the accuracy to
+the glacier's elevation (h is the bed elevation plus the pressure head, about 4.5 km on Drang Drung, so `tol = 1e-6`
+allows about 4 mm of head and the step's mass residual scales with it); `atol` sets it in metres of head, which in a
+free-surface or uplifted cell is metres of water depth. On Drang Drung (ImplicitUpwind, one year) `atol = 1e-3`
+converged every step at dt = 1 h and 1 day for about 40% more iterations than `tol = 1e-6`; `1e-4` failed steps.
+"""
+@inline head_converged(dh_max, h_max, tol, atol) = atol > 0 ? dh_max < atol : dh_max / (h_max + eps(typeof(h_max))) < tol
+
+"""
 Default value of [`PicardSolver`](@ref)'s `check_every`: `1` (check convergence every
 iteration).
 """
@@ -279,9 +292,10 @@ $(TYPEDSIGNATURES)
 
 Builds a [`PicardSolver`](@ref) with up to `iters` iterations, relative tolerance `tol`, linear
 solver `ls`, on grid `g`. `alpha` (in `(0, 1]`) enables [`UnderHeadRelaxation`](@ref) if given,
-otherwise [`NoHeadRelaxation`](@ref) is used.
+otherwise [`NoHeadRelaxation`](@ref) is used. `atol > 0` [m] replaces the relative check by
+`max|delta_h| < atol` (see [`head_converged`](@ref)).
 """
-function PicardSolver(iters, tol, ls::AbstractLinearSolver, g::Grid; alpha = nothing, check_every::Int = DEFAULT_CHECK_EVERY)
+function PicardSolver(iters, tol, ls::AbstractLinearSolver, g::Grid; alpha = nothing, check_every::Int = DEFAULT_CHECK_EVERY, atol = 0)
 
     if alpha === nothing
         hr = NoHeadRelaxation()
@@ -292,7 +306,7 @@ function PicardSolver(iters, tol, ls::AbstractLinearSolver, g::Grid; alpha = not
     h_prev  = initialize_center_field(g)
     delta_h = initialize_center_field(g)
 
-    return PicardSolver(iters, floattype(tol), ls, false, 0, hr, h_prev, delta_h, check_every)
+    return PicardSolver(iters, floattype(tol), ls, false, 0, hr, h_prev, delta_h, check_every, floattype(atol))
 end
 
 """
@@ -318,8 +332,8 @@ regularized Coulomb law, linear law, or prescribed by the user. The `ds` keyword
 channel-wall diffusion coefficient `D` is refreshed every Picard iteration ([`WithDiffusion`](@ref) recomputes it
 from the current `q`/`∇h`/`∇P_w`; `NoDiffusion` skips it entirely).
 """
-function elliptic_solver!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion())
-    Picard_loop!(ps, state, grid, p, mt, kfs, sl; cnc, ds)
+function elliptic_solver!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
+    Picard_loop!(ps, state, grid, p, mt, kfs, sl; cnc, ds, gc)
 end
 
 """
@@ -327,9 +341,10 @@ $(TYPEDSIGNATURES)
 
 Repeatedly calls [`Picard_iteration!`](@ref) (up to `ps.iters` times), checking convergence every
 `ps.check_every` iterations via a relative max-norm on the head update
-(`max|delta_h| / (max|h| + eps) < ps.tol`), and sets `ps.converged`/`ps.last_iter` accordingly.
+(`max|delta_h| / (max|h| + eps) < ps.tol`, or `max|delta_h| < ps.atol` when `ps.atol > 0`, see
+[`head_converged`](@ref)), and sets `ps.converged`/`ps.last_iter` accordingly.
 """
-function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion())
+function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
 
     s = state
 
@@ -337,13 +352,14 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
     ps.converged = false
     ps.last_iter = 0
     reset_relaxation!(ps.hr) # no-op except for AndersonHeadRelaxation, whose history is only valid within one timestep's fixed-point map
+    npol = 0 # donor polishing rounds this step (polish_donors!, ImplicitUpwind)
 
     @inbounds for iter in 1:ps.iters # start the Picard loop
 
         # Store previous head for convergence check
         @. ps.h_prev = s.h
 
-        Picard_iteration!(ps.ls, ps.hr, state, grid, p, mt, kfs, sl, ps.h_prev; cnc, ds) # run one linear solve to update h and the relevant fields
+        Picard_iteration!(ps.ls, ps.hr, state, grid, p, mt, kfs, sl, ps.h_prev; cnc, ds, gc) # run one linear solve to update h and the relevant fields
 
         @. ps.delta_h = s.h - ps.h_prev
 
@@ -356,7 +372,12 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
             # ldiv! bug, JuliaSparse/SparseArrays.jl#726, unrelated to this call) -- this fix reduces allocation/GC pressure, nothing more.
             delta_h_max = raw_update_max(ps.hr, ps.delta_h) # the UNrelaxed update, see raw_update_max
             h_max = mapreduce(abs, max, s.h; init = zero(eltype(s.h)))
-            if delta_h_max / (h_max + eps(eltype(s.h))) < ps.tol
+            if head_converged(delta_h_max, h_max, ps.tol, ps.atol)
+                if npol < MAX_DONOR_POLISH_ROUNDS && polish_donors!(kfs, s) > 0 # faces left frozen downstream: refrozen, iterate on
+                    npol += 1
+                    refresh_head_dependents!(s, grid, p, mt, kfs, sl; cnc, ds, gc)
+                    continue
+                end
                 ps.converged = true
                 ps.last_iter = iter
                 return
@@ -381,7 +402,7 @@ linear solve. The water depth `b` is left untouched here in either case until we
 head solve entirely and update `b` following Eq. 2 of
 https://gmd.copernicus.org/articles/11/2955/2018/.
 """
-function refresh_head_dependents!(s::State, g::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion())
+function refresh_head_dependents!(s::State, g::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
 
     (p.outflow_only_land || p.outflow_only_ocean) && compute_face_masks!(s, p.outflow_only_land, p.outflow_only_ocean) # close LAND/OCEAN faces that would feed the ice, from the new head
     compute_dhdxy!(s, g) # updates gradient of h in both x and y directions in one kernel to reduce the number of kernels
@@ -390,7 +411,7 @@ function refresh_head_dependents!(s::State, g::Grid, p::ModelParameters, mt::Mel
     compute_dpwdxy!(s, g) # update the water pressure gradient in both x and y in one kernel, feeds compute_sensible!'s sensible-heat term (via compute_mdot! below)
     compute_N!(s, p, cnc) # update effective pressure (ice overburden pressure - pw)
 
-    compute_face_flux!(s, p, kfs) # face transmissivity K_x/K_y, flux q and Reynolds number Re on faces, lag-free and in one kernel -- K_x/K_y are exactly what the next linear solve assembles, so the solve and every flux diagnostic see the same flux (water_flux.jl)
+    compute_face_flux!(s, p, kfs, gc) # face transmissivity K_x/K_y, flux q and Reynolds number Re on faces, lag-free and in one kernel -- K_x/K_y are exactly what the next linear solve assembles, so the solve and every flux diagnostic see the same flux (water_flux.jl)
     compute_Re!(s) # update the Reynold's number based on the Re_x and Re_y doing an average over the four faces of a grid cell
 
     compute_taub_xy!(s, p, sl) # update the basal shear stress based on the sliding law `sl` chosen
@@ -412,12 +433,13 @@ One Picard iteration: solves the linearized system for a new `h` ([`solve_ellipt
 optionally relaxes it ([`relax_h!`](@ref)), then refreshes every field that depends on the new `h`
 via [`refresh_head_dependents!`](@ref) so the next iteration's linearization is consistent.
 """
-function Picard_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation, s::State, g::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, h_prev; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion())
+function Picard_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation, s::State, g::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, h_prev; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
 
-    solve_elliptic_linear_system!(ls, s, g, p, kfs, ds) # update the h field, including the -div(D*grad(b)) source term under WithDiffusion
+    solve_elliptic_linear_system!(ls, s, g, p, kfs, ds, gc) # update the h field, including the -div(D*grad(b)) source term under WithDiffusion
     relax_h!(hr, s, h_prev) # update the h field again according to the relaxation parameter, damp the raw Picard update before anything downstream of h is recomputed, so the next iteration's coefficients are consistent with the relaxed h
+    limit_regime_crossing!(kfs, s, h_prev, p) # ImplicitUpwind: stop at the bed/overburden head when crossing it (unfilled_cavities.jl); no-op otherwise
 
-    refresh_head_dependents!(s, g, p, mt, kfs, sl; cnc, ds)
+    refresh_head_dependents!(s, g, p, mt, kfs, sl; cnc, ds, gc)
 
 end
 

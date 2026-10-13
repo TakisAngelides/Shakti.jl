@@ -13,9 +13,13 @@
 # compute_q_y! below; dpwdx/dpwdy feed the "sensible" heat term in
 # compute_mdot! further down.
 
-@parallel_indices (ix, iy) function compute_dhdx_kernel!(dhdx, h, valid_x, dx)
+# Head difference across a face plus the gap jump `db` (nonzero only under SheetTopPotential, see
+# hydraulic_potential.jl); skipping the addition when `db` is zero keeps BedPotential bit-for-bit.
+@inline face_head_difference(dh, db) = iszero(db) ? dh : dh + db
+
+@parallel_indices (ix, iy) function compute_dhdx_kernel!(dhdx, h, db_x, valid_x, dx)
     if ix > 1 && ix < size(dhdx, 1) && iy <= size(dhdx, 2)
-        dhdx[ix, iy] = ((h[ix, iy] - h[ix-1, iy]) / dx) * valid_x[ix, iy] # staggered derivative from two center values times the validation of the face which gets zeroed if touching OTHER_BASIN
+        dhdx[ix, iy] = (face_head_difference(h[ix, iy] - h[ix-1, iy], db_x[ix, iy]) / dx) * valid_x[ix, iy] # staggered derivative from two center values times the validation of the face which gets zeroed if touching OTHER_BASIN
     end
     return
 end
@@ -23,18 +27,19 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Updates `s.dhdx` (x-gradient of hydraulic head) from the current `s.h`, zeroed on any face
-touching an `OTHER_BASIN` cell (`s.valid_x`) so downstream flux/melt computations never see a
-spurious gradient driven by a frozen, non-evolving value. Feeds [`compute_q_x!`](@ref).
+Updates `s.dhdx` (x-gradient of the head that drives the flux) from the current `s.h`, plus the gap
+jump `s.db_x` under [`SheetTopPotential`](@ref) (zero otherwise), zeroed on any face touching an
+`OTHER_BASIN` cell (`s.valid_x`) so downstream flux/melt computations never see a spurious gradient
+driven by a frozen, non-evolving value. Feeds [`compute_q_x!`](@ref).
 """
 function compute_dhdx!(s::State, g::Grid)
-    @parallel compute_dhdx_kernel!(s.dhdx, s.h, s.valid_x, g.dx)
+    @parallel compute_dhdx_kernel!(s.dhdx, s.h, s.db_x, s.valid_x, g.dx)
     return s
 end
 
-@parallel_indices (ix, iy) function compute_dhdy_kernel!(dhdy, h, valid_y, dy)
+@parallel_indices (ix, iy) function compute_dhdy_kernel!(dhdy, h, db_y, valid_y, dy)
     if iy > 1 && iy < size(dhdy, 2) && ix <= size(dhdy, 1)
-        dhdy[ix, iy] = ((h[ix, iy] - h[ix, iy-1]) / dy) * valid_y[ix, iy]
+        dhdy[ix, iy] = (face_head_difference(h[ix, iy] - h[ix, iy-1], db_y[ix, iy]) / dy) * valid_y[ix, iy]
     end
     return
 end
@@ -46,7 +51,7 @@ Updates `s.dhdy` (y-gradient of hydraulic head), the y-face counterpart of
 [`compute_dhdx!`](@ref).
 """
 function compute_dhdy!(s::State, g::Grid)
-    @parallel compute_dhdy_kernel!(s.dhdy, s.h, s.valid_y, g.dy)
+    @parallel compute_dhdy_kernel!(s.dhdy, s.h, s.db_y, s.valid_y, g.dy)
     return s
 end
 
@@ -92,12 +97,12 @@ end
 # (nx,ny+1) y-face arrays as arguments launches over their union bounding box
 # (1:nx+1, 1:ny+1) automatically -- each `if` below still only writes within
 # its own field's bounds, exactly as the unfused kernels above already did.
-@parallel_indices (ix, iy) function compute_dhdxy_kernel!(dhdx, dhdy, h, valid_x, valid_y, dx, dy)
+@parallel_indices (ix, iy) function compute_dhdxy_kernel!(dhdx, dhdy, h, db_x, db_y, valid_x, valid_y, dx, dy)
     if ix > 1 && ix < size(dhdx, 1) && iy <= size(dhdx, 2)
-        dhdx[ix, iy] = ((h[ix, iy] - h[ix-1, iy]) / dx) * valid_x[ix, iy] # valid_x is an XFace field; 0 if face touches a 'OTHER_BASIN' cell or 1 otherwise
+        dhdx[ix, iy] = (face_head_difference(h[ix, iy] - h[ix-1, iy], db_x[ix, iy]) / dx) * valid_x[ix, iy] # valid_x is an XFace field; 0 if face touches a 'OTHER_BASIN' cell or 1 otherwise
     end
     if iy > 1 && iy < size(dhdy, 2) && ix <= size(dhdy, 1)
-        dhdy[ix, iy] = ((h[ix, iy] - h[ix, iy-1]) / dy) * valid_y[ix, iy]
+        dhdy[ix, iy] = (face_head_difference(h[ix, iy] - h[ix, iy-1], db_y[ix, iy]) / dy) * valid_y[ix, iy]
     end
     return
 end
@@ -107,7 +112,7 @@ $(TYPEDSIGNATURES)
 Fused version of [`compute_dhdx!`](@ref) + [`compute_dhdy!`](@ref): one `@parallel` launch
 instead of two.
 """
-compute_dhdxy!(s::State, g::Grid) = (@parallel compute_dhdxy_kernel!(s.dhdx, s.dhdy, s.h, s.valid_x, s.valid_y, g.dx, g.dy); s)
+compute_dhdxy!(s::State, g::Grid) = (@parallel compute_dhdxy_kernel!(s.dhdx, s.dhdy, s.h, s.db_x, s.db_y, s.valid_x, s.valid_y, g.dx, g.dy); s)
 
 @parallel_indices (ix, iy) function compute_dpwdxy_kernel!(dpwdx, dpwdy, pw, valid_x, valid_y, dx, dy)
     if ix > 1 && ix < size(dpwdx, 1) && iy <= size(dpwdx, 2)

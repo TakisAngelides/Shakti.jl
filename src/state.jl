@@ -17,17 +17,22 @@ struct State{A <: AbstractArray}
     pw::A         # water pressure
     po::A         # ice overburden pressure
     b::A          # water depth
-    b_w::A        # water depth at the current head iterate [m] (b - empty part, floored); what the face conductances are built from (unfilled_cavities.jl). Equals b exactly under FilledCavities
-    w_old::A      # water per bed area [m] at the start of the step, b - b_empty (UnfilledCavities, see update_b_empty_budget!)
+    b_w::A        # water depth the face conductances are built from [m] (b - empty part + uplift layer, floored; unfilled_cavities.jl): at the start of the step, or at the end of it from the head iterate under ImplicitUpwind. Equals b exactly under FilledCavities and NoUplift
+    dbw_dh::A     # dW/dh of b_w under ImplicitUpwind (1 where the water depth is free, unfilled or uplifted, 0 elsewhere); zero otherwise
+    w_old::A      # water per bed area [m] at the start of the step, b - b_empty + b_uplift (UnfilledCavities, see update_b_empty_budget!)
     stor::A       # water storage coefficient of an unfilled cavity [1/s]: 1/dt on GROUNDED cells under UnfilledCavities, 0 otherwise (0 = legacy, always-filled gap)
     b_empty::A    # empty (water-free) part of the gap per unit bed area [m], >= 0; only used under UnfilledCavities (unfilled_cavities.jl), zero otherwise. Water actually present is b - b_empty
+    stor_up::A    # storage coefficient of the uplift layer [1/s]: 1/dt on GROUNDED cells under IceUplift, 0 otherwise (0 = legacy, no cap on pw)
+    b_uplift::A   # water stored where the ice is lifted off the bed, above the gap [m], >= 0; only used under IceUplift (ice_uplift.jl). Water present is b - b_empty + b_uplift
     beta::A       # parameter for opening by sliding over bedrock bumps
     lc::A         # ice-creep length scale (see AbstractCreepLengthScheme, gap_height.jl); equals b under StandardCreep
     abs_ub::A     # absolute value of the sliding velocity
     mdot::A       # melt rate
+    mdot0::A      # melt rate at the start of the step (ImplicitUpwind with ConsistentGapCoupling: the melt opening of the end-of-step gap in the conductance, compute_b_w_iterate!); untouched otherwise
+    dh_it::A      # ImplicitUpwind: the previous head iteration's (limited) step of each cell, for the oscillation damping of limit_regime_crossing! (unfilled_cavities.jl), zeroed at the start of each step; zero otherwise
     mdot_min::A   # floor on mdot this step, -rho_i*C (freeze-on capacity); applied when p.limit_freeze_on
     Q_b::A        # frictional (sliding) heat |u_b . taub| [W/m^2], written by compute_mdot! (0 when that term is off)
-    Q_diss::A     # heat dissipated by water flowing down the head gradient rho_w*g*|q . grad(h)| [W/m^2] (0 when off)
+    Q_diss::A     # heat dissipated by water flowing down the driving head gradient rho_w*g*|q . grad(h)| [W/m^2] (grad(h + b) under SheetTopPotential; 0 when off)
     Q_sens::A     # sensible heat ct*cw*rho_w*(q . grad(pw)) [W/m^2] (0 when off)
     Re::A         # Reynolds number
     K::A          # hydraulic conductivity
@@ -47,7 +52,8 @@ struct State{A <: AbstractArray}
     mask::A       # 0 grounded, 1 ocean, 2 land, 3 other grounded-ice basin (static per run)
 
     # XFace fields
-    dhdx::A       # gradient of hydraulic head in x direction
+    dhdx::A       # gradient of the head that drives the flux in x direction: of h, or of h + b under SheetTopPotential (hydraulic_potential.jl)
+    db_x::A       # jump of the gap height across the x-face, b[i] - b[i-1] [m], between two GROUNDED cells under SheetTopPotential; zero otherwise
     q_x::A        # water flux in x direction
     Re_x::A       # Reynolds number in x direction
     b_x::A        # water depth in x direction
@@ -56,10 +62,13 @@ struct State{A <: AbstractArray}
     dpwdx::A      # gradient of water pressure in x direction
     D_x::A        # channel-wall diffusion coefficient in x direction (SUHMO Eq. 10, WithDiffusion only -- see AbstractDiffusionScheme, linear_solver.jl)
     K_x::A        # face transmissivity in x direction: what the linear system assembles and q_x is built from (compute_face_flux!, water_flux.jl)
+    Jw_x::A       # ImplicitUpwind: Newton coefficient of the x-face flux in the donor's head through its water depth [m/s], signed by donor side (water_depth_newton_kernel!); zero otherwise
+    don_x::A      # ImplicitUpwind: donor side of the x-face this step, sign(+1 high index, -1 low index) * (1 + number of donor flips), 0 = not set (update_donor_kernel!, water_flux.jl), DONOR_REFROZEN/DONOR_THINNER after polishing (polish_donors!); zero otherwise
     valid_x::A    # 1.0 where the x-face does NOT touch an OTHER_BASIN or FROZEN_BED cell, else 0.0
 
     # YFace fields
-    dhdy::A       # gradient of hydraulic head in y direction
+    dhdy::A       # gradient of the head that drives the flux in y direction, the y-face counterpart of dhdx
+    db_y::A       # jump of the gap height across the y-face, the y-face counterpart of db_x
     q_y::A        # water flux in y direction
     Re_y::A       # Reynolds number in y direction
     b_y::A        # water depth in y direction
@@ -68,6 +77,8 @@ struct State{A <: AbstractArray}
     dpwdy::A      # gradient of water pressure in y direction
     D_y::A        # channel-wall diffusion coefficient in y direction, the y-face counterpart of D_x
     K_y::A        # face transmissivity in y direction, the y-face counterpart of K_x
+    Jw_y::A       # ImplicitUpwind: the y-face counterpart of Jw_x
+    don_y::A      # ImplicitUpwind: donor side of the y-face, the y-face counterpart of don_x
     valid_y::A    # 1.0 where the y-face does NOT touch an OTHER_BASIN or FROZEN_BED cell, else 0.0
 end
 
@@ -106,13 +117,18 @@ function State(g::Grid)
     po        = initialize_center_field(g)
     b         = initialize_center_field(g)
     b_empty   = initialize_center_field(g)
+    stor_up   = initialize_center_field(g)
+    b_uplift  = initialize_center_field(g)
     b_w       = initialize_center_field(g)
+    dbw_dh    = initialize_center_field(g)
     stor      = initialize_center_field(g)
     w_old     = initialize_center_field(g)
     beta      = initialize_center_field(g)
     lc        = initialize_center_field(g)
     abs_ub    = initialize_center_field(g)
     mdot      = initialize_center_field(g)
+    mdot0     = initialize_center_field(g)
+    dh_it     = initialize_center_field(g)
     mdot_min  = @fill(-Inf, g.nx, g.ny) # no floor until prepare_head_solve! sets one
     Q_b       = initialize_center_field(g)
     Q_diss    = initialize_center_field(g)
@@ -134,6 +150,7 @@ function State(g::Grid)
 
     # XFace fields
     dhdx    = initialize_xface_field(g)
+    db_x    = initialize_xface_field(g)
     q_x     = initialize_xface_field(g)
     Re_x    = initialize_xface_field(g)
     b_x     = initialize_xface_field(g)
@@ -142,10 +159,13 @@ function State(g::Grid)
     dpwdx   = initialize_xface_field(g)
     D_x     = initialize_xface_field(g)
     K_x     = initialize_xface_field(g)
+    Jw_x    = initialize_xface_field(g)
+    don_x   = initialize_xface_field(g)
     valid_x = @fill(1.0, g.nx+1, g.ny) # float 1.0 = valid; recomputed in compute_face_masks!
 
     # YFace fields
     dhdy    = initialize_yface_field(g)
+    db_y    = initialize_yface_field(g)
     q_y     = initialize_yface_field(g)
     Re_y    = initialize_yface_field(g)
     b_y     = initialize_yface_field(g)
@@ -154,12 +174,14 @@ function State(g::Grid)
     dpwdy   = initialize_yface_field(g)
     D_y     = initialize_yface_field(g)
     K_y     = initialize_yface_field(g)
+    Jw_y    = initialize_yface_field(g)
+    don_y   = initialize_yface_field(g)
     valid_y = @fill(1.0, g.nx, g.ny+1) # float 1.0 = valid; recomputed in compute_face_masks!
 
     return State(
-        h, pw, po, b, b_w, w_old, stor, b_empty, beta, lc, abs_ub, mdot, mdot_min, Q_b, Q_diss, Q_sens, Re, K, G, q_T, zb, zs, H, ieb, ieb_own, ieb_external, lambda, A_visc, N, mask,
-        dhdx, q_x, Re_x, b_x, ub_x, taub_x, dpwdx, D_x, K_x, valid_x,
-        dhdy, q_y, Re_y, b_y, ub_y, taub_y, dpwdy, D_y, K_y, valid_y,
+        h, pw, po, b, b_w, dbw_dh, w_old, stor, b_empty, stor_up, b_uplift, beta, lc, abs_ub, mdot, mdot0, dh_it, mdot_min, Q_b, Q_diss, Q_sens, Re, K, G, q_T, zb, zs, H, ieb, ieb_own, ieb_external, lambda, A_visc, N, mask,
+        dhdx, db_x, q_x, Re_x, b_x, ub_x, taub_x, dpwdx, D_x, K_x, Jw_x, don_x, valid_x,
+        dhdy, db_y, q_y, Re_y, b_y, ub_y, taub_y, dpwdy, D_y, K_y, Jw_y, don_y, valid_y,
     )
 
 end

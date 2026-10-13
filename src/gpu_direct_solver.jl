@@ -53,7 +53,8 @@ mutable struct CUDSSDirectSolver{F <: AbstractFloat, SALS <: SparseAssembledLine
     sals::SALS
     A_gpu::AGPU
     vals_perm::Vector{Int} # vals_perm[k] = index into sals.M.nzval whose value belongs at A_gpu.nzVal[k]
-    solver::SLV            # CUDSS factorization object (from `cholesky(A_gpu; view='F')`)
+    solver::SLV            # CUDSS factorization object (from `cholesky(A_gpu; view='F')`, or `lu(A_gpu)` under structure = :general)
+    general::Bool          # structure = :general: LU of a non-symmetric matrix (ImplicitUpwind) instead of Cholesky
     b_gpu::VGPU
     x_gpu::VGPU
     gpu_vals::VGPU          # GPU-side scratch for the permuted nzval, length nnz(sals.M), reused every solve
@@ -66,9 +67,12 @@ $(TYPEDSIGNATURES)
 Builds a [`CUDSSDirectSolver`](@ref) on grid `g`. Requires the "Threads" backend at construction
 (like [`CholeskyDirectSolver`](@ref)) -- see this file's module-level notes for why "CUDA" backend
 does not work here (ParallelStencil's own GPU field arrays are incompatible with
-`SparseAssembledLinearSystem`'s CPU-only assembly).
+`SparseAssembledLinearSystem`'s CPU-only assembly). `structure`: `:spd` (default, Cholesky) or `:general`
+(LU, for the non-symmetric matrix [`ImplicitUpwind`](@ref) assembles; the GPU counterpart of
+[`LUDirectSolver`](@ref)).
 """
-function CUDSSDirectSolver(g::Grid{F}) where F
+function CUDSSDirectSolver(g::Grid{F}; structure::Symbol = :spd) where F
+    structure in (:spd, :general) || error("Unknown structure: $structure (use :spd or :general)")
 
     backend != "Threads" && error("CUDSSDirectSolver requires the \"Threads\" backend (current backend: $backend) -- it uses CUDA/CUDSS internally regardless, see this file's module-level notes.")
 
@@ -85,15 +89,18 @@ function CUDSSDirectSolver(g::Grid{F}) where F
     vals_perm = Int.(Array(A_gpu_marker.nzVal))
 
     A_gpu = CuSparseMatrixCSR{F, Int32}(sals.M) # real (placeholder, at this point) initial values
-    solver = cholesky(A_gpu; view = 'F')
+    general = structure == :general
+    solver = general ? lu(A_gpu) : cholesky(A_gpu; view = 'F')
 
     b_gpu    = CUDA.zeros(F, n)
     x_gpu    = CUDA.zeros(F, n)
     gpu_vals = CUDA.zeros(F, nz)
     h_vec    = zeros(F, n)
 
-    return CUDSSDirectSolver(sals, A_gpu, vals_perm, solver, b_gpu, x_gpu, gpu_vals, h_vec)
+    return CUDSSDirectSolver(sals, A_gpu, vals_perm, solver, general, b_gpu, x_gpu, gpu_vals, h_vec)
 end
+
+supports_nonsymmetric(ls::CUDSSDirectSolver) = ls.general
 
 """
 $(TYPEDSIGNATURES)
@@ -104,15 +111,15 @@ Solves the elliptic head equation's linear system under [`CUDSSDirectSolver`](@r
 matrix in place, refactorizes on the GPU reusing the symbolic analysis, solves, and copies the
 result back into `s.h`.
 """
-function solve_elliptic_linear_system!(ls::CUDSSDirectSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion())
+function solve_elliptic_linear_system!(ls::CUDSSDirectSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
 
-    update_SALS_elliptic!(ls.sals, s, g, p, kfs, ds) # refresh sals.M/rhs on CPU
+    update_SALS_elliptic!(ls.sals, s, g, p, kfs, ds, gc) # refresh sals.M/rhs on CPU
 
     host_vals = ls.sals.M.nzval[ls.vals_perm] # CPU-side gather into the GPU matrix's own nonzero order
     copyto!(ls.gpu_vals, host_vals)
     copyto!(ls.A_gpu.nzVal, ls.gpu_vals)
 
-    cholesky!(ls.solver, ls.A_gpu) # refactorize in place, reusing the symbolic analysis
+    ls.general ? lu!(ls.solver, ls.A_gpu) : cholesky!(ls.solver, ls.A_gpu) # refactorize in place, reusing the symbolic analysis
 
     copyto!(ls.b_gpu, ls.sals.rhs)
     ls.x_gpu .= ls.solver \ ls.b_gpu

@@ -267,7 +267,7 @@ Solves the nonlinear elliptic head equation via [`NewtonJFNKSolver`](@ref) -- th
 """
 function elliptic_solver!(ns::NewtonJFNKSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms,
                            kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping(),
-                           ds::AbstractDiffusionScheme = NoDiffusion())
+                           ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling()) # gc: only ExplicitGapCoupling (Simulation refuses another)
     Newton_loop!(ns, state, grid, p, mt, kfs, sl; cnc, ds)
 end
 

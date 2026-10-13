@@ -2,8 +2,9 @@
 $(TYPEDSIGNATURES)
 
 How hydraulic conductivity `K` is combined across two neighbouring `GROUNDED` cells' shared face
-into a single face conductance -- multiple dispatch on the concrete subtype picks arithmetic vs.
-harmonic averaging (see [`compute_K_face`](@ref) and [`boundary_K_face`](@ref)).
+into a single face conductance -- multiple dispatch on the concrete subtype picks arithmetic or
+harmonic averaging, the donor cell's value ([`Upwind`](@ref)), or the donor's value at the end-of-step
+water depth ([`ImplicitUpwind`](@ref)) (see [`compute_K_face`](@ref) and [`boundary_K_face`](@ref)).
 """
 abstract type AbstractKFaceScheme end
 
@@ -61,6 +62,32 @@ at the low index, `b` at the high index): only [`Upwind`](@ref) uses it.
 """
 @inline face_mean(kfs::AbstractKFaceScheme, a, b, dh) = face_mean(kfs, a, b)
 @inline face_mean(::Upwind, a, b, dh) = dh > 0 ? b : (dh < 0 ? a : min(a, b))
+
+"""
+$(TYPEDSIGNATURES)
+
+[`Upwind`](@ref) face conductance built from the donor's water depth at the END of the step, as a function
+of the head iterate, instead of at its start: `W = b - max(0, zb - h)` in a cell whose gap may be partly
+empty ([`UnfilledCavities`](@ref)) and `W = b + max(0, h - h_o)` in one where the ice may be lifted
+([`IceUplift`](@ref)), `b` itself held at its start-of-step value as everywhere else
+([`compute_b_w_iterate!`](@ref), `unfilled_cavities.jl`). Where the water depth is free (a free surface or an
+uplift layer) the flux is a kinematic wave in it, `q ~ K(W) grad(zb)`: with `W` lagged ([`Upwind`](@ref)) that
+wave is explicit in time and stable only for `dt < dx*W/(3|q|)`, minutes at 100 m. Here it is backward Euler
+and stable at any `dt`. Each head solve also takes the Newton terms of the face flux's dependence on the
+donor's water depth ([`water_depth_newton_kernel!`](@ref), `water_flux.jl`), so the Picard iteration is
+Newton's method in `W` and converges at any `dt` (a plain fixed point in `W` does not, see
+[`compute_b_w!`](@ref)). Those terms couple each face to its donor cell only, so the assembled matrix is no
+longer symmetric: it needs [`LUDirectSolver`](@ref) or `CUDSSDirectSolver(grid; structure = :general)`.
+Without unfilled cavities and uplift every water depth is the gap and this is [`Upwind`](@ref) exactly.
+"""
+struct ImplicitUpwind <: AbstractKFaceScheme end
+
+@inline face_mean(::ImplicitUpwind, a, b) = min(a, b)
+@inline face_mean(::ImplicitUpwind, a, b, dh) = dh > 0 ? b : (dh < 0 ? a : min(a, b))
+# The argument compute_face_flux_kernel! (water_flux.jl) hands face_mean: under ImplicitUpwind the face donor s.don_x/
+# s.don_y, mapped to 0 (the thinner cell, min) on a DONOR_THINNER face (polish_donors!); the head gradient otherwise.
+@inline face_select(::AbstractKFaceScheme, d) = d
+@inline face_select(::ImplicitUpwind, d) = abs(d) >= DONOR_THINNER ? zero(d) : d
 
 """
 $(TYPEDSIGNATURES)

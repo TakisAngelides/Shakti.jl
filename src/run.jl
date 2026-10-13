@@ -164,6 +164,7 @@ function step!(sim::Simulation)
     step_h!(sim.hs, sim)
     record_head!(sim.he, sim.state, sim.dt[], first(picard_status(sim.hs)))
     update_b_empty!(sim.state, sim.cf) # from the solved head, before step_b! evolves b
+    update_b_uplift!(sim.state, sim.p, sim.up) # IceUplift: the uplift layer from the solved head (no-op under NoUplift)
     step_b!(sim)
     sim.hs isa EllipticHeadScheme && update_b_empty_budget!(sim.state, sim.grid, sim.p, sim.dt[], sim.cf) # empty volume from the water budget, now that the gap is final
 end
@@ -177,7 +178,9 @@ has just been evolved by the previous [`step_b!`](@ref), and an ice-flow model m
 
 1. `H`/`po` from the current `b` ([`compute_H!`](@ref)/[`compute_po!`](@ref); `H = zs - (zb + b)`),
    so a large gap (a wide channel at fine resolution) lowers the overburden it sits under. Two
-   elementwise kernels, negligible next to one linear solve.
+   elementwise kernels, negligible next to one linear solve. Under [`SheetTopPotential`](@ref) also
+   the gap jumps across faces ([`update_gap_jumps!`](@ref)) from the same `b`, so that the flux is
+   driven by `h + b` throughout the step.
 2. The initial head guess ([`extrapolate_head!`](@ref), per `sim.he`; a no-op under
    [`NoHeadExtrapolation`](@ref) or until two converged heads exist).
 3. Every field derived from `h` and `b` ([`refresh_head_dependents!`](@ref): `pw`, `N`, face
@@ -192,15 +195,35 @@ function prepare_head_solve!(sim::Simulation)
     compute_H!(s)
     compute_po!(s, sim.p)
     set_cavity_storage!(s, sim.dt[], sim.cf) # 1/dt marks cells that may be partly empty, read by the head rows and compute_pw!
+    set_uplift_storage!(s, sim.dt[], sim.up) # 1/dt marks cells where the ice may be lifted (no-op under NoUplift)
+    update_gap_jumps!(s, sim.hp) # SheetTopPotential: gap jumps across faces from the start-of-step b, added to the driving gradient (no-op under BedPotential)
     if sim.p.limit_freeze_on   # freeze-on floor for this step, from the start-of-step gap
         freeze_on_capacity!(s.mdot_min, sim)
         s.mdot_min .*= -sim.p.rho_i
     end
     extrapolate_head!(sim.he, s, sim.dt[])
-    refresh_head_dependents!(s, sim.grid, sim.p, sim.mt, sim.kfs, sim.sl; cnc = sim.cnc, ds = sim.ds)
+    limit_head_guess!(sim.kfs, sim.he, s, sim.p) # ImplicitUpwind: the extrapolated head obeys the regime and step limits of the iteration
+    store_start_of_step_melt!(sim.kfs, s) # ImplicitUpwind: the melt opening of the end-of-step gap in the conductance (unfilled_cavities.jl)
+    reset_donors!(sim.kfs, s) # ImplicitUpwind: every face starts the step with the higher-potential cell as donor (water_flux.jl)
+    refresh_head_dependents!(s, sim.grid, sim.p, sim.mt, sim.kfs, sim.sl; cnc = sim.cnc, ds = sim.ds, gc = gap_coupling_terms(sim))
     return sim
 end
 
+
+"""
+$(TYPEDSIGNATURES)
+
+Applies [`limit_regime_crossing!`](@ref) to the extrapolated initial head of a step ([`extrapolate_head!`](@ref)), measured
+from the last converged head, under [`ImplicitUpwind`](@ref); a no-op for every other K-face scheme and without head
+extrapolation. A head that changed regime in the last step moved by tens of metres (the range of a filled cell is the
+whole overburden head), and extrapolating that change into the uplifted regime gives a blister tens of metres deep (seen
+on Drang Drung at dt = 24 h: a cell that filled in step 7 started step 8 with an 84 m uplift layer, whose dissipation melt
+then fed the layer faster than the iteration could drain it). The guess is a starting point only, so the solution is unchanged.
+"""
+limit_head_guess!(::AbstractKFaceScheme, he, s::State, p::ModelParameters) = s
+limit_head_guess!(::ImplicitUpwind, ::NoHeadExtrapolation, s::State, p::ModelParameters) = s
+limit_head_guess!(kfs::ImplicitUpwind, he::HeadExtrapolation, s::State, p::ModelParameters) =
+    he.count >= 1 ? limit_regime_crossing!(kfs, s, he.hist[1], p) : s
 
 """
 $(TYPEDSIGNATURES)
@@ -264,7 +287,7 @@ Solves for the new hydraulic head under [`EllipticHeadScheme`](@ref): runs the P
 solve (`sim.mi`'s melt input for the current time was already refreshed by [`step!`](@ref)).
 """
 function step_h!(hs::EllipticHeadScheme, sim::Simulation)
-    elliptic_solver!(hs.ps, sim.state, sim.grid, sim.p, sim.mt, sim.kfs, sim.sl; cnc = sim.cnc, ds = sim.ds)
+    elliptic_solver!(hs.ps, sim.state, sim.grid, sim.p, sim.mt, sim.kfs, sim.sl; cnc = sim.cnc, ds = sim.ds, gc = gap_coupling_terms(sim))
 end
 
 """
@@ -274,7 +297,7 @@ Solves for the new hydraulic head under [`ParabolicHeadScheme`](@ref): repeats t
 linear solve to nonlinear convergence within this timestep ([`Parabolic_loop!`](@ref)).
 """
 function step_h!(hs::ParabolicHeadScheme, sim::Simulation)
-    Parabolic_loop!(hs.pps, sim.state, sim.grid, sim.p, sim.mt, sim.kfs, sim.sl, sim.dt[]; cnc = sim.cnc, ds = sim.ds)
+    Parabolic_loop!(hs.pps, sim.state, sim.grid, sim.p, sim.mt, sim.kfs, sim.sl, sim.dt[]; cnc = sim.cnc, ds = sim.ds, gc = gap_coupling_terms(sim))
 end
 
 """
@@ -392,6 +415,32 @@ function compute_b!(sim::Simulation, ::FullyImplicitGapScheme)
     @parallel compute_b_fully_implicit_kernel!(s.b, s.mask, s.mdot, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, sim.dt[], p.b_min, p.b_max, p.br, p.lr, sim.cls, p.b_c)
     return sim
 end
+
+"""
+$(TYPEDSIGNATURES)
+
+One cell's gap after the step under the gap scheme `GS` of a [`SchemeGapUpdate`](@ref), before the `b_min`/`b_max` clamp:
+the same formulas as [`compute_b!`](@ref)'s kernels above (`C = A*|N|^(n-1)*N`), so that the head rows of
+[`ConsistentGapCoupling`](@ref) assume exactly the gap change the gap scheme then makes.
+"""
+@inline gap_update(gu::SchemeGapUpdate{ExplicitGapScheme, CLS}, b, mdot, beta, abs_ub, C, rho_i) where CLS =
+    b + gu.dt * (mdot / rho_i + beta * abs_ub - C * creep_length(CLS(), b, gu.b_c))
+@inline gap_update(gu::SchemeGapUpdate{ImplicitGapScheme, CLS}, b, mdot, beta, abs_ub, C, rho_i) where CLS =
+    implicit_creep_update(CLS(), b, mdot / rho_i + beta * abs_ub, C, gu.dt, gu.b_c)
+@inline gap_update(gu::SchemeGapUpdate{FullyImplicitGapScheme, CLS}, b, mdot, beta, abs_ub, C, rho_i) where CLS =
+    fully_implicit_creep_update(CLS(), b, mdot / rho_i, abs_ub / gu.lr, C, gu.dt, gu.br, gu.b_c)
+
+"""
+$(TYPEDSIGNATURES)
+
+The gap coupling the head rows of this step use: [`ExplicitGapCoupling`](@ref) as it is, or, for
+[`ConsistentGapCoupling`](@ref), its kernel form [`SchemeGapUpdate`](@ref) with this step's `dt` and the simulation's gap
+and creep-length schemes.
+"""
+gap_coupling_terms(sim::Simulation) = gap_coupling_terms(sim, sim.gcp)
+gap_coupling_terms(sim::Simulation, ::ExplicitGapCoupling) = ExplicitGapCoupling()
+gap_coupling_terms(sim::Simulation, ::ConsistentGapCoupling) =
+    SchemeGapUpdate{typeof(sim.gs), typeof(sim.cls), typeof(sim.dt[])}(sim.dt[], sim.p.br, sim.p.lr, sim.p.b_c)
 
 """
 $(TYPEDSIGNATURES)

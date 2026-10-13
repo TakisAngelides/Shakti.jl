@@ -52,8 +52,29 @@ update_ieb!
 AbstractKFaceScheme
 Arithmetic
 Harmonic
+Upwind
+ImplicitUpwind
 compute_K_face
 face_conductance
+```
+
+## Unfilled cavities, water-surface potential, ice uplift (GlaDS-2 sheet)
+
+```@docs
+AbstractCavityFilling
+FilledCavities
+UnfilledCavities
+compute_b_w!
+compute_b_w_iterate!
+AbstractHydraulicPotential
+BedPotential
+SheetTopPotential
+AbstractIceUplift
+NoUplift
+IceUplift
+AbstractGapCoupling
+ExplicitGapCoupling
+ConsistentGapCoupling
 ```
 
 ## Sliding laws and melt rate
@@ -84,6 +105,7 @@ AbstractLinearSystem
 SparseAssembledLinearSystem
 MatrixFreeLinearSystem
 CholeskyDirectSolver
+LUDirectSolver
 CGIterativeSolver
 solve_elliptic_linear_system!
 solve_parabolic_linear_system!

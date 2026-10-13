@@ -113,6 +113,8 @@ include("newton_solver.jl")
 include("parabolic_solver.jl")
 include("gap_height.jl")
 include("unfilled_cavities.jl") # must precede simulation.jl: Simulation type-annotates its `cf` field with AbstractCavityFilling
+include("hydraulic_potential.jl") # must precede simulation.jl (the `hp` field), after mask.jl (GROUNDED)
+include("ice_uplift.jl") # must precede simulation.jl (the `up` field)
 include("cell_gap_clamping.jl")
 include("head_extrapolation.jl")
 include("simulation.jl")
@@ -137,7 +139,9 @@ export Grid
 export State
 
 # unfilled_cavities.jl
-export AbstractCavityFilling, FilledCavities, UnfilledCavities, update_b_empty!, update_b_empty_budget!, clamp_b_empty!, set_cavity_storage!, compute_b_w!
+export AbstractCavityFilling, FilledCavities, UnfilledCavities, update_b_empty!, update_b_empty_budget!, clamp_b_empty!, set_cavity_storage!, compute_b_w!, compute_b_w_iterate!
+export AbstractHydraulicPotential, BedPotential, SheetTopPotential, update_gap_jumps!
+export AbstractIceUplift, NoUplift, IceUplift, set_uplift_storage!, update_b_uplift!
 
 # mask.jl
 export GROUNDED, OCEAN, LAND, OTHER_BASIN, FROZEN_BED
@@ -147,7 +151,7 @@ export compute_face_masks!
 export AbstractMeltInput, ConstantMeltInput, SeasonalMeltInput, GaussianMoulinMeltInput, update_ieb!, combine_ieb!, set_ieb_external!
 
 # k_face_scheme.jl
-export AbstractKFaceScheme, Arithmetic, Harmonic, Upwind, compute_K_face, face_conductance
+export AbstractKFaceScheme, Arithmetic, Harmonic, Upwind, ImplicitUpwind, compute_K_face, face_conductance
 
 # linear_solver.jl
 # (update_SALS_elliptic!/update_MFLS_elliptic! are internal assembly plumbing, not part of the
@@ -156,11 +160,12 @@ export AbstractKFaceScheme, Arithmetic, Harmonic, Upwind, compute_K_face, face_c
 # iterative solver constructors, e.g. CGIterativeSolver(g, MatrixFreeLinearSystem))
 export AbstractLinearSolver, AbstractDirectSolver, AbstractIterativeSolver
 export AbstractLinearSystem, SparseAssembledLinearSystem, MatrixFreeLinearSystem
-export CholeskyDirectSolver, CGIterativeSolver
+export CholeskyDirectSolver, LUDirectSolver, CGIterativeSolver
 @static if backend != "Metal"
     export CUDSSDirectSolver
 end
 export solve_elliptic_linear_system!, solve_parabolic_linear_system!
+export AbstractGapCoupling, ExplicitGapCoupling, ConsistentGapCoupling
 export AbstractDiffusionScheme, NoDiffusion, WithDiffusion
 export solve_b_diffusion!
 
