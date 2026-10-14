@@ -57,6 +57,7 @@ function freeze_cells!(s::State, p::ModelParameters, freeze_mask::AbstractMatrix
     do_freeze = freeze_mask .& (s.mask .== GROUNDED)
     @. s.mask = ifelse(do_freeze, FROZEN_BED, s.mask)
     @. s.b = ifelse(do_freeze, zero(eltype(s.b)), s.b)
+    @. s.b_dry = ifelse(do_freeze, zero(eltype(s.b_dry)), s.b_dry)
     @. s.pw = ifelse(do_freeze, zero(eltype(s.pw)), s.pw)
     refresh_b_dependents!(s, p) # lc/beta are lagged fields derived from b (normally refreshed in step_b!): keep them consistent with the b just set
     compute_h!(s, p)
@@ -85,6 +86,7 @@ function thaw_cells!(s::State, p::ModelParameters, thaw_mask::AbstractMatrix{Boo
     do_thaw = thaw_mask .& (s.mask .== FROZEN_BED)
     @. s.mask = ifelse(do_thaw, GROUNDED, s.mask)
     @. s.b = ifelse(do_thaw, p.b_min, s.b)
+    @. s.b_dry = ifelse(do_thaw, zero(eltype(s.b_dry)), s.b_dry)
     refresh_b_dependents!(s, p) # without this a thawed cell keeps lc = 0 (from its frozen b = 0) until the next step_b!, i.e. no creep-closure term in the first head solve
     compute_K!(s, p)
     compute_face_masks!(s)
@@ -157,7 +159,7 @@ function update_frozen_mask!(s::State, p::ModelParameters, T_prime_b::AbstractMa
     n_thawed = count(thaw_mask)
     discarded_b = zero(eltype(s.b))
     if n_frozen > 0
-        discarded_b = sum(s.b .* freeze_mask) # read before freeze_cells! zeroes b
+        discarded_b = sum((s.b .- s.b_dry) .* freeze_mask) # the water, read before freeze_cells! zeroes b
         freeze_cells!(s, p, freeze_mask)
     end
     n_thawed > 0 && thaw_cells!(s, p, thaw_mask)
@@ -192,9 +194,10 @@ function set_mask!(s::State, p::ModelParameters, new_mask::AbstractMatrix)
     n_on, n_off = count(on), count(off)
     discarded_b = zero(eltype(s.b))
     (n_on == 0 && n_off == 0 && s.mask == nm) && return (n_on = 0, n_off = 0, discarded_b = discarded_b, n_isolated = 0)
-    discarded_b = sum(s.b .* off)
+    discarded_b = sum((s.b .- s.b_dry) .* off)
     s.mask .= nm
     @. s.b = ifelse(on, p.b_min, ifelse(off, zero(eltype(s.b)), s.b))
+    @. s.b_dry = ifelse(on | off, zero(eltype(s.b_dry)), s.b_dry)
     apply_boundary_pw!(s, p)
     refresh_b_dependents!(s, p)
     compute_h!(s, p)

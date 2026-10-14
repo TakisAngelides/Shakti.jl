@@ -24,12 +24,13 @@ struct State{A <: AbstractArray}
     b_empty::A    # empty (water-free) part of the gap per unit bed area [m], >= 0; only used under UnfilledCavities (unfilled_cavities.jl), zero otherwise. Water actually present is b - b_empty
     stor_up::A    # storage coefficient of the uplift layer [1/s]: 1/dt on GROUNDED cells under IceUplift, 0 otherwise (0 = legacy, no cap on pw)
     b_uplift::A   # water stored where the ice is lifted off the bed, above the gap [m], >= 0; only used under IceUplift (ice_uplift.jl). Water present is b - b_empty + b_uplift
+    b_dry::A      # dry part of the b_min floor [m], 0 <= b_dry <= b: the gap held at b_min above water drained below it (the dry floor, dry_floor in run.jl: ConsistentGapCoupling under FilledCavities); zero otherwise. Water present is b - b_dry
     beta::A       # parameter for opening by sliding over bedrock bumps
     lc::A         # ice-creep length scale (see AbstractCreepLengthScheme, gap_height.jl); equals b under StandardCreep
     abs_ub::A     # absolute value of the sliding velocity
     mdot::A       # melt rate
     mdot0::A      # melt rate at the start of the step (ImplicitUpwind with ConsistentGapCoupling: the melt opening of the end-of-step gap in the conductance, compute_b_w_iterate!); untouched otherwise
-    dh_it::A      # ImplicitUpwind: the previous head iteration's (limited) step of each cell, for the oscillation damping of limit_regime_crossing! (unfilled_cavities.jl), zeroed at the start of each step; zero otherwise
+    dh_it::A      # the previous head iteration's (limited) step of each cell, for the oscillation damping of limit_regime_crossing! (ImplicitUpwind) and limit_filled_step! (the dry floor, other K-face schemes), unfilled_cavities.jl; zeroed at the start of each step; zero otherwise
     mdot_min::A   # floor on mdot this step, -rho_i*C (freeze-on capacity); applied when p.limit_freeze_on
     Q_b::A        # frictional (sliding) heat |u_b . taub| [W/m^2], written by compute_mdot! (0 when that term is off)
     Q_diss::A     # heat dissipated by water flowing down the driving head gradient rho_w*g*|q . grad(h)| [W/m^2] (grad(h + b) under SheetTopPotential; 0 when off)
@@ -119,6 +120,7 @@ function State(g::Grid)
     b_empty   = initialize_center_field(g)
     stor_up   = initialize_center_field(g)
     b_uplift  = initialize_center_field(g)
+    b_dry     = initialize_center_field(g)
     b_w       = initialize_center_field(g)
     dbw_dh    = initialize_center_field(g)
     stor      = initialize_center_field(g)
@@ -179,7 +181,7 @@ function State(g::Grid)
     valid_y = @fill(1.0, g.nx, g.ny+1) # float 1.0 = valid; recomputed in compute_face_masks!
 
     return State(
-        h, pw, po, b, b_w, dbw_dh, w_old, stor, b_empty, stor_up, b_uplift, beta, lc, abs_ub, mdot, mdot0, dh_it, mdot_min, Q_b, Q_diss, Q_sens, Re, K, G, q_T, zb, zs, H, ieb, ieb_own, ieb_external, lambda, A_visc, N, mask,
+        h, pw, po, b, b_w, dbw_dh, w_old, stor, b_empty, stor_up, b_uplift, b_dry, beta, lc, abs_ub, mdot, mdot0, dh_it, mdot_min, Q_b, Q_diss, Q_sens, Re, K, G, q_T, zb, zs, H, ieb, ieb_own, ieb_external, lambda, A_visc, N, mask,
         dhdx, db_x, q_x, Re_x, b_x, ub_x, taub_x, dpwdx, D_x, K_x, Jw_x, don_x, valid_x,
         dhdy, db_y, q_y, Re_y, b_y, ub_y, taub_y, dpwdy, D_y, K_y, Jw_y, don_y, valid_y,
     )

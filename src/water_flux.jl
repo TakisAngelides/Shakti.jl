@@ -415,9 +415,9 @@ $(TYPEDSIGNATURES)
 Clears the face donors of [`ImplicitUpwind`](@ref) (`s.don_x`, `s.don_y`) at the start of a step, so each step starts
 from the higher-potential cell of every face and counts its donor flips afresh (see `update_donor_kernel!`). A no-op for
 every other K-face scheme. Also zeroes the previous head steps of the oscillation damping (`s.dh_it`,
-[`limit_regime_crossing!`](@ref)).
+[`limit_regime_crossing!`](@ref), [`limit_filled_step!`](@ref)), for every K-face scheme.
 """
-reset_donors!(::AbstractKFaceScheme, s::State) = s
+reset_donors!(::AbstractKFaceScheme, s::State) = (fill!(s.dh_it, 0); s)
 reset_donors!(::ImplicitUpwind, s::State) = (fill!(s.don_x, 0); fill!(s.don_y, 0); fill!(s.dh_it, 0); s)
 
 # Side of the cell whose water depth sets the conductance of a face with donor d (+1 the cell at the high index, -1 at

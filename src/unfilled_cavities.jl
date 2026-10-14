@@ -109,32 +109,35 @@ compute_b_w!(s::State, p::ModelParameters) = (@parallel compute_b_w_kernel!(s.b_
 # ExplicitGapCoupling (the original scheme, which lags the gap in the conductance), the gap scheme's update G(N) under
 # ConsistentGapCoupling (SchemeGapUpdate), with its slope in the head dG/dh = -rho_w g dG/dN (central difference, as in
 # scheme_head_terms) where N follows the head (a filled cell).
-@inline end_of_step_gap(::ExplicitGapCoupling, b, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1) = b
-@inline end_of_step_gap(gu::SchemeGapUpdate, b, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1) =
-    scheme_gap(gu, b, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1)
-@inline end_of_step_gap_slope(::ExplicitGapCoupling, b, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1, rho_w, ggrav) = zero(b)
-@inline function end_of_step_gap_slope(gu::SchemeGapUpdate, b, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1, rho_w, ggrav)
+# Under the dry floor (dry_floor, run.jl) the gap the conductance takes is the water held at b_min, as compute_b! leaves it:
+# the floor conducts whether or not it holds water (its row keeps the water from going below zero).
+@inline end_of_step_gap(::ExplicitGapCoupling, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1) = b
+@inline end_of_step_gap(gu::SchemeGapUpdate, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1) =
+    gu.dry_floor ? max(scheme_water(gu, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1), b_min) :
+                   scheme_gap(gu, b, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1)
+@inline end_of_step_gap_slope(::ExplicitGapCoupling, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1, rho_w, ggrav) = zero(b)
+@inline function end_of_step_gap_slope(gu::SchemeGapUpdate, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1, rho_w, ggrav)
     δ = 1e-6 * max(abs(Nv), oftype(Nv, 1e3))
-    Gm = scheme_gap(gu, b, b_min, b_max, mdot, beta, abs_ub, A, Nv - δ, rho_i, n_minus_1)
-    Gp = scheme_gap(gu, b, b_min, b_max, mdot, beta, abs_ub, A, Nv + δ, rho_i, n_minus_1)
+    Gm = end_of_step_gap(gu, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, Nv - δ, rho_i, n_minus_1)
+    Gp = end_of_step_gap(gu, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, Nv + δ, rho_i, n_minus_1)
     return rho_w * ggrav * max(zero(b), (Gm - Gp) / (2δ))
 end
 
-@parallel_indices (ix, iy) function compute_b_w_iterate_kernel!(b_w, dbw_dh, b, h, zb, po, N, stor, stor_up, b_min, b_max, rho_w, ggrav, gc, mdot, beta, abs_ub, A_visc, rho_i, n_minus_1)
+@parallel_indices (ix, iy) function compute_b_w_iterate_kernel!(b_w, dbw_dh, b, h, zb, po, N, stor, stor_up, b_min, b_max, rho_w, ggrav, gc, mdot, beta, abs_ub, A_visc, rho_i, n_minus_1, b_dry)
     if ix <= size(b_w, 1) && iy <= size(b_w, 2)
-        bb = b[ix, iy]
+        bb, bd = b[ix, iy], b_dry[ix, iy]
         x  = h[ix, iy] - zb[ix, iy]                # pressure head
         xo = po[ix, iy] / (rho_w * ggrav)          # pressure head at the overburden
         if stor[ix, iy] > 0 && x < 0               # unfilled: the gap at N = po minus the empty depth zb - h
-            W = end_of_step_gap(gc, bb, b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], po[ix, iy], rho_i, n_minus_1) + x
+            W = end_of_step_gap(gc, bb, bd, b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], po[ix, iy], rho_i, n_minus_1) + x
             slope = one(bb)
         elseif stor_up[ix, iy] > 0 && x > xo       # uplifted: the gap at N = 0 plus the layer h - h_o
-            W = end_of_step_gap(gc, bb, b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], zero(bb), rho_i, n_minus_1) + (x - xo)
+            W = end_of_step_gap(gc, bb, bd, b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], zero(bb), rho_i, n_minus_1) + (x - xo)
             slope = one(bb)
         else                                       # filled: the gap (the start-of-step one, or G(N) under ConsistentGapCoupling)
             Nv = N[ix, iy]
-            W = end_of_step_gap(gc, bb, b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], Nv, rho_i, n_minus_1)
-            slope = end_of_step_gap_slope(gc, bb, b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], Nv, rho_i, n_minus_1, rho_w, ggrav)
+            W = end_of_step_gap(gc, bb, bd, b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], Nv, rho_i, n_minus_1)
+            slope = end_of_step_gap_slope(gc, bb, bd, b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], Nv, rho_i, n_minus_1, rho_w, ggrav)
         end
         b_w[ix, iy]    = W > 0 ? W : zero(bb) # no water, no conductance (compute_b_w!)
         dbw_dh[ix, iy] = W > 0 ? slope : zero(bb)
@@ -159,7 +162,7 @@ the conductance either). Both are continuous across the regimes and equal `b` ex
 [`NoUplift`](@ref) and [`ExplicitGapCoupling`](@ref).
 """
 compute_b_w_iterate!(s::State, p::ModelParameters, gc::AbstractGapCoupling = ExplicitGapCoupling()) =
-    (@parallel compute_b_w_iterate_kernel!(s.b_w, s.dbw_dh, s.b, s.h, s.zb, s.po, s.N, s.stor, s.stor_up, p.b_min, p.b_max, p.rho_w, p.g, gc, s.mdot0, s.beta, s.abs_ub, s.A_visc, p.rho_i, p.n_minus_1_exp); s)
+    (@parallel compute_b_w_iterate_kernel!(s.b_w, s.dbw_dh, s.b, s.h, s.zb, s.po, s.N, s.stor, s.stor_up, p.b_min, p.b_max, p.rho_w, p.g, gc, s.mdot0, s.beta, s.abs_ub, s.A_visc, p.rho_i, p.n_minus_1_exp, s.b_dry); s)
 
 """
 $(TYPEDSIGNATURES)
@@ -232,6 +235,45 @@ from there refills it, every iteration). The previous steps (`s.dh_it`) are zero
 limit_regime_crossing!(::AbstractKFaceScheme, s::State, h_prev, p::ModelParameters) = s
 limit_regime_crossing!(::ImplicitUpwind, s::State, h_prev, p::ModelParameters) =
     (@parallel limit_regime_crossing_kernel!(s.h, h_prev, s.dh_it, s.b, s.zb, s.po, s.stor, s.stor_up, p.rho_w, p.g); s)
+
+@parallel_indices (ix, iy) function limit_filled_step_kernel!(h, h_prev, dh_it, mask, zb, po, rho_w, ggrav)
+    if ix <= size(h, 1) && iy <= size(h, 2) && mask[ix, iy] == GROUNDED
+        hn, hp = h[ix, iy], h_prev[ix, iy]
+        rg = rho_w * ggrav
+        Np = po[ix, iy] - rg * (hp - zb[ix, iy])                         # N at the previous iterate
+        cap = max(max(abs(Np) / 2, po[ix, iy] / 4) / rg, one(hn))        # |dN| <= max(|N|/2, po/4), and at least 1 m of head
+        d = clamp(hn - hp, -cap, cap)
+        dl = dh_it[ix, iy]
+        d * dl < 0 && abs(d) > abs(dl) / 2 && (d = copysign(abs(dl) / 2, d)) # step reverses without contracting: at most half the previous one
+        dh_it[ix, iy] = d
+        h[ix, iy] = hp + d
+    end
+    return
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Limits each `GROUNDED` cell's head step per Picard iteration under the dry floor ([`dry_floor`](@ref), `gc.dry_floor`)
+with a K-face scheme other than [`ImplicitUpwind`](@ref) (which has [`limit_regime_crossing!`](@ref)); a no-op otherwise.
+The effective pressure may change by at most half of itself, or a quarter of the overburden near `N = 0`, and a step that
+reverses the previous one without contracting is halved (the oscillation damping of [`limit_regime_crossing!`](@ref)).
+Without it a cold start on thick ice diverged at the first step (Greenland and Antarctica 16 km, Thwaites 2 km at
+`dt = 1 h`): where creep closes the gap within a step the gap update is nearly flat in `N`, the first linear solve
+pushes the melt through the floor's conductance, and the head overshoots by kilometres, past the overburden; there the gap
+sits at `b_max`, opening no longer takes up the melt, and the dissipation melt feeds itself to NaN. With the limit every
+step converged on all three at `dt = 1 h` (30 days), `6 h` and `24 h` (90 days), in at most about 30 iterations. Relative
+to `N`, the limit moves the high-suction cells (`N` up to thousands of times `po`) geometrically: a cap of half the
+overburden head instead left the first step of Antarctica and Thwaites unconverged after 500 iterations and failed on
+Thwaites at `dt = 24 h`. Tested: `|N|/4` to `3|N|/4` and `po/10` to `po/4` behave alike; `po/2` near `N = 0` fails on
+Thwaites at `dt = 24 h`, and without the damping Greenland does not converge. A converged head is a fixed point of the
+limited iteration, so the solution is unchanged (within the Picard tolerance); warm starts cost about the same. The
+extrapolated head guess of a step is not limited: that doubled the iterations on Drang Drung (25 m) and Helheim (200 m).
+"""
+limit_filled_step!(::AbstractKFaceScheme, ::AbstractGapCoupling, s::State, h_prev, p::ModelParameters) = s
+limit_filled_step!(::ImplicitUpwind, ::SchemeGapUpdate, s::State, h_prev, p::ModelParameters) = s
+limit_filled_step!(::AbstractKFaceScheme, gu::SchemeGapUpdate, s::State, h_prev, p::ModelParameters) =
+    gu.dry_floor ? (@parallel limit_filled_step_kernel!(s.h, h_prev, s.dh_it, s.mask, s.zb, s.po, p.rho_w, p.g); s) : s
 
 @parallel_indices (ix, iy) function clamp_b_empty_kernel!(b_empty, b)
     if ix <= size(b_empty, 1) && iy <= size(b_empty, 2)
