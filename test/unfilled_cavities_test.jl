@@ -63,7 +63,7 @@
 
         # `stuck`: gap at the floor, 10 m/yr of sliding, very stiff ice -- opening that no inflow or
         # creep closure at N <= po can balance (the Greenland 16 km failure, in miniature).
-        function make_sim(cf; stuck = true, mask = base_mask(), gap = "explicit", kface = nothing, ieb_scale = 1.0)
+        function make_sim(cf; stuck = true, mask = base_mask(), gap = "explicit", kface = nothing, ieb_scale = 1.0, gcp = ExplicitGapCoupling())
             A_visc = fill(stuck ? 1e-30 : 5e-25, nx, ny)
             b0     = stuck ? fill(1e-6, nx, ny) : [0.01 + 0.004 * sin(i + 2j) for i in 1:nx, j in 1:ny]
             ub_x   = fill(stuck ? 3e-7 : 1e-6, nx + 1, ny)
@@ -72,7 +72,7 @@
             state = State(grid)
             set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b0, G, ub_x, ub_y, ieb .* ieb_scale, taub_x, taub_y)
             ps = PicardSolver(500, floattype(1e-12), CholeskyDirectSolver(grid), grid)
-            return Simulation(grid, state, 1, floattype(dt), p, gap, String[], ConstantMeltInput(), sl; ps = ps, cavity_filling = cf, k_face_choice = kface)
+            return Simulation(grid, state, 1, floattype(dt), p, gap, String[], ConstantMeltInput(), sl; ps = ps, cavity_filling = cf, k_face_choice = kface, gap_coupling = gcp)
         end
 
         grounded(s) = Array(s.mask) .== GROUNDED
@@ -119,6 +119,28 @@
             res = budget_residual(un, b_old, e_old)
             scale = maximum(abs, Array(s.mdot) ./ un.p.rho_w .+ Array(s.ieb)) + maximum(Array(s.beta) .* Array(s.abs_ub))
             @test maximum(abs, res[g]) < 1e-6 * scale
+        end
+
+        @testset "stuck cells, filled, ConsistentGapCoupling: no overflow (the first raw iterate has N ~ -1e16)" begin
+            # The gap here is flat in N (A = 1e-30), so the first linear solve pushes the moulin's water through the b_min floor
+            # and returns N ~ -1e16: the exponential branch of relax_update (and the N^n creep law of the explicit scheme)
+            # overflowed to Inf/NaN. limit_filled_step! now bounds the Picard step on the negative side (N falls at most po/4
+            # below min(N_prev, 0) per iteration), so the head stays finite; the first steps may need many iterations.
+            for gap in ("explicit", "implicit", "fully_implicit")
+              @testset "gap $gap" begin
+                sim = make_sim(FilledCavities(); gap = gap, kface = "arithmetic", gcp = ConsistentGapCoupling())
+                s = sim.state
+                @test Shakti.dry_floor(sim)
+                for k in 1:3
+                    step!(sim)
+                    g = grounded(s)
+                    @test all(isfinite, Array(s.h)) && all(isfinite, Array(s.b)) && all(isfinite, Array(s.N))
+                    @test maximum(Array(s.b)[g]) < 10 # b was 1e37 (explicit) or Inf/NaN before
+                    @test all(Array(s.b)[g] .>= sim.p.b_min)
+                end
+                @test first(Shakti.picard_status(sim.hs)) # the third step has converged
+              end
+            end
         end
 
         @testset "gap held at b_max: opening blocked, empty volume bounded, budget exact" begin

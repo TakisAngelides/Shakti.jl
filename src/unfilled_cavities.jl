@@ -243,6 +243,8 @@ limit_regime_crossing!(::ImplicitUpwind, s::State, h_prev, p::ModelParameters) =
         Np = po[ix, iy] - rg * (hp - zb[ix, iy])                         # N at the previous iterate
         cap = max(max(abs(Np) / 2, po[ix, iy] / 4) / rg, one(hn))        # |dN| <= max(|N|/2, po/4), and at least 1 m of head
         d = clamp(hn - hp, -cap, cap)
+        dmax = max((Np - (min(Np, zero(Np)) - po[ix, iy] / 4)) / rg, one(hn)) # N below zero: at most po/4 past min(N_prev, 0) per iteration (linear, not geometric)
+        d = min(d, dmax)
         dl = dh_it[ix, iy]
         d * dl < 0 && abs(d) > abs(dl) / 2 && (d = copysign(abs(dl) / 2, d)) # step reverses without contracting: at most half the previous one
         dh_it[ix, iy] = d
@@ -258,6 +260,10 @@ Limits each `GROUNDED` cell's head step per Picard iteration under the dry floor
 with a K-face scheme other than [`ImplicitUpwind`](@ref) (which has [`limit_regime_crossing!`](@ref)); a no-op otherwise.
 The effective pressure may change by at most half of itself, or a quarter of the overburden near `N = 0`, and a step that
 reverses the previous one without contracting is halved (the oscillation damping of [`limit_regime_crossing!`](@ref)).
+On the negative side (`N < 0`, head above the overburden, which no physical solution of a filled thick-ice cell reaches) the
+relative cap would let `N` run away geometrically (`-5e6`, `-6e7`, `-6.5e8`, ...): `N` may then fall at most `po/4` below
+`min(N_prev, 0)` per iteration. Without that, the first raw iterate of the stuck-cells fixture (`N` around `-1e16`) made the
+exponential branch of [`relax_update`](@ref) overflow (NaN without this limiter) and, limited, stalled at `N` near `-1e9`.
 Without it a cold start on thick ice diverged at the first step (Greenland and Antarctica 16 km, Thwaites 2 km at
 `dt = 1 h`): where creep closes the gap within a step the gap update is nearly flat in `N`, the first linear solve
 pushes the melt through the floor's conductance, and the head overshoots by kilometres, past the overburden; there the gap
