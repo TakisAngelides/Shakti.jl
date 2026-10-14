@@ -333,7 +333,9 @@ without `b` falling below `p.b_min`, see [`freeze_on_capacity_cell`](@ref). Zero
 Under [`UnfilledCavities`](@ref) (`water_limited = true`, the default; `false` restores the gap-room limit alone) the capacity is also capped by the water actually present, `(rho_w/rho_i)*(b - b_empty)/dt`: freezing
 consumes water, which an empty cavity does not have. Without the cap a dry cell can freeze water that is not there (about 3 times the melt supply on Greenland 16 km).
 Freezing closes the gap by the ice thickness and expels the excess water into the flow, so the limit
-is gap room, not water mass, and the result is local (no inflow term).
+is gap room, not water mass, and the result is local (no inflow term). Under the dry floor ([`dry_floor`](@ref)) the water
+`W = b - b_dry` replaces `b - b_min` as the room, and the capacity is capped by the water too, `(rho_w/rho_i)*W/dt`
+([`freeze_on_capacity_dry_floor_kernel!`](@ref)): a gap the update may drain to zero can freeze only the water it holds.
 
 Where each term is evaluated follows the gap scheme in use: [`FullyImplicitGapScheme`](@ref) takes
 opening by sliding and creep at `b_min`, [`ImplicitGapScheme`](@ref) sliding at the old `b` (lagged
@@ -352,6 +354,11 @@ gap at its actual size, and evaluating it at `b_min` (right for one implicit ste
 """
 function freeze_on_capacity!(C, sim::Simulation; dt = sim.dt[], water_limited = true)
     s, p = sim.state, sim.p
+    if dry_floor(sim) # the water W = b - b_dry may drain below b_min: freeze no more than W leaves room for, nor more water than W
+        @parallel freeze_on_capacity_dry_floor_kernel!(C, s.mask, s.b, s.b_dry, s.beta, s.abs_ub, s.A_visc, s.N, p.n_minus_1_exp, dt,
+                                                       sim.cls, p.b_c, sim.gs isa ExplicitGapScheme, p.rho_w / p.rho_i)
+        return C
+    end
     diffusion = sim.ds isa WithDiffusion
     # Over a host step longer than Shakti's own, creep and sliding act on the current gap for most
     # of the interval, not on b_min (the end state of a single implicit step), so evaluate them at b.
@@ -384,6 +391,7 @@ $(TYPEDSIGNATURES)
 Implicit (backward-Euler) update of `sim.state.b`: implicit on the creep closure term only, the scheme used by default.
 """
 function compute_b!(sim::Simulation, ::ImplicitGapScheme)
+    dry_floor(sim) && return compute_b_dry_floor!(sim)
     s, p = sim.state, sim.p
     @parallel compute_b_implicit_kernel!(s.b, s.mask, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, sim.dt[], p.b_min, p.b_max, sim.cls, p.b_c)
     return sim
@@ -395,6 +403,7 @@ $(TYPEDSIGNATURES)
 Explicit (forward-Euler) update of `sim.state.b`: cheaper per step, but only stable for small enough `sim.dt`.
 """
 function compute_b!(sim::Simulation, ::ExplicitGapScheme)
+    dry_floor(sim) && return compute_b_dry_floor!(sim)
     s, p = sim.state, sim.p
     @parallel compute_b_explicit_kernel!(s.b, s.mask, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, sim.dt[], p.b_min, p.b_max, sim.cls, p.b_c)
     return sim
@@ -411,6 +420,7 @@ stays lagged by design, see `gap_height.jl`'s module docstring) -- see
 [`StandardCreep`](@ref), four under [`CreepCutoff`](@ref)).
 """
 function compute_b!(sim::Simulation, ::FullyImplicitGapScheme)
+    dry_floor(sim) && return compute_b_dry_floor!(sim)
     s, p = sim.state, sim.p
     @parallel compute_b_fully_implicit_kernel!(s.b, s.mask, s.mdot, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, sim.dt[], p.b_min, p.b_max, p.br, p.lr, sim.cls, p.b_c)
     return sim
@@ -440,7 +450,43 @@ and creep-length schemes.
 gap_coupling_terms(sim::Simulation) = gap_coupling_terms(sim, sim.gcp)
 gap_coupling_terms(sim::Simulation, ::ExplicitGapCoupling) = ExplicitGapCoupling()
 gap_coupling_terms(sim::Simulation, ::ConsistentGapCoupling) =
-    SchemeGapUpdate{typeof(sim.gs), typeof(sim.cls), typeof(sim.dt[])}(sim.dt[], sim.p.br, sim.p.lr, sim.p.b_c)
+    SchemeGapUpdate{typeof(sim.gs), typeof(sim.cls), typeof(sim.dt[])}(sim.dt[], sim.p.br, sim.p.lr, sim.p.b_c, dry_floor(sim))
+
+"""
+$(TYPEDSIGNATURES)
+
+Whether the `b_min` floor is dry: [`ConsistentGapCoupling`](@ref) under [`FilledCavities`](@ref) and [`NoUplift`](@ref).
+The head rows then store the water `W = b - b_dry`, moved by the gap scheme's update with no lower clamp
+([`scheme_water`](@ref)), and [`compute_b!`](@ref) holds the gap at `b_min` with the volume below the water dry
+(`State.b_dry`), so the head equation and the gap update store the same water also where creep closes the gap within a
+step. The conductances keep the gap: a dry floor still conducts, as the floor always did, and a cell with no water cannot
+drain through it, since its own row allows no less than zero water. Under [`UnfilledCavities`](@ref) the floor's volume
+is part of the empty volume `b_empty` instead, and with [`IceUplift`](@ref) the floor stays full.
+"""
+dry_floor(sim::Simulation) = sim.gcp isa ConsistentGapCoupling && sim.cf isa FilledCavities && sim.up isa NoUplift
+
+@parallel_indices (ix, iy) function compute_b_dry_floor_kernel!(b, b_dry, mask, mdot, beta, abs_ub, A_visc, N, rho_i, n_minus_1, b_min, b_max, gu)
+    if ix <= size(b, 1) && iy <= size(b, 2) && mask[ix, iy] == GROUNDED
+        W = scheme_water(gu, b[ix, iy], b_dry[ix, iy], b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], N[ix, iy], rho_i, n_minus_1)
+        bn = max(W, b_min)
+        b[ix, iy] = bn
+        b_dry[ix, iy] = bn - W
+    end
+    return
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+[`compute_b!`](@ref) under the dry floor ([`dry_floor`](@ref)), for every gap scheme: the water moves by the scheme's own
+update with no lower clamp ([`scheme_water`](@ref), the same function the head rows use), the gap is that water held at
+`b_min`, and `b_dry` the volume below the water.
+"""
+function compute_b_dry_floor!(sim::Simulation)
+    s, p = sim.state, sim.p
+    @parallel compute_b_dry_floor_kernel!(s.b, s.b_dry, s.mask, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, p.b_min, p.b_max, gap_coupling_terms(sim))
+    return sim
+end
 
 """
 $(TYPEDSIGNATURES)

@@ -473,3 +473,19 @@ end
     end
     return
 end
+
+# Freeze-on capacity under the dry floor (freeze_on_capacity!, run.jl): the room is the water W = b - b_dry plus the opening
+# by sliding (and minus the explicit creep closure under ExplicitGapScheme; the implicit schemes cannot close the water below
+# zero), and freezing takes no more water than W.
+@parallel_indices (ix, iy) function freeze_on_capacity_dry_floor_kernel!(Cap, mask, b, b_dry, beta, abs_ub, A_visc, N, n_minus_1, dt, cls::AbstractCreepLengthScheme, b_c, explicit_creep, water_ratio)
+    if ix <= size(Cap, 1) && iy <= size(Cap, 2)
+        if mask[ix, iy] == GROUNDED
+            W = b[ix, iy] - b_dry[ix, iy]
+            creep = explicit_creep ? A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy] * creep_length(cls, W, b_c) : zero(W)
+            Cap[ix, iy] = max(zero(W), min(W / dt + beta[ix, iy] * abs_ub[ix, iy] - creep, W * water_ratio / dt))
+        else
+            Cap[ix, iy] = zero(eltype(Cap))
+        end
+    end
+    return
+end

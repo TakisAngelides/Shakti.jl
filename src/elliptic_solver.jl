@@ -438,6 +438,7 @@ function Picard_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation,
     solve_elliptic_linear_system!(ls, s, g, p, kfs, ds, gc) # update the h field, including the -div(D*grad(b)) source term under WithDiffusion
     relax_h!(hr, s, h_prev) # update the h field again according to the relaxation parameter, damp the raw Picard update before anything downstream of h is recomputed, so the next iteration's coefficients are consistent with the relaxed h
     limit_regime_crossing!(kfs, s, h_prev, p) # ImplicitUpwind: stop at the bed/overburden head when crossing it (unfilled_cavities.jl); no-op otherwise
+    limit_filled_step!(kfs, gc, s, h_prev, p) # dry floor, other K-face schemes: |dN| per iteration limited (unfilled_cavities.jl); no-op otherwise
 
     refresh_head_dependents!(s, g, p, mt, kfs, sl; cnc, ds, gc)
 

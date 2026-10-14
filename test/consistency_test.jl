@@ -23,12 +23,12 @@
         taub_x = zeros(nx + 1, ny)
         taub_y = zeros(nx, ny + 1)
 
-        function fresh_sim(; p = ModelParameters(e_v = 0.0), gap = "implicit", order = 1, k_face_choice = "arithmetic", alpha = nothing, tsteps = 6)
+        function fresh_sim(; p = ModelParameters(e_v = 0.0), gap = "implicit", order = 1, k_face_choice = "arithmetic", alpha = nothing, tsteps = 6, gap_coupling = nothing)
             state = State(grid)
             set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b0, G, ub_x, ub_y, ieb, taub_x, taub_y)
             ps = PicardSolver(200, floattype(1e-8), CholeskyDirectSolver(grid), grid; alpha = alpha)
             return Simulation(grid, state, tsteps, floattype(3600.0), p, gap, String[], ConstantMeltInput(), sl;
-                              ps = ps, head_extrapolation_order = order, k_face_choice = k_face_choice)
+                              ps = ps, head_extrapolation_order = order, k_face_choice = k_face_choice, gap_coupling = gap_coupling)
         end
 
         # One step's head solve only (no gap update afterwards), so every field is at the solve's
@@ -215,6 +215,32 @@
             @test all(mdot[gr] .>= mmin[gr] .- 1e-18)
             @test any(isapprox.(mdot[gr], mmin[gr]; rtol = 1e-10))      # the limit binds somewhere
             @test any(isapprox.(b[gr], sim.p.b_min; rtol = 1e-8))       # and those cells sit at the floor
+            @test all(iszero, Array(s.b_dry))                             # the floor stays full under ExplicitGapCoupling
+        end
+
+        @testset "dry floor: ConsistentGapCoupling under FilledCavities stores the same water as the gap update" begin
+            # The freezing patch above with ConsistentGapCoupling: the gap reaches b_min and the water below it drains
+            # (b_dry > 0). With the floor held full of water the head rows were flat there, and Picard failed from step 14.
+            sim = fresh_sim(; tsteps = 30, gap_coupling = ConsistentGapCoupling())
+            @test Shakti.dry_floor(sim)
+            s, p = sim.state, sim.p
+            s.q_T .= 50.0
+            gr = Array(s.mask) .== GROUNDED
+            for _ in 1:30
+                W_old = Array(s.b) .- Array(s.b_dry)
+                step!(sim)
+                @test first(Shakti.picard_status(sim.hs))
+                qx, qy = Array(s.q_x), Array(s.q_y)
+                div = [(qx[i+1, j] - qx[i, j]) / grid.dx + (qy[i, j+1] - qy[i, j]) / grid.dy for i in 1:nx, j in 1:ny]
+                res = ((Array(s.b) .- Array(s.b_dry)) .- W_old) ./ sim.dt[] .+ div .- Array(s.mdot) ./ p.rho_w .- Array(s.ieb)
+                scale = maximum(abs, Array(s.mdot)[gr] ./ p.rho_w .+ Array(s.ieb)[gr]) + maximum(Array(s.beta)[gr] .* Array(s.abs_ub)[gr])
+                @test maximum(abs, res[gr]) < 1e-5 * scale # per-cell water budget, W = b - b_dry
+            end
+            b, bd, md, mm = Array(s.b), Array(s.b_dry), Array(s.mdot), Array(s.mdot_min)
+            @test all(b[gr] .>= p.b_min * (1 - 1e-12))
+            @test all(0 .<= bd .<= b)
+            @test any(bd[gr] .> 0)                                        # some floor really is dry
+            @test all(md[gr] .>= mm[gr] .- 1e-18)                         # freezing takes no more than the water present
         end
 
 end

@@ -456,13 +456,15 @@ $(TYPEDSIGNATURES)
 
 Kernel form of [`ConsistentGapCoupling`](@ref), built every step ([`gap_coupling_terms`](@ref), `run.jl`): the gap scheme
 `GS` and creep-length scheme `CLS` as type parameters, the step `dt` and `br`, `lr`, `b_c`. Its gap update
-[`gap_update`](@ref) is defined next to `compute_b!` (`run.jl`), from the same per-cell formulas.
+[`gap_update`](@ref) is defined next to `compute_b!` (`run.jl`), from the same per-cell formulas. `dry_floor` is true
+under [`FilledCavities`](@ref) without uplift: the volume the `b_min` clamp keeps is then dry ([`scheme_water`](@ref)).
 """
 struct SchemeGapUpdate{GS, CLS, F} <: AbstractGapCoupling
     dt::F
     br::F
     lr::F
     b_c::F
+    dry_floor::Bool
 end
 
 # Head-row terms (source `gs`, diagonal `gd`) of a GROUNDED cell with the gap change of the gap scheme (SchemeGapUpdate):
@@ -473,7 +475,24 @@ end
     return clamp(gap_update(gu, b, mdot, beta, abs_ub, C, rho_i), b_min, b_max)
 end
 
-@inline function scheme_head_terms(gu, b, b_min, b_max, mdot, beta, abs_ub, A, N, h, zb, po, stor, b_empty, rho_w, rho_i, ggrav, n_minus_1, b_uplift, stor_up)
+"""
+$(TYPEDSIGNATURES)
+
+The water in a filled gap at the end of the step, as the head rows of [`ConsistentGapCoupling`](@ref) store it. With the
+dry floor (`gu.dry_floor`, [`FilledCavities`](@ref)) the gap update moves the water `W = b - b_dry` with no lower clamp:
+`compute_b!` still holds the gap at `b_min`, but the volume it keeps there holds no water (`State.b_dry`). Held full of
+water, that volume made the clamped update flat in `N` wherever creep closes the gap within a step (thick ice): the row
+then kept only the conductance of the floor, and a cell needing water there (freezing, opening) had no bounded head;
+the explicit coupling instead counted the closure the clamp blocked as water expelled (water created). Without the dry
+floor: the clamped gap ([`scheme_gap`](@ref)).
+"""
+@inline function scheme_water(gu, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1)
+    gu.dry_floor || return scheme_gap(gu, b, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1)
+    C = A * pow(abs(Nv), n_minus_1) * Nv
+    return clamp(gap_update(gu, b - b_dry, mdot, beta, abs_ub, C, rho_i), zero(b), b_max)
+end
+
+@inline function scheme_head_terms(gu, b, b_min, b_max, mdot, beta, abs_ub, A, N, h, zb, po, stor, b_empty, rho_w, rho_i, ggrav, n_minus_1, b_uplift, stor_up, b_dry)
     inv_dt = 1 / gu.dt
     sempty = b_empty * stor - b_uplift * stor_up # as in cavity_head_terms
     if stor_up > 0 && h > zb + po / (rho_w * ggrav)
@@ -485,19 +504,20 @@ end
         return mdot / rho_w - (Ge - b) * inv_dt - sempty + stor * zb, stor
     end
     δ = 1e-6 * max(abs(N), oftype(N, 1e3)) # [Pa]
-    G0 = scheme_gap(gu, b, b_min, b_max, mdot, beta, abs_ub, A, N, rho_i, n_minus_1)
-    Gm = scheme_gap(gu, b, b_min, b_max, mdot, beta, abs_ub, A, N - δ, rho_i, n_minus_1)
-    Gp = scheme_gap(gu, b, b_min, b_max, mdot, beta, abs_ub, A, N + δ, rho_i, n_minus_1)
+    # filled: the water the gap update leaves (scheme_water), against the water present b - b_dry (b_dry = 0 without the dry floor)
+    G0 = scheme_water(gu, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, N, rho_i, n_minus_1)
+    Gm = scheme_water(gu, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, N - δ, rho_i, n_minus_1)
+    Gp = scheme_water(gu, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, N + δ, rho_i, n_minus_1)
     gd = rho_w * ggrav * max(zero(b), (Gm - Gp) / (2δ)) * inv_dt # dG/dh = -rho_w g dG/dN >= 0 (the gap closes faster as N grows)
-    return mdot / rho_w - (G0 - b) * inv_dt + gd * h - sempty, gd
+    return mdot / rho_w - (G0 - (b - b_dry)) * inv_dt + gd * h - sempty, gd
 end
 
 # Head of a closed cell (closed_cell_head) with the gap change of the gap scheme: no flux, so the water at the end of the
 # step is known, T = W_old + dt*(mdot/rho_w + ieb - dsrc), and G(N) = T is solved for N by bisection (G decreases with N).
 # T above G(0) lifts the ice (uplift allowed): h = h_o + (T - G(0)); T below G(po) leaves the gap partly empty (unfilled
 # allowed): h = zb - (G(po) - T).
-@inline function scheme_closed_cell_head(gu, b, b_min, b_max, mdot, beta, abs_ub, A, zb, po, ieb, dsrc, rho_w, rho_i, ggrav, n_minus_1, N_min, N_max, b_empty, stor, b_uplift, stor_up)
-    T = b - b_empty + b_uplift + gu.dt * (mdot / rho_w + ieb - dsrc)
+@inline function scheme_closed_cell_head(gu, b, b_min, b_max, mdot, beta, abs_ub, A, zb, po, ieb, dsrc, rho_w, rho_i, ggrav, n_minus_1, N_min, N_max, b_empty, stor, b_uplift, stor_up, b_dry)
+    T = b - b_dry - b_empty + b_uplift + gu.dt * (mdot / rho_w + ieb - dsrc)
     if stor_up > 0
         G0 = scheme_gap(gu, b, b_min, b_max, mdot, beta, abs_ub, A, zero(po), rho_i, n_minus_1)
         T > G0 && return zb + po / (rho_w * ggrav) + (T - G0)
@@ -507,24 +527,24 @@ end
         T < Gp && return zb - (Gp - T)
     end
     lo = max(N_min, stor_up > 0 ? zero(po) : -10 * po)
-    hi = min(N_max, stor > 0 ? po : 10 * po)
+    hi = min(N_max, stor > 0 ? po : gu.dry_floor ? 1000 * po : 10 * po) # the dry floor's water reaches a small T only at high N
     for _ in 1:60
         mid = (lo + hi) / 2
-        scheme_gap(gu, b, b_min, b_max, mdot, beta, abs_ub, A, mid, rho_i, n_minus_1) > T ? (lo = mid) : (hi = mid)
+        scheme_water(gu, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, mid, rho_i, n_minus_1) > T ? (lo = mid) : (hi = mid)
     end
     return zb + (po - (lo + hi) / 2) / (rho_w * ggrav)
 end
 
 # Dispatch of the GROUNDED-cell head terms on the gap coupling: ExplicitGapCoupling is the original code, unchanged.
-@inline head_gap_terms(::ExplicitGapCoupling, clamp_budget, b, b_min, b_max, mdot, beta, abs_ub, A, N, lc, h, zb, po, stor, b_empty, rho_w, rho_i, ggrav, n, n_minus_1, b_uplift, stor_up) =
+@inline head_gap_terms(::ExplicitGapCoupling, clamp_budget, b, b_min, b_max, mdot, beta, abs_ub, A, N, lc, h, zb, po, stor, b_empty, rho_w, rho_i, ggrav, n, n_minus_1, b_uplift, stor_up, b_dry) =
     cavity_head_terms(clamp_budget, b, b_min, b_max, mdot, beta, abs_ub, A, N, lc, h, zb, po, stor, b_empty, rho_w, rho_i, ggrav, n, n_minus_1, b_uplift, stor_up)
-@inline head_gap_terms(gu::SchemeGapUpdate, clamp_budget, b, b_min, b_max, mdot, beta, abs_ub, A, N, lc, h, zb, po, stor, b_empty, rho_w, rho_i, ggrav, n, n_minus_1, b_uplift, stor_up) =
-    scheme_head_terms(gu, b, b_min, b_max, mdot, beta, abs_ub, A, N, h, zb, po, stor, b_empty, rho_w, rho_i, ggrav, n_minus_1, b_uplift, stor_up)
+@inline head_gap_terms(gu::SchemeGapUpdate, clamp_budget, b, b_min, b_max, mdot, beta, abs_ub, A, N, lc, h, zb, po, stor, b_empty, rho_w, rho_i, ggrav, n, n_minus_1, b_uplift, stor_up, b_dry) =
+    scheme_head_terms(gu, b, b_min, b_max, mdot, beta, abs_ub, A, N, h, zb, po, stor, b_empty, rho_w, rho_i, ggrav, n_minus_1, b_uplift, stor_up, b_dry)
 
-@inline head_closed_cell(::ExplicitGapCoupling, b, b_min, b_max, zb, po, mdot, beta, abs_ub, ieb, dsrc, A, lc, rho_w, rho_i, ggrav, n, n_minus_1, N_min, N_max, b_empty, stor, b_uplift, stor_up) =
+@inline head_closed_cell(::ExplicitGapCoupling, b, b_min, b_max, zb, po, mdot, beta, abs_ub, ieb, dsrc, A, lc, rho_w, rho_i, ggrav, n, n_minus_1, N_min, N_max, b_empty, stor, b_uplift, stor_up, b_dry) =
     closed_cell_head(zb, po, mdot, beta, abs_ub, ieb, dsrc, A, lc, rho_w, rho_i, ggrav, n, N_min, N_max, b_empty, stor, b_uplift, stor_up)
-@inline head_closed_cell(gu::SchemeGapUpdate, b, b_min, b_max, zb, po, mdot, beta, abs_ub, ieb, dsrc, A, lc, rho_w, rho_i, ggrav, n, n_minus_1, N_min, N_max, b_empty, stor, b_uplift, stor_up) =
-    scheme_closed_cell_head(gu, b, b_min, b_max, mdot, beta, abs_ub, A, zb, po, ieb, dsrc, rho_w, rho_i, ggrav, n_minus_1, N_min, N_max, b_empty, stor, b_uplift, stor_up)
+@inline head_closed_cell(gu::SchemeGapUpdate, b, b_min, b_max, zb, po, mdot, beta, abs_ub, ieb, dsrc, A, lc, rho_w, rho_i, ggrav, n, n_minus_1, N_min, N_max, b_empty, stor, b_uplift, stor_up, b_dry) =
+    scheme_closed_cell_head(gu, b, b_min, b_max, mdot, beta, abs_ub, A, zb, po, ieb, dsrc, rho_w, rho_i, ggrav, n_minus_1, N_min, N_max, b_empty, stor, b_uplift, stor_up, b_dry)
 
 # Parabolic counterpart of cavity_head_terms. Total water per unit bed area is V = b + g(x), x = h - zb,
 # with the englacial storage g(x) = e_v*x for a filled cell (x >= 0) and g(x) = x (minus the empty depth)
@@ -562,9 +582,9 @@ end
 end
 
 # Parabolic counterpart of scheme_head_terms (cavity_parabolic_terms with the gap change of the gap scheme).
-@inline function scheme_parabolic_terms(gu, b, b_min, b_max, mdot, beta, abs_ub, A, N, h, h_old, zb, po, stor, e_v, dt, rho_w, rho_i, ggrav, n_minus_1, stor_up)
+@inline function scheme_parabolic_terms(gu, b, b_min, b_max, mdot, beta, abs_ub, A, N, h, h_old, zb, po, stor, e_v, dt, rho_w, rho_i, ggrav, n_minus_1, stor_up, b_dry)
     if stor <= 0 && stor_up <= 0
-        gs, gd = scheme_head_terms(gu, b, b_min, b_max, mdot, beta, abs_ub, A, N, h, zb, po, zero(b), zero(b), rho_w, rho_i, ggrav, n_minus_1, zero(b), zero(b))
+        gs, gd = scheme_head_terms(gu, b, b_min, b_max, mdot, beta, abs_ub, A, N, h, zb, po, zero(b), zero(b), rho_w, rho_i, ggrav, n_minus_1, zero(b), zero(b), b_dry)
         return gs, gd, e_v, (e_v / dt) * h_old
     end
     xo = h_old - zb
@@ -578,14 +598,14 @@ end
         Ge = scheme_gap(gu, b, b_min, b_max, mdot, beta, abs_ub, A, po, rho_i, n_minus_1)
         return mdot / rho_w - (Ge - b) / dt, zero(b), one(b), (zb + gold) / dt
     end
-    gs, gd = scheme_head_terms(gu, b, b_min, b_max, mdot, beta, abs_ub, A, N, h, zb, po, zero(b), zero(b), rho_w, rho_i, ggrav, n_minus_1, zero(b), zero(b))
+    gs, gd = scheme_head_terms(gu, b, b_min, b_max, mdot, beta, abs_ub, A, N, h, zb, po, zero(b), zero(b), rho_w, rho_i, ggrav, n_minus_1, zero(b), zero(b), b_dry)
     return gs, gd, e_v, (e_v * zb + gold) / dt
 end
 
-@inline head_gap_parabolic_terms(::ExplicitGapCoupling, clamp_budget, b, b_min, b_max, mdot, beta, abs_ub, A, N, lc, h, h_old, zb, po, stor, e_v, dt, rho_w, rho_i, ggrav, n, n_minus_1, stor_up) =
+@inline head_gap_parabolic_terms(::ExplicitGapCoupling, clamp_budget, b, b_min, b_max, mdot, beta, abs_ub, A, N, lc, h, h_old, zb, po, stor, e_v, dt, rho_w, rho_i, ggrav, n, n_minus_1, stor_up, b_dry) =
     cavity_parabolic_terms(clamp_budget, b, b_min, b_max, mdot, beta, abs_ub, A, N, lc, h, h_old, zb, po, stor, e_v, dt, rho_w, rho_i, ggrav, n, n_minus_1, stor_up)
-@inline head_gap_parabolic_terms(gu::SchemeGapUpdate, clamp_budget, b, b_min, b_max, mdot, beta, abs_ub, A, N, lc, h, h_old, zb, po, stor, e_v, dt, rho_w, rho_i, ggrav, n, n_minus_1, stor_up) =
-    scheme_parabolic_terms(gu, b, b_min, b_max, mdot, beta, abs_ub, A, N, h, h_old, zb, po, stor, e_v, dt, rho_w, rho_i, ggrav, n_minus_1, stor_up)
+@inline head_gap_parabolic_terms(gu::SchemeGapUpdate, clamp_budget, b, b_min, b_max, mdot, beta, abs_ub, A, N, lc, h, h_old, zb, po, stor, e_v, dt, rho_w, rho_i, ggrav, n, n_minus_1, stor_up, b_dry) =
+    scheme_parabolic_terms(gu, b, b_min, b_max, mdot, beta, abs_ub, A, N, h, h_old, zb, po, stor, e_v, dt, rho_w, rho_i, ggrav, n_minus_1, stor_up, b_dry)
 
 """
 $(TYPEDSIGNATURES)
@@ -695,7 +715,7 @@ end
 # range from the elementwise max size over ALL array arguments, and the flat
 # length-(nx*ny) nzval/rhs vectors would make that (nx*ny, ny) -- nx*ny^2
 # iterations, almost all failing the bounds check (measured 19x slower at 512x512).
-@parallel_indices (ix, iy) function update_SALS_elliptic_kernel!(mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, zb, h, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, b, b_min, b_max, clamp_budget, D_x, D_y, diffusion_on, po, N_min, N_max, b_empty, stor, db_x, db_y, b_uplift, stor_up, Jw_x, Jw_y, newton_on, dx, dy, gc)
+@parallel_indices (ix, iy) function update_SALS_elliptic_kernel!(mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, zb, h, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, b, b_min, b_max, clamp_budget, D_x, D_y, diffusion_on, po, N_min, N_max, b_empty, stor, db_x, db_y, b_uplift, stor_up, Jw_x, Jw_y, newton_on, dx, dy, b_dry, gc)
 
     nx, ny = size(mask, 1), size(mask, 2)
 
@@ -745,9 +765,9 @@ end
                 nzval[idxP[ix, iy]] += 1
                 rhs[row] = head_closed_cell(gc, b[ix, iy], b_min, b_max, zb[ix, iy], po[ix, iy], mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], ieb[ix, iy],
                                             diffusion_source(diffusion_on, D_x, D_y, mask, b, ix, iy, nx, ny, dx2, dy2),
-                                            A_visc[ix, iy], lc[ix, iy], rho_w, rho_i, ggrav, n, n_minus_1, N_min, N_max, b_empty[ix, iy], stor[ix, iy], b_uplift[ix, iy], stor_up[ix, iy])
+                                            A_visc[ix, iy], lc[ix, iy], rho_w, rho_i, ggrav, n, n_minus_1, N_min, N_max, b_empty[ix, iy], stor[ix, iy], b_uplift[ix, iy], stor_up[ix, iy], b_dry[ix, iy])
             else
-                gs, gd = head_gap_terms(gc, clamp_budget, b[ix, iy], b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], N[ix, iy], lc[ix, iy], h[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], b_empty[ix, iy], rho_w, rho_i, ggrav, n, n_minus_1, b_uplift[ix, iy], stor_up[ix, iy])
+                gs, gd = head_gap_terms(gc, clamp_budget, b[ix, iy], b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], N[ix, iy], lc[ix, iy], h[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], b_empty[ix, iy], rho_w, rho_i, ggrav, n, n_minus_1, b_uplift[ix, iy], stor_up[ix, iy], b_dry[ix, iy])
                 aP = (aE + aW + aN + aS) + gd
 
                 # Update the non-zero values of the M sparse matrix. A GROUNDED
@@ -815,7 +835,7 @@ function update_SALS_elliptic!(sals::SparseAssembledLinearSystem, s::State, g::G
     fill!(nzval, 0)
     fill!(rhs, 0)
 
-    @parallel (1:g.nx, 1:g.ny) update_SALS_elliptic_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.zb, s.h, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, s.b, p.b_min, p.b_max, p.clamp_budget, s.D_x, s.D_y, Val(ds isa WithDiffusion), s.po, p.N_min, p.N_max, s.b_empty, s.stor, s.db_x, s.db_y, s.b_uplift, s.stor_up, s.Jw_x, s.Jw_y, Val(kfs isa ImplicitUpwind), g.dx, g.dy, gc)
+    @parallel (1:g.nx, 1:g.ny) update_SALS_elliptic_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.zb, s.h, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, s.b, p.b_min, p.b_max, p.clamp_budget, s.D_x, s.D_y, Val(ds isa WithDiffusion), s.po, p.N_min, p.N_max, s.b_empty, s.stor, s.db_x, s.db_y, s.b_uplift, s.stor_up, s.Jw_x, s.Jw_y, Val(kfs isa ImplicitUpwind), g.dx, g.dy, s.b_dry, gc)
 
     return
 
@@ -848,7 +868,7 @@ end
 # Newton-corrected, same as the elliptic kernel) -- one full Parabolic_loop!
 # call still drives all of them to self-consistency across iterations, same
 # as Picard_loop! does.
-@parallel_indices (ix, iy) function update_SALS_parabolic_kernel!(mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, zb, h, h_old, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, e_v, dt, b, b_min, b_max, clamp_budget, D_x, D_y, diffusion_on, po, stor, db_x, db_y, stor_up, Jw_x, Jw_y, newton_on, dx, dy, gc)
+@parallel_indices (ix, iy) function update_SALS_parabolic_kernel!(mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, zb, h, h_old, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, e_v, dt, b, b_min, b_max, clamp_budget, D_x, D_y, diffusion_on, po, stor, db_x, db_y, stor_up, Jw_x, Jw_y, newton_on, dx, dy, b_dry, gc)
 
     nx, ny = size(mask, 1), size(mask, 2)
 
@@ -876,7 +896,7 @@ end
             aN = (iy < ny) ? K_y[ix, iy+1] / dy2 : zero(dy2)
             aS = (iy > 1)  ? K_y[ix, iy] / dy2 : zero(dy2)
 
-            gs, gd, sig, sto_rhs = head_gap_parabolic_terms(gc, clamp_budget, b[ix, iy], b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], N[ix, iy], lc[ix, iy], h[ix, iy], h_old[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], e_v, dt, rho_w, rho_i, ggrav, n, n_minus_1, stor_up[ix, iy])
+            gs, gd, sig, sto_rhs = head_gap_parabolic_terms(gc, clamp_budget, b[ix, iy], b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], N[ix, iy], lc[ix, iy], h[ix, iy], h_old[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], e_v, dt, rho_w, rho_i, ggrav, n, n_minus_1, stor_up[ix, iy], b_dry[ix, iy])
             aP = (aE + aW + aN + aS) + sig / dt + gd # diffusion + backward-Euler englacial storage reaction term + Newton-linearized creep closure (same term as update_SALS_elliptic_kernel!'s aP)
 
             nzval[idxP[ix, iy]] += aP
@@ -939,7 +959,7 @@ function update_SALS_parabolic!(sals::SparseAssembledLinearSystem, s::State, g::
     fill!(nzval, 0)
     fill!(rhs, 0)
 
-    @parallel (1:g.nx, 1:g.ny) update_SALS_parabolic_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.zb, s.h, h_old, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, p.e_v, dt, s.b, p.b_min, p.b_max, p.clamp_budget, s.D_x, s.D_y, Val(ds isa WithDiffusion), s.po, s.stor, s.db_x, s.db_y, s.stor_up, s.Jw_x, s.Jw_y, Val(kfs isa ImplicitUpwind), g.dx, g.dy, gc)
+    @parallel (1:g.nx, 1:g.ny) update_SALS_parabolic_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.zb, s.h, h_old, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, p.e_v, dt, s.b, p.b_min, p.b_max, p.clamp_budget, s.D_x, s.D_y, Val(ds isa WithDiffusion), s.po, s.stor, s.db_x, s.db_y, s.stor_up, s.Jw_x, s.Jw_y, Val(kfs isa ImplicitUpwind), g.dx, g.dy, s.b_dry, gc)
 
     return
 
@@ -951,7 +971,7 @@ end
 # stored as the raw positive face conductances -- stencil_matvec_kernel!
 # below applies the minus sign when it uses them, matching the sign
 # convention update_SALS_elliptic_kernel! bakes directly into nzval.
-@parallel_indices (ix, iy) function update_MFLS_elliptic_kernel!(mask, aP, aE, aW, aN, aS, rhs, zb, h, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, b, b_min, b_max, clamp_budget, D_x, D_y, diffusion_on, po, N_min, N_max, b_empty, stor, db_x, db_y, b_uplift, stor_up, gc)
+@parallel_indices (ix, iy) function update_MFLS_elliptic_kernel!(mask, aP, aE, aW, aN, aS, rhs, zb, h, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, b, b_min, b_max, clamp_budget, D_x, D_y, diffusion_on, po, N_min, N_max, b_empty, stor, db_x, db_y, b_uplift, stor_up, b_dry, gc)
 
     nx, ny = size(mask, 1), size(mask, 2)
 
@@ -984,9 +1004,9 @@ end
                 aP[ix, iy] = 1
                 rhs[row] = head_closed_cell(gc, b[ix, iy], b_min, b_max, zb[ix, iy], po[ix, iy], mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], ieb[ix, iy],
                                             diffusion_source(diffusion_on, D_x, D_y, mask, b, ix, iy, nx, ny, dx2, dy2),
-                                            A_visc[ix, iy], lc[ix, iy], rho_w, rho_i, ggrav, n, n_minus_1, N_min, N_max, b_empty[ix, iy], stor[ix, iy], b_uplift[ix, iy], stor_up[ix, iy])
+                                            A_visc[ix, iy], lc[ix, iy], rho_w, rho_i, ggrav, n, n_minus_1, N_min, N_max, b_empty[ix, iy], stor[ix, iy], b_uplift[ix, iy], stor_up[ix, iy], b_dry[ix, iy])
             else
-                gs, gd = head_gap_terms(gc, clamp_budget, b[ix, iy], b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], N[ix, iy], lc[ix, iy], h[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], b_empty[ix, iy], rho_w, rho_i, ggrav, n, n_minus_1, b_uplift[ix, iy], stor_up[ix, iy])
+                gs, gd = head_gap_terms(gc, clamp_budget, b[ix, iy], b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], N[ix, iy], lc[ix, iy], h[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], b_empty[ix, iy], rho_w, rho_i, ggrav, n, n_minus_1, b_uplift[ix, iy], stor_up[ix, iy], b_dry[ix, iy])
                 aP[ix, iy] = (aE_ij + aW_ij + aN_ij + aS_ij) + gd
 
                 # As in update_SALS_elliptic_kernel!: an OCEAN/LAND neighbour's known head
@@ -1040,7 +1060,7 @@ function update_MFLS_elliptic!(mfls::MatrixFreeLinearSystem, s::State, g::Grid, 
     fill!(mfls.aS, 0)
     fill!(mfls.rhs, 0)
 
-    @parallel (1:g.nx, 1:g.ny) update_MFLS_elliptic_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.zb, s.h, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, s.b, p.b_min, p.b_max, p.clamp_budget, s.D_x, s.D_y, Val(ds isa WithDiffusion), s.po, p.N_min, p.N_max, s.b_empty, s.stor, s.db_x, s.db_y, s.b_uplift, s.stor_up, gc)
+    @parallel (1:g.nx, 1:g.ny) update_MFLS_elliptic_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.zb, s.h, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, s.b, p.b_min, p.b_max, p.clamp_budget, s.D_x, s.D_y, Val(ds isa WithDiffusion), s.po, p.N_min, p.N_max, s.b_empty, s.stor, s.db_x, s.db_y, s.b_uplift, s.stor_up, s.b_dry, gc)
 
     return
 
@@ -1052,7 +1072,7 @@ end
 # for the storage-term/Newton-linearization reasoning, and for why `h_old`
 # (fixed for the whole real timestep) must be a separate argument from `h`
 # (the current Picard sub-iterate).
-@parallel_indices (ix, iy) function update_MFLS_parabolic_kernel!(mask, aP, aE, aW, aN, aS, rhs, zb, h, h_old, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, e_v, dt, b, b_min, b_max, clamp_budget, D_x, D_y, diffusion_on, po, stor, db_x, db_y, stor_up, gc)
+@parallel_indices (ix, iy) function update_MFLS_parabolic_kernel!(mask, aP, aE, aW, aN, aS, rhs, zb, h, h_old, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, e_v, dt, b, b_min, b_max, clamp_budget, D_x, D_y, diffusion_on, po, stor, db_x, db_y, stor_up, b_dry, gc)
 
     nx, ny = size(mask, 1), size(mask, 2)
 
@@ -1080,7 +1100,7 @@ end
             aN_ij = (iy < ny) ? K_y[ix, iy+1] / dy2 : zero(dy2)
             aS_ij = (iy > 1)  ? K_y[ix, iy] / dy2 : zero(dy2)
 
-            gs, gd, sig, sto_rhs = head_gap_parabolic_terms(gc, clamp_budget, b[ix, iy], b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], N[ix, iy], lc[ix, iy], h[ix, iy], h_old[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], e_v, dt, rho_w, rho_i, ggrav, n, n_minus_1, stor_up[ix, iy])
+            gs, gd, sig, sto_rhs = head_gap_parabolic_terms(gc, clamp_budget, b[ix, iy], b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], N[ix, iy], lc[ix, iy], h[ix, iy], h_old[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], e_v, dt, rho_w, rho_i, ggrav, n, n_minus_1, stor_up[ix, iy], b_dry[ix, iy])
             aP[ix, iy] = (aE_ij + aW_ij + aN_ij + aS_ij) + sig / dt + gd # diffusion + backward-Euler englacial storage reaction term + Newton-linearized creep closure (same term as update_MFLS_elliptic_kernel!'s aP)
 
             dirichlet_rhs = zero(eltype(rhs))
@@ -1130,7 +1150,7 @@ function update_MFLS_parabolic!(mfls::MatrixFreeLinearSystem, s::State, g::Grid,
     fill!(mfls.aS, 0)
     fill!(mfls.rhs, 0)
 
-    @parallel (1:g.nx, 1:g.ny) update_MFLS_parabolic_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.zb, s.h, h_old, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, p.e_v, dt, s.b, p.b_min, p.b_max, p.clamp_budget, s.D_x, s.D_y, Val(ds isa WithDiffusion), s.po, s.stor, s.db_x, s.db_y, s.stor_up, gc)
+    @parallel (1:g.nx, 1:g.ny) update_MFLS_parabolic_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.zb, s.h, h_old, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, p.e_v, dt, s.b, p.b_min, p.b_max, p.clamp_budget, s.D_x, s.D_y, Val(ds isa WithDiffusion), s.po, s.stor, s.db_x, s.db_y, s.stor_up, s.b_dry, gc)
 
     return
 
