@@ -323,7 +323,7 @@
 
             s = State(grid)
             s.mask .= mask; s.b .= b; s.N .= N; s.mdot .= mdot; s.beta .= beta; s.abs_ub .= abs_ub
-            s.A_visc .= A_visc; s.lc .= lc; s.D_x .= D_x; s.D_y .= D_y
+            s.A_visc .= A_visc; s.lc .= lc; s.D_x .= D_x; s.D_y .= D_y; s.bump .= p.br # no uplift: the full bump height (compute_beta!)
 
             ls = CholeskyDirectSolver(grid)
             solve_b_diffusion!(ls, s, grid, p, dt)
@@ -342,7 +342,7 @@
             @assert grid.dx ≈ dx && grid.dy ≈ dy
             s = State(grid)
             s.mask .= mask; s.b .= b; s.N .= N; s.mdot .= mdot; s.beta .= beta; s.abs_ub .= abs_ub
-            s.A_visc .= A_visc; s.lc .= lc; s.D_x .= D_x; s.D_y .= D_y
+            s.A_visc .= A_visc; s.lc .= lc; s.D_x .= D_x; s.D_y .= D_y; s.bump .= p.br # no uplift: the full bump height (compute_beta!)
 
             ls = CGIterativeSolver(grid, SparseAssembledLinearSystem)
             solve_b_diffusion!(ls, s, grid, p, dt)

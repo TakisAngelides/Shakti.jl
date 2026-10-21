@@ -241,7 +241,7 @@ update_dt!(sim::Simulation, ::FixedTimeStep) = sim
 
 function update_dt!(sim::Simulation, ts::AdaptiveTimeStep)
     s, p = sim.state, sim.p
-    @parallel compute_dt_rate_kernel!(ts.rate_field, s.mask, s.b, s.abs_ub, s.A_visc, s.N, p.n_minus_1_exp, p.br, p.lr, sim.cls, p.b_c)
+    @parallel compute_dt_rate_kernel!(ts.rate_field, s.mask, s.b, s.abs_ub, s.A_visc, s.N, p.n_minus_1_exp, s.bump, p.lr, sim.cls, p.b_c)
     stat = rate_statistic(ts.rate_field, ts)
     dt = stat > 0 ? ts.safety_factor / stat : ts.dt_max # stat<=0 means no grounded cell has a positive rate (e.g. all N<=0) -- fall back to dt_max rather than dividing by zero/a negative
     dt = clamp(dt, ts.dt_min, ts.dt_max)
@@ -367,7 +367,7 @@ function freeze_on_capacity!(C, sim::Simulation; dt = sim.dt[], water_limited = 
                                   sim.gs isa FullyImplicitGapScheme ? (true, true) :
                                   sim.gs isa ImplicitGapScheme ? (false, true) : (false, false)
     @parallel freeze_on_capacity_kernel!(C, s.mask, s.b, s.beta, s.lc, s.abs_ub, s.A_visc, s.N, p.n_minus_1_exp, dt,
-                                         p.b_min, p.br, p.lr, sim.cls, p.b_c, beta_at_bmin, creep_at_bmin, diffusion,
+                                         p.b_min, s.bump, p.lr, sim.cls, p.b_c, beta_at_bmin, creep_at_bmin, diffusion,
                                          s.b_empty, p.rho_w / p.rho_i, sim.cf isa UnfilledCavities && water_limited)
     return C
 end
@@ -422,7 +422,7 @@ stays lagged by design, see `gap_height.jl`'s module docstring) -- see
 function compute_b!(sim::Simulation, ::FullyImplicitGapScheme)
     dry_floor(sim) && return compute_b_dry_floor!(sim)
     s, p = sim.state, sim.p
-    @parallel compute_b_fully_implicit_kernel!(s.b, s.mask, s.mdot, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, sim.dt[], p.b_min, p.b_max, p.br, p.lr, sim.cls, p.b_c)
+    @parallel compute_b_fully_implicit_kernel!(s.b, s.mask, s.mdot, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, sim.dt[], p.b_min, p.b_max, s.bump, p.lr, sim.cls, p.b_c)
     return sim
 end
 
@@ -465,9 +465,9 @@ is part of the empty volume `b_empty` instead, and with [`IceUplift`](@ref) the 
 """
 dry_floor(sim::Simulation) = sim.gcp isa ConsistentGapCoupling && sim.cf isa FilledCavities && sim.up isa NoUplift
 
-@parallel_indices (ix, iy) function compute_b_dry_floor_kernel!(b, b_dry, mask, mdot, beta, abs_ub, A_visc, N, rho_i, n_minus_1, b_min, b_max, gu)
+@parallel_indices (ix, iy) function compute_b_dry_floor_kernel!(b, b_dry, mask, mdot, beta, abs_ub, A_visc, N, rho_i, n_minus_1, b_min, b_max, gu, bump)
     if ix <= size(b, 1) && iy <= size(b, 2) && mask[ix, iy] == GROUNDED
-        W = scheme_water(gu, b[ix, iy], b_dry[ix, iy], b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], N[ix, iy], rho_i, n_minus_1)
+        W = scheme_water(cell_gap(gu, bump[ix, iy]), b[ix, iy], b_dry[ix, iy], b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], N[ix, iy], rho_i, n_minus_1)
         bn = max(W, b_min)
         b[ix, iy] = bn
         b_dry[ix, iy] = bn - W
@@ -484,7 +484,7 @@ update with no lower clamp ([`scheme_water`](@ref), the same function the head r
 """
 function compute_b_dry_floor!(sim::Simulation)
     s, p = sim.state, sim.p
-    @parallel compute_b_dry_floor_kernel!(s.b, s.b_dry, s.mask, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, p.b_min, p.b_max, gap_coupling_terms(sim))
+    @parallel compute_b_dry_floor_kernel!(s.b, s.b_dry, s.mask, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, p.b_min, p.b_max, gap_coupling_terms(sim), s.bump)
     return sim
 end
 

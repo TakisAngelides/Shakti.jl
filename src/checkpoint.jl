@@ -63,6 +63,9 @@ function load_checkpoint!(sim::Simulation, path::String)
             # field is derived, and is rebuilt from b/h by the refresh at the start of the next step.
             haskey(file, String(name)) && copyto!(getfield(state, name), file[String(name)])
         end
+        # bump (the bump height under the ice base) is lagged with beta, not refreshed by the next step's head refresh:
+        # rebuild both from the loaded b and b_uplift when the checkpoint predates it
+        haskey(file, "bump") || compute_beta!(state, sim.p, sim.oss)
         return file["t"], file["total_time"], (haskey(file, "dt") ? file["dt"] : nothing)
     end
     sim.total_time[] = total_time

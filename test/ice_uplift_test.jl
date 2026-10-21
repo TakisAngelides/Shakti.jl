@@ -56,6 +56,28 @@
             @test all(iszero, Array(sim.state.b_uplift)) && all(iszero, Array(sim.state.stor_up))
         end
 
+        @testset "opening by sliding stops where the ice floats above the bumps" begin
+            sim = make_sim(; up = IceUplift())
+            s, p = sim.state, sim.p
+            b = Array(s.b)
+            @test all(==(p.br), Array(s.bump)) # no uplift yet: the full bump height, bit for bit
+            bu = zeros(nx, ny); bu[3, 3] = 0.5 * p.br; bu[4, 3] = 2 * p.br
+            copyto!(s.b_uplift, bu)
+            compute_beta!(s, p, Shakti.WithOpenBySliding())
+            bump, beta = Array(s.bump), Array(s.beta)
+            @test bump[3, 3] ≈ 0.5 * p.br && bump[4, 3] == 0 && bump[2, 2] == p.br
+            @test beta[3, 3] ≈ max(0, (0.5 * p.br - b[3, 3]) / p.lr) # the ice base is at b + b_uplift
+            @test beta[4, 3] == 0                                     # floating above every bump: no opening
+            @test beta[2, 2] ≈ (p.br - b[2, 2]) / p.lr
+            # the fully implicit gap the head rows assume (cell_gap) has no sliding opening either: at N = 0 with no melt
+            # the gap of the floating cell stays, while with the full bump height it would open
+            gu = Shakti.SchemeGapUpdate{Shakti.FullyImplicitGapScheme, Shakti.StandardCreep, Float64}(dt, p.br, p.lr, p.b_c, false)
+            ub = 1e-6
+            @test Shakti.gap_update(Shakti.cell_gap(gu, bump[4, 3]), b[4, 3], 0.0, beta[4, 3], ub, 0.0, p.rho_i) ≈ b[4, 3]
+            @test Shakti.gap_update(gu, b[4, 3], 0.0, beta[2, 2], ub, 0.0, p.rho_i) > b[4, 3]
+            @test Shakti.cell_gap(ExplicitGapCoupling(), 0.0) isa ExplicitGapCoupling
+        end
+
         for cf in (FilledCavities(), UnfilledCavities())
             @testset "IceUplift with $(nameof(typeof(cf))): pw <= po, uplift layer, budget closes" begin
                 sim = make_sim(; up = IceUplift(), cf = cf)

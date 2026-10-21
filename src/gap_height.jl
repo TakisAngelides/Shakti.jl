@@ -46,9 +46,13 @@ struct NoOpenBySliding <: AbstractOpenBySlidingScheme end
 # Opening rate of the gap by sliding over bedrock bumps of height br and
 # spacing lr (Rothlisberger-style cavity opening): positive only while the
 # gap is still smaller than the bump height, zero once b has grown past br.
-@parallel_indices (ix, iy) function compute_beta_kernel!(beta, b, br, lr)
+# The ice base is b + b_uplift above the bed; the bumps it still rides over are those above b_uplift, of height
+# bump = max(0, br - b_uplift) (= br without uplift, bit for bit), and sliding opens the gap only while b < bump.
+@parallel_indices (ix, iy) function compute_beta_kernel!(beta, bump, b, b_uplift, br, lr)
     if ix <= size(beta, 1) && iy <= size(beta, 2)
-        beta[ix, iy] = max(zero(br), (br - b[ix, iy]) / lr)
+        bu = max(zero(br), br - b_uplift[ix, iy])
+        bump[ix, iy] = bu
+        beta[ix, iy] = max(zero(br), (bu - b[ix, iy]) / lr)
     end
     return
 end
@@ -58,13 +62,16 @@ $(TYPEDSIGNATURES)
 
 Updates `s.beta` (opening rate of the gap by sliding over bedrock bumps of height `p.br` and
 spacing `p.lr`, Röthlisberger-style cavity opening): positive only while the gap is still smaller
-than the bump height, zero once `b` has grown past `br`.
+than the bump height, zero once `b` has grown past `br`. Under [`IceUplift`](@ref) the ice base is
+`b + b_uplift` above the bed, so the bumps it still rides over have height `s.bump = max(0, br - b_uplift)`
+(also stored, for the fully implicit gap scheme and the gap update the head rows assume) and
+`beta = max(0, (bump - b)/lr)`: ice floating above the bumps opens no cavity. Without uplift `bump = br`.
 
 Dispatches on `oss` (decided once, from `p.br`, see [`AbstractOpenBySlidingScheme`](@ref)): the
 [`NoOpenBySliding`](@ref) method skips the kernel launch entirely, since `p.br == 0` makes the term
 identically zero mathematically.
 """
-compute_beta!(s::State, p::ModelParameters, ::WithOpenBySliding) = (@parallel compute_beta_kernel!(s.beta, s.b, p.br, p.lr); s)
+compute_beta!(s::State, p::ModelParameters, ::WithOpenBySliding) = (@parallel compute_beta_kernel!(s.beta, s.bump, s.b, s.b_uplift, p.br, p.lr); s)
 
 """
 $(TYPEDSIGNATURES)
@@ -378,11 +385,11 @@ end
     return relax_update(b0, m, C, dt)
 end
 
-@parallel_indices (ix, iy) function compute_b_fully_implicit_kernel!(b, mask, mdot, abs_ub, A_visc, N, rho_i, n_minus_1, dt, b_min, b_max, br, lr, cls::AbstractCreepLengthScheme, b_c)
+@parallel_indices (ix, iy) function compute_b_fully_implicit_kernel!(b, mask, mdot, abs_ub, A_visc, N, rho_i, n_minus_1, dt, b_min, b_max, bump, lr, cls::AbstractCreepLengthScheme, b_c)
     if ix <= size(b, 1) && iy <= size(b, 2) && mask[ix, iy] == GROUNDED
         C = A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy]
         gamma = abs_ub[ix, iy] / lr
-        b[ix, iy] = clamp(fully_implicit_creep_update(cls, b[ix, iy], mdot[ix, iy] / rho_i, gamma, C, dt, br, b_c), b_min, b_max)
+        b[ix, iy] = clamp(fully_implicit_creep_update(cls, b[ix, iy], mdot[ix, iy] / rho_i, gamma, C, dt, bump[ix, iy], b_c), b_min, b_max) # bump: br less the uplift layer (compute_beta!)
     end
     return
 end
@@ -402,10 +409,11 @@ closure term's local slope (since `l_c` is quadratic, not linear, in `b` below `
 scaled by [`creep_length_slope`](@ref) (`dl_c/db`, `1` under [`StandardCreep`](@ref) so this is a
 no-op there) to keep the rate/timescale estimate correct.
 """
-@parallel_indices (ix, iy) function compute_dt_rate_kernel!(rate, mask, b, abs_ub, A_visc, N, n_minus_1, br, lr, cls::AbstractCreepLengthScheme, b_c)
+@parallel_indices (ix, iy) function compute_dt_rate_kernel!(rate, mask, b, abs_ub, A_visc, N, n_minus_1, bump, lr, cls::AbstractCreepLengthScheme, b_c)
     if ix <= size(rate, 1) && iy <= size(rate, 2)
         if mask[ix, iy] == GROUNDED
             C = A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy] * creep_length_slope(cls, b[ix, iy], b_c)
+            br = bump[ix, iy] # bump height under the ice base (compute_beta!)
             gamma = (br > 0 && b[ix, iy] < br) ? abs_ub[ix, iy] / lr : zero(C)
             rate[ix, iy] = C + gamma
         else
@@ -455,11 +463,12 @@ end
 # bed area, so a cell holding little water (a nearly empty cavity, see UnfilledCavities) cannot take more
 # than its water stock `W = b - b_empty` per host step: f <= (rho_w/rho_i)*W/dt. Only applied when
 # `water_limited` (unfilled cavities on); with a water-filled gap (W = b) the gap room above is the limit.
-@parallel_indices (ix, iy) function freeze_on_capacity_kernel!(Cap, mask, b, beta, lc, abs_ub, A_visc, N, n_minus_1, dt, b_min, br, lr, cls::AbstractCreepLengthScheme, b_c, beta_at_bmin, creep_at_bmin, diffusion, b_empty, water_ratio, water_limited)
+@parallel_indices (ix, iy) function freeze_on_capacity_kernel!(Cap, mask, b, beta, lc, abs_ub, A_visc, N, n_minus_1, dt, b_min, bump, lr, cls::AbstractCreepLengthScheme, b_c, beta_at_bmin, creep_at_bmin, diffusion, b_empty, water_ratio, water_limited)
     if ix <= size(Cap, 1) && iy <= size(Cap, 2)
         if mask[ix, iy] == GROUNDED
             bb = b[ix, iy]
             Cn = A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy]
+            br = bump[ix, iy] # bump height under the ice base (compute_beta!)
             Cap[ix, iy] = diffusion ?
                 freeze_on_capacity_cell_diffusion(bb, beta[ix, iy], abs_ub[ix, iy], Cn, lc[ix, iy], dt, b_min, br, lr) :
                 freeze_on_capacity_cell(bb, abs_ub[ix, iy], Cn, dt, b_min, br, lr, cls, b_c,

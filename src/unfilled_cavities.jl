@@ -123,21 +123,22 @@ compute_b_w!(s::State, p::ModelParameters) = (@parallel compute_b_w_kernel!(s.b_
     return rho_w * ggrav * max(zero(b), (Gm - Gp) / (2δ))
 end
 
-@parallel_indices (ix, iy) function compute_b_w_iterate_kernel!(b_w, dbw_dh, b, h, zb, po, N, stor, stor_up, b_min, b_max, rho_w, ggrav, gc, mdot, beta, abs_ub, A_visc, rho_i, n_minus_1, b_dry)
+@parallel_indices (ix, iy) function compute_b_w_iterate_kernel!(b_w, dbw_dh, b, h, zb, po, N, stor, stor_up, b_min, b_max, rho_w, ggrav, gc, mdot, beta, abs_ub, A_visc, rho_i, n_minus_1, b_dry, bump)
     if ix <= size(b_w, 1) && iy <= size(b_w, 2)
         bb, bd = b[ix, iy], b_dry[ix, iy]
+        gcc = cell_gap(gc, bump[ix, iy]) # this cell's bump height (compute_beta!)
         x  = h[ix, iy] - zb[ix, iy]                # pressure head
         xo = po[ix, iy] / (rho_w * ggrav)          # pressure head at the overburden
         if stor[ix, iy] > 0 && x < 0               # unfilled: the gap at N = po minus the empty depth zb - h
-            W = end_of_step_gap(gc, bb, bd, b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], po[ix, iy], rho_i, n_minus_1) + x
+            W = end_of_step_gap(gcc, bb, bd, b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], po[ix, iy], rho_i, n_minus_1) + x
             slope = one(bb)
         elseif stor_up[ix, iy] > 0 && x > xo       # uplifted: the gap at N = 0 plus the layer h - h_o
-            W = end_of_step_gap(gc, bb, bd, b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], zero(bb), rho_i, n_minus_1) + (x - xo)
+            W = end_of_step_gap(gcc, bb, bd, b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], zero(bb), rho_i, n_minus_1) + (x - xo)
             slope = one(bb)
         else                                       # filled: the gap (the start-of-step one, or G(N) under ConsistentGapCoupling)
             Nv = N[ix, iy]
-            W = end_of_step_gap(gc, bb, bd, b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], Nv, rho_i, n_minus_1)
-            slope = end_of_step_gap_slope(gc, bb, bd, b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], Nv, rho_i, n_minus_1, rho_w, ggrav)
+            W = end_of_step_gap(gcc, bb, bd, b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], Nv, rho_i, n_minus_1)
+            slope = end_of_step_gap_slope(gcc, bb, bd, b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], Nv, rho_i, n_minus_1, rho_w, ggrav)
         end
         b_w[ix, iy]    = W > 0 ? W : zero(bb) # no water, no conductance (compute_b_w!)
         dbw_dh[ix, iy] = W > 0 ? slope : zero(bb)
@@ -162,7 +163,7 @@ the conductance either). Both are continuous across the regimes and equal `b` ex
 [`NoUplift`](@ref) and [`ExplicitGapCoupling`](@ref).
 """
 compute_b_w_iterate!(s::State, p::ModelParameters, gc::AbstractGapCoupling = ExplicitGapCoupling()) =
-    (@parallel compute_b_w_iterate_kernel!(s.b_w, s.dbw_dh, s.b, s.h, s.zb, s.po, s.N, s.stor, s.stor_up, p.b_min, p.b_max, p.rho_w, p.g, gc, s.mdot0, s.beta, s.abs_ub, s.A_visc, p.rho_i, p.n_minus_1_exp, s.b_dry); s)
+    (@parallel compute_b_w_iterate_kernel!(s.b_w, s.dbw_dh, s.b, s.h, s.zb, s.po, s.N, s.stor, s.stor_up, p.b_min, p.b_max, p.rho_w, p.g, gc, s.mdot0, s.beta, s.abs_ub, s.A_visc, p.rho_i, p.n_minus_1_exp, s.b_dry, s.bump); s)
 
 """
 $(TYPEDSIGNATURES)
