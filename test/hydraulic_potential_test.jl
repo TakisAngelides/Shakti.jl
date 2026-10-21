@@ -53,6 +53,12 @@
             @test any(!iszero, dbx) && any(!iszero, dby) # the fixture's b really varies
         end
 
+        @testset "default: SheetTopPotential under UnfilledCavities, explicit choice kept" begin
+            @test make_sim(; hp = nothing).hp isa BedPotential
+            @test make_sim(; hp = nothing, cf = UnfilledCavities()).hp isa SheetTopPotential
+            @test make_sim(; hp = BedPotential(), cf = UnfilledCavities()).hp isa BedPotential
+        end
+
         @testset "uniform gap: identical to BedPotential" begin
             sims = [make_sim(; hp = hp, uniform_b = true) for hp in (BedPotential(), SheetTopPotential())]
             foreach(step!, sims)

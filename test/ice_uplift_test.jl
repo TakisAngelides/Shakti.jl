@@ -52,6 +52,8 @@
             g = grounded(sim.state)
             @test maximum((Array(sim.state.pw) .- Array(sim.state.po))[g]) > 0
             @test sim.up isa NoUplift
+            @test sim.hp isa BedPotential
+            @test make_sim(; up = IceUplift()).hp isa SheetTopPotential # the water-surface potential is the default with uplift
             @test all(iszero, Array(sim.state.b_uplift)) && all(iszero, Array(sim.state.stor_up))
         end
 
