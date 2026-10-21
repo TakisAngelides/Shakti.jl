@@ -4,20 +4,19 @@
         grid = Grid(nx, ny, 1e3, 1e3)
         p = ModelParameters(e_v = 0.0)
 
-        # Seed the face fields compute_D! reads directly with simple, known values -- bypassing
-        # the full elliptic solve entirely, since compute_D! only ever reads b_x/b_y/q_x/q_y/
-        # dhdx/dhdy/dpwdx/dpwdy (already face-centered, no averaging of its own), so this is a
+        # Seed the fields compute_D! reads directly with simple, known values -- bypassing
+        # the full elliptic solve entirely, since compute_D! only ever reads b/b_empty (averaged onto
+        # faces) and q_x/q_y/dhdx/dhdy/dpwdx/dpwdy (already face-centered), so this is a
         # faithful, self-contained test of its own formula in isolation. Deliberately set uniformly
         # nonzero even at the domain-boundary faces (unlike the real pipeline, where dhdx/dpwdx are
         # left exactly zero there by compute_dhdx_kernel!/compute_dpwdx_kernel!) so the boundary
         # check below isolates compute_D_kernel!'s OWN restricted range, not an upstream zero
         # cascading in from dhdx.
         state = State(grid)
-        state.b_x   .= 0.02
+        state.b     .= 0.02 # uniform, so the face mean of the filled gap is 0.02 on every face
         state.q_x   .= -1e-5
         state.dhdx  .= 0.1
         state.dpwdx .= 50.0
-        state.b_y   .= 0.03
         state.q_y   .= -2e-5
         state.dhdy  .= 0.2
         state.dpwdy .= 80.0
@@ -26,8 +25,8 @@
 
         @testset "NoDiffusion skips the update entirely" begin
             s = State(grid)
-            s.b_x .= state.b_x; s.q_x .= state.q_x; s.dhdx .= state.dhdx; s.dpwdx .= state.dpwdx
-            s.b_y .= state.b_y; s.q_y .= state.q_y; s.dhdy .= state.dhdy; s.dpwdy .= state.dpwdy
+            s.b .= state.b; s.q_x .= state.q_x; s.dhdx .= state.dhdx; s.dpwdx .= state.dpwdx
+            s.q_y .= state.q_y; s.dhdy .= state.dhdy; s.dpwdy .= state.dpwdy
             compute_D!(s, p, mt_full, NoDiffusion())
             @test all(iszero, Array(s.D_x))
             @test all(iszero, Array(s.D_y))
@@ -35,15 +34,15 @@
 
         @testset "WithDiffusion matches Eq. 10 directly, both terms on" begin
             s = State(grid)
-            s.b_x .= state.b_x; s.q_x .= state.q_x; s.dhdx .= state.dhdx; s.dpwdx .= state.dpwdx
-            s.b_y .= state.b_y; s.q_y .= state.q_y; s.dhdy .= state.dhdy; s.dpwdy .= state.dpwdy
+            s.b .= state.b; s.q_x .= state.q_x; s.dhdx .= state.dhdx; s.dpwdx .= state.dpwdx
+            s.q_y .= state.q_y; s.dhdy .= state.dhdy; s.dpwdy .= state.dpwdy
             compute_D!(s, p, mt_full, WithDiffusion(CholeskyDirectSolver(grid)))
 
-            expected_Dx = (s.b_x[2, 1] / p.rho_i) * (1 / p.L) *
+            expected_Dx = (s.b[2, 1] / p.rho_i) * (1 / p.L) *
                           (-p.rho_w * p.g * s.q_x[2, 1] * s.dhdx[2, 1] + p.ct * p.cw * p.rho_w * s.q_x[2, 1] * s.dpwdx[2, 1])
             @test s.D_x[2, 1] ≈ expected_Dx
 
-            expected_Dy = (s.b_y[1, 2] / p.rho_i) * (1 / p.L) *
+            expected_Dy = (s.b[1, 2] / p.rho_i) * (1 / p.L) *
                           (-p.rho_w * p.g * s.q_y[1, 2] * s.dhdy[1, 2] + p.ct * p.cw * p.rho_w * s.q_y[1, 2] * s.dpwdy[1, 2])
             @test s.D_y[1, 2] ≈ expected_Dy
 
@@ -59,18 +58,18 @@
         @testset "Potential/Sensible gating matches compute_mdot!'s own convention" begin
             # Potential only (Sensible off): D_x should equal just the -rho_w*g*q*dhdx term.
             s1 = State(grid)
-            s1.b_x .= state.b_x; s1.q_x .= state.q_x; s1.dhdx .= state.dhdx; s1.dpwdx .= state.dpwdx
+            s1.b .= state.b; s1.q_x .= state.q_x; s1.dhdx .= state.dhdx; s1.dpwdx .= state.dpwdx
             mt_pot_only = MeltTerms{true, true, true, false, true}()
             compute_D!(s1, p, mt_pot_only, WithDiffusion(CholeskyDirectSolver(grid)))
-            expected_pot_only = (s1.b_x[2, 1] / p.rho_i) * (1 / p.L) * (-p.rho_w * p.g * s1.q_x[2, 1] * s1.dhdx[2, 1])
+            expected_pot_only = (s1.b[2, 1] / p.rho_i) * (1 / p.L) * (-p.rho_w * p.g * s1.q_x[2, 1] * s1.dhdx[2, 1])
             @test s1.D_x[2, 1] ≈ expected_pot_only
 
             # Sensible only (Potential off): D_x should equal just the ct*cw*rho_w*q*dpwdx term.
             s2 = State(grid)
-            s2.b_x .= state.b_x; s2.q_x .= state.q_x; s2.dhdx .= state.dhdx; s2.dpwdx .= state.dpwdx
+            s2.b .= state.b; s2.q_x .= state.q_x; s2.dhdx .= state.dhdx; s2.dpwdx .= state.dpwdx
             mt_sens_only = MeltTerms{true, true, false, true, true}()
             compute_D!(s2, p, mt_sens_only, WithDiffusion(CholeskyDirectSolver(grid)))
-            raw_sens_only = (s2.b_x[2, 1] / p.rho_i) * (1 / p.L) * (p.ct * p.cw * p.rho_w * s2.q_x[2, 1] * s2.dpwdx[2, 1])
+            raw_sens_only = (s2.b[2, 1] / p.rho_i) * (1 / p.L) * (p.ct * p.cw * p.rho_w * s2.q_x[2, 1] * s2.dpwdx[2, 1])
             expected_sens_only = max(0.0, raw_sens_only) # D is floored at 0 (a net heat deficit is freeze-on, handled by mdot, not backward diffusion)
             @test s2.D_x[2, 1] ≈ expected_sens_only
             @test all(>=(0), Array(s2.D_x)) && all(>=(0), Array(s2.D_y))
@@ -80,6 +79,29 @@
             # mt's flags rather than by ct/cw's literal values.
             @test p.ct != 0 && p.cw != 0 # sanity: this test is only meaningful if ct/cw are actually nonzero
             @test s1.D_x[2, 1] ≈ expected_pot_only # unchanged from above: no sensible leakage
+        end
+
+        @testset "the filled part of the gap sets D: b - b_empty, within [0, b]" begin
+            s = State(grid)
+            s.q_x .= state.q_x; s.dhdx .= state.dhdx; s.q_y .= state.q_y; s.dhdy .= state.dhdy
+            s.b .= [0.01 * (i + j) for i in 1:nx, j in 1:ny]
+            mt_pot_only = MeltTerms{true, true, true, false, true}()
+            wd = WithDiffusion(CholeskyDirectSolver(grid))
+            compute_D!(s, p, mt_pot_only, wd) # b_empty = 0 (FilledCavities): the face mean of b
+            D_full = copy(Array(s.D_x)); Dy_full = copy(Array(s.D_y))
+            b = Array(s.b)
+            @test D_full[2, 1] ≈ ((b[2, 1] + b[1, 1]) / 2 / p.rho_i) / p.L * (-p.rho_w * p.g * s.q_x[2, 1] * s.dhdx[2, 1])
+
+            # unfilled cell (2, 1): only b - b_empty of its gap holds water; an "over-full" cell (3, 1)
+            # (b_empty < 0, from the water-budget bookkeeping) touches at most its gap b
+            be = zeros(nx, ny); be[2, 1] = 0.75 * b[2, 1]; be[3, 1] = -0.5 * b[3, 1]
+            s.b_empty .= be
+            compute_D!(s, p, mt_pot_only, wd)
+            @test s.D_x[2, 1] ≈ D_full[2, 1] * (0.25 * b[2, 1] + b[1, 1]) / (b[2, 1] + b[1, 1])
+            @test s.D_x[3, 1] ≈ D_full[3, 1] * (0.25 * b[2, 1] + b[3, 1]) / (b[2, 1] + b[3, 1])
+            @test s.D_x[4, 1] == D_full[4, 1] # (3, 1) is clamped to its gap b
+            @test s.D_y[2, 2] ≈ Dy_full[2, 2] * (0.25 * b[2, 1] + b[2, 2]) / (b[2, 1] + b[2, 2])
+            @test s.D_x[2, 2] == D_full[2, 2] # faces not touching (2, 1) are unchanged
         end
 
         @testset "D through the real Picard loop (WithDiffusion)" begin

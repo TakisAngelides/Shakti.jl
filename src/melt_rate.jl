@@ -196,7 +196,10 @@ end
 # D (SUHMO Eq. 10) is built from exactly the same two dissipation terms as mdot's own
 # Potential/Sensible contributions (potential-energy dissipation, sensible-heat exchange) -- just
 # with a different prefactor (b/(rho_i*L) instead of 1/L) and no geothermal/frictional/conductive
-# terms (those have no role in melting a channel's side walls). Reusing mt's own type parameters
+# terms (those have no role in melting a channel's side walls). The b of the prefactor is the height
+# of wall the water touches: the filled part of the gap, b - b_empty (wet_gap below), which is b
+# except in an unfilled cell (UnfilledCavities), where only the bottom b - b_empty of the gap holds
+# water. Under FilledCavities b_empty is zero and D is bit-for-bit SUHMO's. Reusing mt's own type parameters
 # to gate them, rather than a fresh always-on formula, keeps D consistent with whatever a run
 # already chose for mdot: a run with Sensible off shouldn't have D silently include it just
 # because p.ct/p.cw happen to be nonzero -- same rationale as ModelParameters' own docstring note
@@ -219,7 +222,11 @@ end
 # (see compute_dhdx_kernel!'s docstring): D_x = f(q_x, dhdx, dpwdx), and q_x itself comes out to 0
 # wherever dhdx=0 (compute_q_and_Re_x_kernel!, water_flux.jl), so the zero propagates through
 # automatically.
-@parallel_indices (ix, iy) function compute_D_kernel!(D_x, D_y, b_x, b_y, q_x, q_y, dhdx, dhdy, dpwdx, dpwdy, Linv, rho_w, rho_i, ggrav, ct, cw,
+# Filled part of the gap, b - b_empty, kept within [0, b]: the water-budget bookkeeping lets b_empty go
+# down to -b in a filled cell (update_b_empty_budget!), and the wall the water touches is at most b.
+@inline wet_gap(b, b_empty) = clamp(b - b_empty, zero(b), b)
+
+@parallel_indices (ix, iy) function compute_D_kernel!(D_x, D_y, b, b_empty, q_x, q_y, dhdx, dhdy, dpwdx, dpwdy, Linv, rho_w, rho_i, ggrav, ct, cw,
                                                         ::MeltTerms{Geothermal,Frictional,Potential,Sensible,Conductive}) where {Geothermal,Frictional,Potential,Sensible,Conductive}
     if ix > 1 && ix < size(D_x, 1) && iy <= size(D_x, 2)
         acc = zero(eltype(D_x))
@@ -229,7 +236,8 @@ end
         if Sensible
             acc += ct * cw * rho_w * q_x[ix, iy] * dpwdx[ix, iy]
         end
-        D_x[ix, iy] = max(zero(acc), (b_x[ix, iy] / rho_i) * Linv * acc) # floored at 0, see below
+        bw_x = (wet_gap(b[ix, iy], b_empty[ix, iy]) + wet_gap(b[ix-1, iy], b_empty[ix-1, iy])) / 2 # face mean, as compute_b_x_kernel! (gap_height.jl)
+        D_x[ix, iy] = max(zero(acc), (bw_x / rho_i) * Linv * acc) # floored at 0, see above
     end
     if iy > 1 && iy < size(D_y, 2) && ix <= size(D_y, 1)
         acc = zero(eltype(D_y))
@@ -239,7 +247,8 @@ end
         if Sensible
             acc += ct * cw * rho_w * q_y[ix, iy] * dpwdy[ix, iy]
         end
-        D_y[ix, iy] = max(zero(acc), (b_y[ix, iy] / rho_i) * Linv * acc)
+        bw_y = (wet_gap(b[ix, iy], b_empty[ix, iy]) + wet_gap(b[ix, iy-1], b_empty[ix, iy-1])) / 2
+        D_y[ix, iy] = max(zero(acc), (bw_y / rho_i) * Linv * acc)
     end
     return
 end
@@ -257,11 +266,11 @@ compute_D!(s::State, p::ModelParameters, mt::MeltTerms, ::NoDiffusion) = s
 $(TYPEDSIGNATURES)
 
 Updates `s.D_x`/`s.D_y` (the channel-wall diffusion coefficient, SUHMO Eq. 10) from the current
-`s.b_x`/`s.b_y`/`s.q_x`/`s.q_y`/`s.dhdx`/`s.dhdy`/`s.dpwdx`/`s.dpwdy` under [`WithDiffusion`](@ref)
+`s.b`/`s.b_empty` (the filled part of the gap, averaged onto faces)/`s.q_x`/`s.q_y`/`s.dhdx`/`s.dhdy`/`s.dpwdx`/`s.dpwdy` under [`WithDiffusion`](@ref)
 (`linear_solver.jl`) -- its two terms (potential-energy dissipation, sensible-heat exchange) gated
 by `mt`'s own `Potential`/`Sensible` flags, exactly like [`compute_mdot!`](@ref)'s matching terms.
 """
 function compute_D!(s::State, p::ModelParameters, mt::MeltTerms, ::WithDiffusion)
-    @parallel compute_D_kernel!(s.D_x, s.D_y, s.b_x, s.b_y, s.q_x, s.q_y, s.dhdx, s.dhdy, s.dpwdx, s.dpwdy, 1/p.L, p.rho_w, p.rho_i, p.g, p.ct, p.cw, mt)
+    @parallel compute_D_kernel!(s.D_x, s.D_y, s.b, s.b_empty, s.q_x, s.q_y, s.dhdx, s.dhdy, s.dpwdx, s.dpwdy, 1/p.L, p.rho_w, p.rho_i, p.g, p.ct, p.cw, mt)
     return s
 end
