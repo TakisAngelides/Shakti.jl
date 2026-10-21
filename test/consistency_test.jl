@@ -41,15 +41,16 @@
             solve_head!(sim)
             s = sim.state
             h, Kx, Ky = Array(s.h), Array(s.K_x), Array(s.K_y)
+            dbx, dby = Array(s.db_x), Array(s.db_y) # gap jumps of the default SheetTopPotential (zero on Dirichlet faces)
             dx, dy = grid.dx, grid.dy
-            # Rebuild every face flux from the head the solve produced and the face transmissivities
+            # Rebuild every face flux from the head the solve produced, the gap jumps and the face transmissivities
             # it assembled: q must match face by face -- including the outlet faces into OCEAN/LAND,
             # where it used to come out 8x too small (b averaged with the Dirichlet cell's b = 0).
             for j in 1:ny, i in 2:nx
-                @test s.q_x[i, j] ≈ -Kx[i, j] * (h[i, j] - h[i-1, j]) / dx * s.valid_x[i, j] atol = 1e-14
+                @test s.q_x[i, j] ≈ -Kx[i, j] * (h[i, j] - h[i-1, j] + dbx[i, j]) / dx * s.valid_x[i, j] atol = 1e-14
             end
             for j in 2:ny, i in 1:nx
-                @test s.q_y[i, j] ≈ -Ky[i, j] * (h[i, j] - h[i, j-1]) / dy * s.valid_y[i, j] atol = 1e-14
+                @test s.q_y[i, j] ≈ -Ky[i, j] * (h[i, j] - h[i, j-1] + dby[i, j]) / dy * s.valid_y[i, j] atol = 1e-14
             end
             # Outlet face transmissivity is the grounded cell's own (turbulence-corrected) value.
             p = sim.p

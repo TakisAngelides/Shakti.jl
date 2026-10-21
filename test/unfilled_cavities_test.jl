@@ -73,7 +73,7 @@
             set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b0, G, ub_x, ub_y, ieb .* ieb_scale, taub_x, taub_y)
             ps = PicardSolver(500, floattype(1e-12), CholeskyDirectSolver(grid), grid)
             return Simulation(grid, state, 1, floattype(dt), p, gap, String[], ConstantMeltInput(), sl; ps = ps, cavity_filling = cf, k_face_choice = kface, gap_coupling = gcp,
-                              hydraulic_potential = BedPotential()) # compare cavity filling alone (the default under UnfilledCavities is SheetTopPotential)
+                              hydraulic_potential = BedPotential()) # compare cavity filling alone (the default is SheetTopPotential)
         end
 
         grounded(s) = Array(s.mask) .== GROUNDED

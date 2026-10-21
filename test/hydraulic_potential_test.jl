@@ -33,9 +33,8 @@
         end
         grounded(s) = Array(s.mask) .== GROUNDED
 
-        @testset "default is BedPotential; gap jumps only between GROUNDED cells" begin
+        @testset "gap jumps only between GROUNDED cells" begin
             sim = make_sim()
-            @test sim.hp isa BedPotential
             s = sim.state
             update_gap_jumps!(s, BedPotential())
             @test all(iszero, Array(s.db_x)) && all(iszero, Array(s.db_y))
@@ -53,10 +52,14 @@
             @test any(!iszero, dbx) && any(!iszero, dby) # the fixture's b really varies
         end
 
-        @testset "default: SheetTopPotential under UnfilledCavities, explicit choice kept" begin
-            @test make_sim(; hp = nothing).hp isa BedPotential
-            @test make_sim(; hp = nothing, cf = UnfilledCavities()).hp isa SheetTopPotential
-            @test make_sim(; hp = BedPotential(), cf = UnfilledCavities()).hp isa BedPotential
+        @testset "default is SheetTopPotential; BedPotential kept when passed" begin
+            for cf in (FilledCavities(), UnfilledCavities())
+                @test make_sim(; hp = SheetTopPotential(), cf = cf).hp isa SheetTopPotential
+                @test make_sim(; hp = BedPotential(), cf = cf).hp isa BedPotential
+            end
+            sim = make_sim()
+            default = Simulation(grid, sim.state, 1, floattype(dt), sim.p, "explicit", String[], ConstantMeltInput(), sl; ps = sim.hs.ps)
+            @test default.hp isa SheetTopPotential
         end
 
         @testset "uniform gap: identical to BedPotential" begin

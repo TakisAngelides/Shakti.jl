@@ -212,7 +212,7 @@ struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHea
     ts::TS # AbstractTimeStepScheme; FixedTimeStep() (a no-op, dt never changes) by default
     he::HE # AbstractHeadExtrapolation: the head solve's initial guess, see head_extrapolation.jl
     cf::CF # AbstractCavityFilling: FilledCavities() (legacy, gap always water-filled) by default, see unfilled_cavities.jl
-    hp::HP # AbstractHydraulicPotential: BedPotential() (legacy, q = -K grad(h)) by default, SheetTopPotential() under UnfilledCavities/IceUplift, see hydraulic_potential.jl
+    hp::HP # AbstractHydraulicPotential: SheetTopPotential() (q = -K grad(h + b)) by default, BedPotential() for the legacy flux, see hydraulic_potential.jl
     up::UP # AbstractIceUplift: NoUplift() (legacy, pw may exceed po) by default, see ice_uplift.jl
     gcp::GCP # AbstractGapCoupling: ExplicitGapCoupling() (legacy) by default, see linear_solver.jl
 end
@@ -258,16 +258,17 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
 - `cavity_filling`: [`FilledCavities`](@ref) (default, legacy: the gap is always full of water) or
   [`UnfilledCavities`](@ref) (the gap may be partly empty, with `p_w = 0` there; see
   `unfilled_cavities.jl`).
-- `hydraulic_potential`: [`BedPotential`](@ref) (legacy: the flux is driven by the bed-referenced
-  head, `q = -K grad(h)`) or [`SheetTopPotential`](@ref) (the potential includes the thickness of the
-  flowing water, GlaDS-2 Eq. 7: `q = -K grad(h + b)`; see `hydraulic_potential.jl`). Default:
-  `BedPotential()`, or `SheetTopPotential()` under [`UnfilledCavities`](@ref) or [`IceUplift`](@ref): there the
-  head is `h = z_b + W - b` (free surface) or `h_o + W - b` (uplift layer), so `grad(h)` holds a spurious
-  `-grad(b)` that drives water (and dissipation heat) along gap-size gradients under a flat water surface.
+- `hydraulic_potential`: [`SheetTopPotential`](@ref) (default: the potential includes the thickness of the
+  flowing water, GlaDS-2 Eq. 7: `q = -K grad(h + b)`; see `hydraulic_potential.jl`) or [`BedPotential`](@ref)
+  (legacy, Sommers et al. 2018: the flux is driven by the bed-referenced head, `q = -K grad(h)`). The water's
+  level is `h + b` in every regime (`h` is the head at the bed in a filled cell, `z_b + W - b` with a free surface,
+  `h_o + W - b` with an uplift layer), so `grad(h)` misses `-grad(b)`: water (and dissipation heat) would not follow
+  differences in gap size, or would move under a flat water surface. Pass `BedPotential()` to reproduce the
+  original equations bit for bit.
 - `uplift`: [`NoUplift`](@ref) (default, legacy: the water pressure may exceed the overburden, `N < 0`) or
   [`IceUplift`](@ref) (the pressure is capped at the overburden and the extra water lifts the ice, stored
   in an uplift layer at `N = 0`; see `ice_uplift.jl`). With `cavity_filling = UnfilledCavities()` and
-  `hydraulic_potential = SheetTopPotential()` this is the sheet of GlaDS-2 (Wells et al. 2026), with the
+  the default `hydraulic_potential = SheetTopPotential()` this is the sheet of GlaDS-2 (Wells et al. 2026), with the
   pressure bounded by `0 <= p_w <= p_o`.
 - Observer: [`NoObserver`](@ref) if `tracked_obs` is empty; otherwise `which_observer` must be
   `"IO"` (writes to `path` via `which_file_writer`, one of `"NetCDF"`/`"HDF5"`/`"JLD2"`/`"CSV"`,
@@ -287,7 +288,7 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
   initial guess ([`HeadExtrapolation`](@ref); default `1`, linear). `0` starts every solve from the
   previous step's head. Ignored (always `0`) under [`ParabolicHeadScheme`](@ref).
 """
-function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::Vector{String}, mi::AbstractMeltInput, sl::AbstractSlidingLaw; ps = nothing, pps = nothing, which_observer = nothing, which_file_writer = nothing, tracked_times = nothing, path = nothing, k_face_choice = nothing, verbose = false, cell_gap_clamping::AbstractCellGapClamping = NoCellGapClamping(), cell_N_clamping::AbstractCellNClamping = NoCellNClamping(), timestep_scheme::AbstractTimeStepScheme = FixedTimeStep(), diffusion_scheme::AbstractDiffusionScheme = NoDiffusion(), head_extrapolation_order::Int = 1, cavity_filling::AbstractCavityFilling = FilledCavities(), hydraulic_potential::Union{Nothing, AbstractHydraulicPotential} = nothing, uplift::AbstractIceUplift = NoUplift(), gap_coupling::Union{Nothing, AbstractGapCoupling} = nothing)
+function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::Vector{String}, mi::AbstractMeltInput, sl::AbstractSlidingLaw; ps = nothing, pps = nothing, which_observer = nothing, which_file_writer = nothing, tracked_times = nothing, path = nothing, k_face_choice = nothing, verbose = false, cell_gap_clamping::AbstractCellGapClamping = NoCellGapClamping(), cell_N_clamping::AbstractCellNClamping = NoCellNClamping(), timestep_scheme::AbstractTimeStepScheme = FixedTimeStep(), diffusion_scheme::AbstractDiffusionScheme = NoDiffusion(), head_extrapolation_order::Int = 1, cavity_filling::AbstractCavityFilling = FilledCavities(), hydraulic_potential::AbstractHydraulicPotential = SheetTopPotential(), uplift::AbstractIceUplift = NoUplift(), gap_coupling::Union{Nothing, AbstractGapCoupling} = nothing)
 
     # Check that all tracked observables are valid State fields
     for name in tracked_obs
@@ -325,11 +326,6 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
     # Creep-length scheme setup: CreepCutoff automatically if p.b_c (the sole
     # factor in creep_length's cutoff branch, see gap_height.jl) is nonzero.
     cls = iszero(p.b_c) ? StandardCreep() : CreepCutoff()
-
-    # Hydraulic potential: by default the legacy bed potential, except where the water depth is free (unfilled cavities or
-    # uplift), whose head h = z_b + W - b (or h_o + W - b) differs from the water level by -b, so grad(h) would drive flow
-    # and dissipation along gap-size gradients; the water-surface potential h + b removes that (hydraulic_potential.jl).
-    hydraulic_potential === nothing && (hydraulic_potential = (cavity_filling isa UnfilledCavities || uplift isa IceUplift) ? SheetTopPotential() : BedPotential())
 
     # K-face averaging scheme setup. Unfilled cavities need the donor-cell (upwind) face conductance, see Upwind
     # (k_face_scheme.jl): with an average, a nearly empty cell discharges through its neighbour's much larger conductance.

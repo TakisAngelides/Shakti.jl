@@ -19,8 +19,9 @@
 # field_gradients.jl) add them, so everything built from `dhdx`/`dhdy` -- face flux and Re, the upwind
 # donor, the dissipation melt, SUHMO's D, the water budget -- sees the same potential, and the head rows
 # (linear_solver.jl, `sheet_top_source`) move the known part K*db to the right-hand side. Under
-# [`BedPotential`](@ref) (default) the jumps stay zero and both places skip the addition, so results are
-# bit-for-bit those of the original equations.
+# [`BedPotential`](@ref) (legacy) the jumps stay zero and both places skip the addition, so results are
+# bit-for-bit those of the original equations. SheetTopPotential is the default: the water's level is h + b in
+# every regime, so grad(h) alone would miss the flow (and dissipation) along differences in gap size.
 
 """
 $(TYPEDSIGNATURES)
@@ -34,7 +35,8 @@ abstract type AbstractHydraulicPotential end
 """
 $(TYPEDSIGNATURES)
 
-Default: the potential is `rho_w g zb + pw` (Sommers et al. 2018), the flux `q = -K grad(h)`.
+Legacy: the potential is `rho_w g zb + pw` (Sommers et al. 2018), the flux `q = -K grad(h)`. Bit-for-bit the
+original equations; pass it explicitly (the default is [`SheetTopPotential`](@ref)).
 """
 struct BedPotential <: AbstractHydraulicPotential end
 
@@ -42,8 +44,8 @@ struct BedPotential <: AbstractHydraulicPotential end
 $(TYPEDSIGNATURES)
 
 The potential includes the thickness of the flowing water, `rho_w g (zb + h_w) + pw` (GlaDS-2, Wells et
-al. 2026, Eq. 7), i.e. `q = -K grad(h + b)` with the gap `b` held at its start-of-step value. See this
-file's header.
+al. 2026, Eq. 7), i.e. `q = -K grad(h + b)` with the gap `b` held at its start-of-step value. The default.
+See this file's header.
 """
 struct SheetTopPotential <: AbstractHydraulicPotential end
 
