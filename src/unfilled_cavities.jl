@@ -140,13 +140,14 @@ end
     return W > 0 ? (W, slope) : (zero(bb), zero(bb)) # no water, no conductance (compute_b_w!)
 end
 
-@parallel_indices (ix, iy) function compute_b_w_iterate_kernel!(b_w, dbw_dh, b, h, zb, po, N, stor, stor_up, b_min, b_max, rho_w, ggrav, gc, mdot, beta, abs_ub, A_visc, rho_i, n_minus_1, b_dry, bump)
+@parallel_indices (ix, iy) function compute_b_w_iterate_kernel!(b_w, dbw_dh, b, h, zb, po, N, stor, stor_up, b_min, b_max, rho_w, ggrav, gc, mdot0, mdot, beta, abs_ub, A_visc, rho_i, n_minus_1, b_dry, bump)
     if ix <= size(b_w, 1) && iy <= size(b_w, 2)
         gcc = cell_gap(gc, bump[ix, iy]) # this cell's bump height (compute_beta!)
-        W, slope = iterate_water(gcc, b[ix, iy], b_dry[ix, iy], h[ix, iy], zb[ix, iy], po[ix, iy], N[ix, iy], stor[ix, iy], stor_up[ix, iy], b_min, b_max,
-                                 rho_w, ggrav, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], rho_i, n_minus_1)
-        b_w[ix, iy]    = W
-        dbw_dh[ix, iy] = slope
+        args = (b[ix, iy], b_dry[ix, iy], h[ix, iy], zb[ix, iy], po[ix, iy], N[ix, iy], stor[ix, iy], stor_up[ix, iy], b_min, b_max, rho_w, ggrav)
+        W0, slope0 = iterate_water(gcc, args..., mdot0[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], rho_i, n_minus_1) # the melt opening of the start of the step
+        W1, slope1 = iterate_water(gcc, args..., mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], rho_i, n_minus_1)  # the head row's own water
+        b_w[ix, iy]    = W1 < W0 ? W1 : W0 # where the melt has fallen within the step, no more water than the row holds
+        dbw_dh[ix, iy] = W1 < W0 ? slope1 : slope0
     end
     return
 end
@@ -159,7 +160,7 @@ Water depth at the end of the step as a function of the current head iterate, fo
 gap may be partly empty (`s.stor > 0`, [`UnfilledCavities`](@ref)) and `h < zb`, `W = G(0) + (h - h_o)` where the ice may be
 lifted (`s.stor_up > 0`, [`IceUplift`](@ref)) and `h > h_o`, `W = G(N)` otherwise, never below 0 (no floor, see [`compute_b_w!`](@ref)). These are
 the head rows' own water: the depth they conserve (with the melt opening of `G` from the start of the step,
-[`store_start_of_step_melt!`](@ref)). Under [`ExplicitGapCoupling`](@ref) `G` is the start-of-step gap `b`
+[`store_start_of_step_melt!`](@ref), or at the iterate where that gives less water). Under [`ExplicitGapCoupling`](@ref) `G` is the start-of-step gap `b`
 (the head rows add the gap change only to the water budget), so a filled cell's depth is `b` with slope 0 (the gap is lagged
 in its conductance, as in the original scheme) and the unfilled and uplifted depths move one to one with the head. Under
 [`ConsistentGapCoupling`](@ref) `G` is the gap scheme's own update: the conductance of every cell then uses the end-of-step
@@ -168,7 +169,7 @@ the conductance either). Both are continuous across the regimes and equal `b` ex
 [`NoUplift`](@ref) and [`ExplicitGapCoupling`](@ref).
 """
 compute_b_w_iterate!(s::State, p::ModelParameters, gc::AbstractGapCoupling = ExplicitGapCoupling()) =
-    (@parallel compute_b_w_iterate_kernel!(s.b_w, s.dbw_dh, s.b, s.h, s.zb, s.po, s.N, s.stor, s.stor_up, p.b_min, p.b_max, p.rho_w, p.g, gc, s.mdot0, s.beta, s.abs_ub, s.A_visc, p.rho_i, p.n_minus_1_exp, s.b_dry, s.bump); s)
+    (@parallel compute_b_w_iterate_kernel!(s.b_w, s.dbw_dh, s.b, s.h, s.zb, s.po, s.N, s.stor, s.stor_up, p.b_min, p.b_max, p.rho_w, p.g, gc, s.mdot0, s.mdot, s.beta, s.abs_ub, s.A_visc, p.rho_i, p.n_minus_1_exp, s.b_dry, s.bump); s)
 
 """
 $(TYPEDSIGNATURES)
@@ -180,7 +181,11 @@ grows with the flux, so a melt opening at the iterate would close the loop `W ->
 iteration, a positive feedback (the growth of a channel) with a gain of order `dt*(3/W)*mdot/rho_i`, which the iteration
 cannot follow at large `dt` (seen on a 3 m^3/s moulin at dt = 3 h). The head rows keep the melt at the iterate, so the water
 balance and its consistency with the gap update are unaffected; only the conductance lags the melt by one step, as the
-original scheme lags the whole gap.
+original scheme lags the whole gap. Where the melt falls within the step the conductance takes the head row's own water,
+which is then the smaller ([`compute_b_w_iterate!`](@ref)): with the start-of-step melt a nearly empty cell kept a
+conductance for water its row had already drained below zero, and the floor of [`update_b_empty_budget!`](@ref) made up
+the difference (Helheim at 500 m, dt = 1 day, cold start: the dissipation melt halved within the step, a gap 1.7 mm
+larger, 9e-4 of the melt created, and the step never passed [`water_converged`](@ref)).
 """
 store_start_of_step_melt!(::AbstractKFaceScheme, s::State) = s
 store_start_of_step_melt!(::ImplicitUpwind, s::State) = (copyto!(s.mdot0, s.mdot); s)
