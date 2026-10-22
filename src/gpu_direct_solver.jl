@@ -57,7 +57,7 @@ mutable struct CUDSSDirectSolver{F <: AbstractFloat, SALS <: SparseAssembledLine
     general::Bool          # structure = :general: LU of a non-symmetric matrix (ImplicitUpwind) instead of Cholesky
     b_gpu::VGPU
     x_gpu::VGPU
-    gpu_vals::VGPU          # GPU-side scratch for the permuted nzval, length nnz(sals.M), reused every solve
+    host_vals::Vector{F}    # CPU-side scratch for the permuted nzval, length nnz(sals.M), reused every solve (no allocation per solve)
     h_vec::Vector{F}        # CPU-side result buffer, mirrors CholeskyDirectSolver's h_vec
 end
 
@@ -82,11 +82,17 @@ function CUDSSDirectSolver(g::Grid{F}; structure::Symbol = :spd) where F
 
     # One-time "marker" trick to learn the CSC(CPU)->CSR(GPU) value-index permutation without
     # depending on CUDA.jl's internal conversion implementation: fill nzval with unique sequential
-    # markers, convert to CSR once, read back which original index landed in each CSR slot.
-    marker = copy(sals.M)
-    marker.nzval .= 1:nz
-    A_gpu_marker = CuSparseMatrixCSR{F, Int32}(marker)
-    vals_perm = Int.(Array(A_gpu_marker.nzVal))
+    # markers, convert to CSR once, read back which original index landed in each CSR slot. The
+    # markers are Float64 whatever F is: Float32 holds integers exactly only up to 2^24 (~16.8M
+    # nonzeros, ~3.3M cells of the 5-point stencil), beyond which markers would collide and values
+    # would be scattered into wrong slots. Float64 is exact up to 2^53. Built from sals.M's own
+    # colptr/rowval, so every stored entry (explicit zeros included) gets a marker.
+    marker = SparseMatrixCSC(size(sals.M)..., copy(sals.M.colptr), copy(sals.M.rowval), Float64.(1:nz))
+    A_gpu_marker = CuSparseMatrixCSR{Float64, Int32}(marker)
+    vals_perm = round.(Int, Array(A_gpu_marker.nzVal))
+    A_gpu_marker = nothing
+    length(vals_perm) == nz && isperm(vals_perm) ||
+        error("CUDSSDirectSolver: the CSC -> CSR value permutation is not a permutation of the $nz stored entries")
 
     A_gpu = CuSparseMatrixCSR{F, Int32}(sals.M) # real (placeholder, at this point) initial values
     general = structure == :general
@@ -94,10 +100,10 @@ function CUDSSDirectSolver(g::Grid{F}; structure::Symbol = :spd) where F
 
     b_gpu    = CUDA.zeros(F, n)
     x_gpu    = CUDA.zeros(F, n)
-    gpu_vals = CUDA.zeros(F, nz)
-    h_vec    = zeros(F, n)
+    host_vals = zeros(F, nz)
+    h_vec     = zeros(F, n)
 
-    return CUDSSDirectSolver(sals, A_gpu, vals_perm, solver, general, b_gpu, x_gpu, gpu_vals, h_vec)
+    return CUDSSDirectSolver(sals, A_gpu, vals_perm, solver, general, b_gpu, x_gpu, host_vals, h_vec)
 end
 
 supports_nonsymmetric(ls::CUDSSDirectSolver) = ls.general
@@ -148,9 +154,11 @@ end
 # Scatters the freshly assembled sals.M values into the existing GPU matrix in place (never a fresh conversion, see the
 # module notes), refactorizes reusing the symbolic analysis, and solves sals.rhs into ls.h_vec.
 function cudss_solve!(ls::CUDSSDirectSolver)
-    host_vals = ls.sals.M.nzval[ls.vals_perm] # CPU-side gather into the GPU matrix's own nonzero order
-    copyto!(ls.gpu_vals, host_vals)
-    copyto!(ls.A_gpu.nzVal, ls.gpu_vals)
+    nzval, host_vals, perm = ls.sals.M.nzval, ls.host_vals, ls.vals_perm
+    @inbounds for k in eachindex(host_vals) # CPU-side gather into the GPU matrix's own nonzero order, into a preallocated buffer
+        host_vals[k] = nzval[perm[k]]
+    end
+    copyto!(ls.A_gpu.nzVal, host_vals) # host -> device, straight into the existing matrix's values
     ls.general ? lu!(ls.solver, ls.A_gpu) : cholesky!(ls.solver, ls.A_gpu) # refactorize in place, reusing the symbolic analysis
     copyto!(ls.b_gpu, ls.sals.rhs)
     ls.x_gpu .= ls.solver \ ls.b_gpu
