@@ -11,13 +11,17 @@ pressure at the ice base. One set of equations covers both distributed (laminar)
 (turbulent) drainage, and which one forms is decided by the solution dynamically.
 
 By default the sheet follows GlaDS-2: cavities can be partly empty and water above the overburden
-lifts the ice, so the water pressure stays between 0 and the overburden. SHAKTI's original sheet is
-one keyword away. Channel-wall diffusion from SUHMO is available as an option.
+lifts the ice, so the water pressure stays between 0 and the overburden. SHAKTI's original sheet
+model can be selected with keywords, shown in the
+[tutorial](https://TakisAngelides.github.io/Shakti.jl/dev/tutorial/) and run in the
+[Helheim](https://TakisAngelides.github.io/Shakti.jl/dev/examples/Helheim/) and
+[Drang Drung](https://TakisAngelides.github.io/Shakti.jl/dev/examples/DrangDrung/) examples.
+Channel-wall diffusion from SUHMO is available as an option.
 
 ## Aim
 
 The aim is a Shakti that is fast enough to be coupled to an ice-flow model such as
-[Yelmo](https://github.com/palma-ice/yelmo) over long simulations, on CPU and GPU.
+[Yelmo](https://github.com/fesmc/yelmo) over long simulations, on CPU and GPU.
 
 ## Installation
 
