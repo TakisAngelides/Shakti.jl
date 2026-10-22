@@ -369,7 +369,7 @@ const WATER_TOL_FLOOR = 1e-2
 function water_converged(ps::PicardSolver, s::State, g::Grid, p::ModelParameters, gc::AbstractGapCoupling, wdt)
     wdt > 0 || return true
     @parallel water_budget_residual_kernel!(ps.delta_h, ps.atol == 0, s.mask, s.w_old, s.q_x, s.q_y, s.mdot, s.ieb, g.dx, g.dy, floattype(wdt), p.rho_w, s.b, s.h, s.zb, s.po, s.N,
-                                            s.stor, s.stor_up, p.b_min, p.b_max, p.g, gc, s.beta, s.abs_ub, s.A_visc, p.rho_i, p.n_minus_1_exp, s.b_dry, s.bump)
+                                            s.stor, s.stor_up, p.b_min, p.b_max, p.g, gc, s.beta, s.abs_ub, s.A_visc, p.rho_i, p.n_minus_1_exp, s.b_dry, s.bump, s.b_next)
     r_max = mapreduce(abs, max, ps.delta_h; init = zero(eltype(ps.delta_h)))
     return ps.atol > 0 ? r_max < ps.atol : r_max < max(ps.tol, WATER_TOL_FLOOR, 100 * eps(eltype(ps.delta_h)))
 end
@@ -392,6 +392,8 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
     reset_relaxation!(ps.hr) # no-op except for AndersonHeadRelaxation, whose history is only valid within one timestep's fixed-point map
     npol = 0 # donor polishing rounds this step (polish_donors!, ImplicitUpwind)
     ω, best, since = 1.0, Inf, 0 # stall damping: the step factor, the smallest update so far and the iterations since it
+
+    solve_gap_iterate!(gc, ds, s, grid, p) # the gap the first head rows store (refresh_head_dependents! keeps it current after each solve)
 
     @inbounds for iter in 1:ps.iters # start the Picard loop
 
@@ -451,6 +453,7 @@ function refresh_head_dependents!(s::State, g::Grid, p::ModelParameters, mt::Mel
     compute_pw!(s, p) # update water pressure
     compute_dpwdxy!(s, g) # update the water pressure gradient in both x and y in one kernel, feeds compute_sensible!'s sensible-heat term (via compute_mdot! below)
     compute_N!(s, p, cnc) # update effective pressure (ice overburden pressure - pw)
+    kfs isa ImplicitUpwind && solve_gap_iterate!(gc, ds, s, g, p) # ConsistentGapCoupling under WithDiffusion: SUHMO's gap at the new N for the conductance (compute_b_w_iterate!); no-op otherwise
 
     compute_face_flux!(s, p, kfs, gc) # face transmissivity K_x/K_y, flux q and Reynolds number Re on faces, lag-free and in one kernel -- K_x/K_y are exactly what the next linear solve assembles, so the solve and every flux diagnostic see the same flux (water_flux.jl)
     compute_Re!(s) # update the Reynold's number based on the Re_x and Re_y doing an average over the four faces of a grid cell
@@ -462,6 +465,8 @@ function refresh_head_dependents!(s::State, g::Grid, p::ModelParameters, mt::Mel
     compute_cell_K!(s, p) # cell-centred transmissivity (diagnostic; the solve reads the face values K_x/K_y set above)
 
     compute_D!(s, p, mt, ds) # update the channel-wall diffusion coefficient (no-op under NoDiffusion)
+
+    solve_gap_iterate!(gc, ds, s, g, p) # ConsistentGapCoupling under WithDiffusion: SUHMO's gap at the new N, melt and D, for the next head rows; no-op otherwise
 
     return s
 
@@ -476,7 +481,6 @@ via [`refresh_head_dependents!`](@ref) so the next iteration's linearization is 
 """
 function Picard_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation, s::State, g::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, h_prev; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), ω = 1)
 
-    solve_gap_iterate!(gc, ds, s, g, p) # ConsistentGapCoupling under WithDiffusion: SUHMO's gap solve at this iterate, for the head rows; no-op otherwise
     solve_elliptic_linear_system!(ls, s, g, p, kfs, ds, gc) # update the h field, including the -div(D*grad(b)) source term under WithDiffusion (ExplicitGapCoupling)
     relax_h!(hr, s, h_prev) # update the h field again according to the relaxation parameter, damp the raw Picard update before anything downstream of h is recomputed, so the next iteration's coefficients are consistent with the relaxed h
     ω < 1 && (@. s.h = h_prev + ω * (s.h - h_prev)) # stall damping of Picard_loop!, 1 unless the iteration stopped making progress; before the limits, so that a stop at a regime boundary stays exact

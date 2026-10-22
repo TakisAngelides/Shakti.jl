@@ -448,7 +448,7 @@ update then store the same water at any `dt` (mass is conserved, the empty-volum
 [`UnfilledCavities`](@ref) stays consistent with the head), and an implicit or fully implicit gap scheme stays implicit in
 the head equation too. With the explicit gap scheme it differs from [`ExplicitGapCoupling`](@ref) only by the clamp.
 Under [`WithDiffusion`](@ref) the gap update is SUHMO's coupled linear system: the head rows then take the gap that system
-gives at each head iterate ([`DiffusiveGapUpdate`](@ref)), under [`FilledCavities`](@ref) and [`NoUplift`](@ref) only.
+gives at each head iterate ([`DiffusiveGapUpdate`](@ref)), the default there on the elliptic Picard solver.
 """
 struct ConsistentGapCoupling <: AbstractGapCoupling end
 
@@ -480,7 +480,9 @@ neighbours' new gaps held) in `State.db_next`. The head rows store exactly `b_ne
 term ([`diffusive_head_terms`](@ref)), so at convergence the head equation and the gap update hold the same water. The
 explicit coupling assumed `dt*rate(N, b_old)` plus the diffusion of the old gap instead, and at dt = 1 day lost or created
 up to 1.8 times the melt input of a step. `br` is the bump height of the cell ([`cell_gap`](@ref)), `lr` the bump
-spacing. The conductance keeps the start-of-step gap, as under [`ExplicitGapCoupling`](@ref).
+spacing. The conductance keeps the start-of-step gap, except under [`ImplicitUpwind`](@ref), where it takes the smaller of
+that gap and `b_next` ([`DiffusiveCellGap`](@ref)): with [`UnfilledCavities`](@ref) a draining cell otherwise conducted
+water its row no longer held (Picard loops of 500 iterations on a moulin slab at dt = 1 day).
 """
 struct DiffusiveGapUpdate{F} <: AbstractGapCoupling
     dt::F
@@ -576,19 +578,39 @@ $(TYPEDSIGNATURES)
 Head-row terms (source, diagonal) of a GROUNDED cell under [`DiffusiveGapUpdate`](@ref): the row stores the gap change
 `bn - b` of SUHMO's coupled gap solve at the head iterate `h` (`bn = State.b_next`), Newton-linearised in the head with
 its slope `gbn = State.db_next` (`W(h') = bn + gbn*(h' - h)`). The wall diffusion is part of `bn`, so the row has no
-separate `-div(D grad b)` source ([`diffusion_in_head`](@ref)).
+separate `-div(D grad b)` source ([`diffusion_in_head`](@ref)). As [`scheme_head_terms`](@ref) for the other regimes: an
+unfilled cell ([`UnfilledCavities`](@ref), `h < zb`) stores `bn + (h - zb)`, an uplifted one ([`IceUplift`](@ref),
+`h > h_o`) `bn + (h - h_o)`, both with storage slope 1, `bn` then being the gap solve's at `N = po` or `N = 0` (`State.N` of
+that iterate); `sempty` is last step's empty volume and uplift layer, as in [`cavity_head_terms`](@ref).
 """
-@inline diffusive_head_terms(gu, b, mdot, h, rho_w, bn, gbn) = (mdot / rho_w - (bn - b) / gu.dt + gbn / gu.dt * h, gbn / gu.dt)
+@inline function diffusive_head_terms(gu, b, mdot, h, zb, po, stor, b_empty, rho_w, ggrav, b_uplift, stor_up, bn, gbn)
+    sempty = b_empty * stor - b_uplift * stor_up
+    ho = zb + po / (rho_w * ggrav)
+    stor_up > 0 && h > ho && return mdot / rho_w - (bn - b) / gu.dt - sempty + stor_up * ho, stor_up
+    stor > 0 && h < zb && return mdot / rho_w - (bn - b) / gu.dt - sempty + stor * zb, stor
+    return mdot / rho_w - (bn - b) / gu.dt + gbn / gu.dt * h - sempty, gbn / gu.dt
+end
 
 # Head of a closed cell (no K face, so no flux and, D following the flux, no wall diffusion either) under
-# DiffusiveGapUpdate: the water at the end of the step is known, T = b + dt*(mdot/rho_w + ieb), and the cell's own gap
-# update (diffusive_gap with no neighbours) is solved for N by bisection, as scheme_closed_cell_head.
-@inline function diffusive_closed_cell_head(gu, b, b_min, b_max, zb, po, mdot, beta, abs_ub, ieb, A, lc, rho_w, rho_i, ggrav, n_minus_1, N_min, N_max)
-    T = b + gu.dt * (mdot / rho_w + ieb)
-    lo, hi = max(N_min, -10 * po), min(N_max, 10 * po)
+# DiffusiveGapUpdate: the water at the end of the step is known, T = W_old + dt*(mdot/rho_w + ieb - dsrc), and the cell's
+# own gap update (diffusive_gap with no neighbours) is solved for N by bisection, as scheme_closed_cell_head, with its
+# uplifted and unfilled branches.
+@inline function diffusive_closed_cell_head(gu, b, b_min, b_max, zb, po, mdot, beta, abs_ub, ieb, dsrc, A, lc, rho_w, rho_i, ggrav, n_minus_1, N_min, N_max, b_empty, stor, b_uplift, stor_up)
+    T = b - b_empty + b_uplift + gu.dt * (mdot / rho_w + ieb - dsrc)
+    G(N) = diffusive_gap(gu, b, b_min, b_max, mdot, beta, abs_ub, A, N, lc, rho_i, n_minus_1, zero(b), zero(b))
+    if stor_up > 0
+        G0 = G(zero(po))
+        T > G0 && return zb + po / (rho_w * ggrav) + (T - G0)
+    end
+    if stor > 0
+        Gp = G(po)
+        T < Gp && return zb - (Gp - T)
+    end
+    lo = max(N_min, stor_up > 0 ? zero(po) : -10 * po)
+    hi = min(N_max, stor > 0 ? po : 10 * po)
     for _ in 1:60
         mid = (lo + hi) / 2
-        diffusive_gap(gu, b, b_min, b_max, mdot, beta, abs_ub, A, mid, lc, rho_i, n_minus_1, zero(b), zero(b)) > T ? (lo = mid) : (hi = mid)
+        G(mid) > T ? (lo = mid) : (hi = mid)
     end
     return zb + (po - (lo + hi) / 2) / (rho_w * ggrav)
 end
@@ -600,14 +622,14 @@ end
 @inline head_gap_terms(gu::SchemeGapUpdate, clamp_budget, b, b_min, b_max, mdot, beta, abs_ub, A, N, lc, h, zb, po, stor, b_empty, rho_w, rho_i, ggrav, n, n_minus_1, b_uplift, stor_up, b_dry, bn, gbn) =
     scheme_head_terms(gu, b, b_min, b_max, mdot, beta, abs_ub, A, N, h, zb, po, stor, b_empty, rho_w, rho_i, ggrav, n_minus_1, b_uplift, stor_up, b_dry)
 @inline head_gap_terms(gu::DiffusiveGapUpdate, clamp_budget, b, b_min, b_max, mdot, beta, abs_ub, A, N, lc, h, zb, po, stor, b_empty, rho_w, rho_i, ggrav, n, n_minus_1, b_uplift, stor_up, b_dry, bn, gbn) =
-    diffusive_head_terms(gu, b, mdot, h, rho_w, bn, gbn)
+    diffusive_head_terms(gu, b, mdot, h, zb, po, stor, b_empty, rho_w, ggrav, b_uplift, stor_up, bn, gbn)
 
 @inline head_closed_cell(::ExplicitGapCoupling, b, b_min, b_max, zb, po, mdot, beta, abs_ub, ieb, dsrc, A, lc, rho_w, rho_i, ggrav, n, n_minus_1, N_min, N_max, b_empty, stor, b_uplift, stor_up, b_dry) =
     closed_cell_head(zb, po, mdot, beta, abs_ub, ieb, dsrc, A, lc, rho_w, rho_i, ggrav, n, N_min, N_max, b_empty, stor, b_uplift, stor_up)
 @inline head_closed_cell(gu::SchemeGapUpdate, b, b_min, b_max, zb, po, mdot, beta, abs_ub, ieb, dsrc, A, lc, rho_w, rho_i, ggrav, n, n_minus_1, N_min, N_max, b_empty, stor, b_uplift, stor_up, b_dry) =
     scheme_closed_cell_head(gu, b, b_min, b_max, mdot, beta, abs_ub, A, zb, po, ieb, dsrc, rho_w, rho_i, ggrav, n_minus_1, N_min, N_max, b_empty, stor, b_uplift, stor_up, b_dry)
 @inline head_closed_cell(gu::DiffusiveGapUpdate, b, b_min, b_max, zb, po, mdot, beta, abs_ub, ieb, dsrc, A, lc, rho_w, rho_i, ggrav, n, n_minus_1, N_min, N_max, b_empty, stor, b_uplift, stor_up, b_dry) =
-    diffusive_closed_cell_head(gu, b, b_min, b_max, zb, po, mdot, beta, abs_ub, ieb, A, lc, rho_w, rho_i, ggrav, n_minus_1, N_min, N_max)
+    diffusive_closed_cell_head(gu, b, b_min, b_max, zb, po, mdot, beta, abs_ub, ieb, dsrc, A, lc, rho_w, rho_i, ggrav, n_minus_1, N_min, N_max, b_empty, stor, b_uplift, stor_up)
 
 """
 $(TYPEDSIGNATURES)
@@ -1439,7 +1461,10 @@ $(TYPEDSIGNATURES)
 The gap at the end of the step that the head rows of [`DiffusiveGapUpdate`](@ref) store, from the current head iterate:
 solves SUHMO's coupled gap system ([`solve_b_diffusion!`](@ref), with the current `N`, `mdot` and `D`) into `s.b_next`,
 leaving the start-of-step gap `s.b` as it is, and each cell's slope in its own head into `s.db_next`
-([`gap_iterate_slope_kernel!`](@ref)). Called by [`Picard_iteration!`](@ref) before every head solve; a no-op for every
+([`gap_iterate_slope_kernel!`](@ref)). Called before the Picard loop and by [`refresh_head_dependents!`](@ref) after each
+head solve, once the melt and `D` are updated (with the melt of the previous iterate the head rows and the gap disagreed:
+Helheim at 500 m took 31 to 274 iterations per step instead of 6 to 19), and under [`ImplicitUpwind`](@ref) also right
+after `N`, for the conductance (Helheim with unfilled cavities: 106 iterations in 5 days instead of 227); a no-op for every
 other gap coupling. The step's own gap update ([`compute_b!`](@ref)) solves the same system once more after the loop, at
 the converged head.
 """

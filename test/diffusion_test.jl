@@ -398,7 +398,7 @@
         # Thin ice with a 1 m^3/s moulin at dt = 1 day, filled cavities: a channel forms within two steps and the wall
         # diffusion matters. The explicit coupling assumes the explicit gap change plus the diffusion of the old gap, and
         # loses or creates up to 1.8 times the melt input of a step; with the gap solve in the Picard loop
-        # (DiffusiveGapUpdate) the budget closes to the Picard tolerance.
+        # (DiffusiveGapUpdate) the budget closes to the Picard tolerance, and with unfilled cavities and uplift it creates no water.
         nx, ny = 40, 12
         grid = Grid(nx, ny, 3.9e3, 1.1e3)
         x, y = Array(grid.x), Array(grid.y)
@@ -436,5 +436,59 @@
         end
         @test worst_budget(moulin_sim(ExplicitGapCoupling())) > 0.1
         @test worst_budget(moulin_sim(ConsistentGapCoupling())) < 1e-5
-        @test_throws ErrorException moulin_sim(ConsistentGapCoupling(); cavity_filling = UnfilledCavities(), k_face_choice = "implicit_upwind")
+        @test moulin_sim(nothing).gcp isa ConsistentGapCoupling # the default under WithDiffusion on the Picard solver
+        # Unfilled cavities and uplift: the budget keeps the mismatch in b_empty, but where it would leave a cell less than
+        # no water the floor W >= 0 of update_b_empty_budget! creates it (the explicit coupling: 1.2 % of the melt in step 2)
+        function worst_created(sim)
+            worst = 0.0
+            for _ in 1:3
+                s = sim.state
+                step!(sim)
+                @test Shakti.picard_status(sim.hs)[1]
+                qx, qy = Array(s.q_x), Array(s.q_y)
+                dv = [(qx[i+1, j] - qx[i, j]) / grid.dx + (qy[i, j+1] - qy[i, j]) / grid.dy for i in 1:nx, j in 1:ny]
+                src = Array(s.mdot) ./ p.rho_w .+ Array(s.ieb)
+                W = Array(s.w_old) .+ dt .* (src .- dv)
+                worst = max(worst, sum(max.(0, .-W[g])) / dt / sum(abs, src[g]))
+            end
+            return worst
+        end
+        unf = (; cavity_filling = UnfilledCavities(), uplift = IceUplift(), k_face_choice = "implicit_upwind", ps = PicardSolver(500, floattype(1e-9), LUDirectSolver(grid), grid))
+        @test worst_created(moulin_sim(ExplicitGapCoupling(); unf...)) > 1e-3
+        @test worst_created(moulin_sim(ConsistentGapCoupling(); unf...)) < 1e-12
+    end
+
+    @testset "ConsistentGapCoupling under WithDiffusion on Helheim (500 m, docs example input)" begin
+        # Real data, two 1-day steps from the docs example's initial state: the explicit coupling is already 7 % of the melt
+        # off in step 2 (17 % by step 5, growing), the consistent one 5e-5 (Picard tolerance 1e-6).
+        ex = joinpath(@__DIR__, "..", "docs", "src", "examples")
+        lines = readlines(joinpath(ex, "Helheim.jl"))
+        setup = join(filter(l -> !occursin("CairoMakie", l), lines[1:findfirst(startswith("# ## Running"), lines)-1]), "\n")
+        m = Module()
+        Core.eval(m, :(using Shakti, MAT))
+        cd(() -> include_string(m, replace(setup, "@__DIR__" => repr(ex))), ex)
+        grid, mask = m.grid, m.mask
+        g = mask .== GROUNDED
+        p = ModelParameters(rho_i = 917.0, omega = 1e-3, br = 0.0, lr = 2.0, ct = 0.0, mdot_includes_sensible = false)
+        dt = 86400.0
+        function helheim_budget(gc)
+            sim = Simulation(grid, deepcopy(m.state), 2, floattype(dt), p, "fully_implicit", String[], m.mi, m.sl;
+                             ps = PicardSolver(500, floattype(1e-6), CholeskyDirectSolver(grid), grid),
+                             diffusion_scheme = WithDiffusion(CholeskyDirectSolver(grid)), gap_coupling = gc)
+            worst = 0.0
+            for _ in 1:2
+                s = sim.state
+                b0 = Array(s.b)
+                step!(sim)
+                @test Shakti.picard_status(sim.hs)[1]
+                qx, qy = Array(s.q_x), Array(s.q_y)
+                dv = [(qx[i+1, j] - qx[i, j]) / grid.dx + (qy[i, j+1] - qy[i, j]) / grid.dy for i in 1:grid.nx, j in 1:grid.ny]
+                src = Array(s.mdot) ./ p.rho_w .+ Array(s.ieb)
+                res = (Array(s.b) .- b0) ./ dt .+ dv .- src
+                worst = max(worst, sum(abs, res[g]) / sum(abs, src[g]))
+            end
+            return worst
+        end
+        @test helheim_budget(ExplicitGapCoupling()) > 0.03
+        @test helheim_budget(ConsistentGapCoupling()) < 1e-3
     end
