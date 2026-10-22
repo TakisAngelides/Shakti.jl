@@ -340,7 +340,13 @@ supports_nonsymmetric(::LUDirectSolver) = true
 # clamps it, so db/dt = 0 there. `clamp_budget` (ModelParameters) makes the budget agree: 1 at b_max, 2
 # at b_max and b_min. A held cell's source is then the melt as water, mdot/rho_w, with no gap terms;
 # otherwise the water the clamp keeps out of the gap is lost (at b_max) or created (at b_min). 0 keeps
-# the unclamped (legacy) terms.
+# the unclamped (legacy) terms. Holding drops the creep's Newton diagonal `gd`, the filled row's only
+# diagonal from the gap, which can stall convergence (GrIS with 2, code guide): hence the switch. The
+# unfilled and uplifted rows of cavity_head_terms always hold, whatever `clamp_budget` is: their diagonal
+# is the storage (stor, stor_up), which holding leaves alone, and they have no legacy terms to keep.
+# `gd` is the creep slope at the current N, also where compute_N! clamps N to [N_min, N_max] and N cannot
+# respond: `gd*h` sits on both sides of the row (gd on the diagonal, gd*h_iterate in the source), so it
+# cancels at the fixed point and only damps the iteration there.
 # A GROUNDED cell with all four faces closed (frozen bed, OTHER_BASIN, an outflow-only face turned
 # away, domain edge) exchanges no water, so its row has no off-diagonal entries and its potential and
 # sensible melt terms (built from face fluxes) are zero. Its steady water budget is then a scalar
@@ -397,6 +403,7 @@ end
     sempty = b_empty * stor - b_uplift * stor_up # last step's empty volume is filled first; last step's uplift water (ice_uplift.jl) is released first
     if stor_up > 0 && h > zb + po / (rho_w * ggrav)
         # Uplifted (ice_uplift.jl): pw = po, N = 0, no creep closure; the uplift layer h - h_o is the storage.
+        # A gap held at a bound does not move (always, unlike the filled row: see gap_budget_terms).
         rate_up = mdot / rho_i + beta * abs_ub
         if (b >= b_max && rate_up > 0) || (b <= b_min && rate_up < 0)
             rate_up = zero(rate_up)
@@ -406,7 +413,7 @@ end
     if stor > 0 && h < zb
         rate0 = mdot / rho_i + beta * abs_ub - A * pow(abs(po), n_minus_1) * po * lc
         # a gap held at b_max (opening blocked) or b_min (closure blocked) by compute_b!'s clamp does not
-        # move, so it neither adds empty volume nor takes any up
+        # move, so it neither adds empty volume nor takes any up (always, unlike the filled row: see gap_budget_terms)
         if (b >= b_max && rate0 > 0) || (b <= b_min && rate0 < 0)
             rate0 = zero(rate0)
         end
