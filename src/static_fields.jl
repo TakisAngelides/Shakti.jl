@@ -1,9 +1,9 @@
 # =============================================================================
 # Static / initial geometry fields
 # =============================================================================
-# Computed once (per time step if coupled to ice flow model) (e.g. by initial-condition setup) rather than every Picard
-# iteration: H/po/h derive from the *initial* b, zb, zs, pw and don't change
-# until a full time step has evolved b (see the gap-height section below).
+# Computed once per time step rather than every Picard iteration: set_initial_conditions! seeds them, and every step
+# refreshes H/po from the current b, zb, zs at its start (prepare_head_solve!, run.jl), so a coupled ice model's new
+# geometry is picked up; they stay fixed during the step's head solve.
 
 @parallel_indices (ix, iy) function compute_H_kernel!(H, zs, zb, b)
     if ix <= size(H, 1) && iy <= size(H, 2)

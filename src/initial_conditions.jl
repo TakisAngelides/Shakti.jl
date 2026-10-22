@@ -108,11 +108,9 @@ function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, sl::Abst
 
     # Water flux and Reynolds number: solved exactly (no arbitrary initial
     # guess, no lag) from the quadratic in Re that Eq. 5, 7 (Sommers et al. 2018)
-    # reduces to once Re = |q|/nu is substituted in -- see
-    # compute_q_and_Re_x!'s docstring in water_flux.jl. Same pair of calls
-    # Picard_iteration! uses each iteration, so q_x/q_y/Re start already
-    # consistent with the initial b_x/b_y/dhdx/dhdy, instead of the first
-    # real Picard iteration having to correct an arbitrary Re guess.
+    # reduces to once Re = |q|/nu is substituted in, by the same face kernel
+    # every Picard iteration uses (refresh_head_dependents!), so q_x/q_y/Re start
+    # consistent with the initial water depth b_w and dhdx/dhdy.
     compute_face_flux!(s, p) # face transmissivity K_x/K_y, q and Re on faces (water_flux.jl); the Simulation's own k-face scheme is applied from the first step's refresh on
     compute_Re!(s) # cell-centered average of Re_x/Re_y, feeds compute_K! below
 
@@ -141,7 +139,7 @@ function apply_boundary_pw!(s::State, p::ModelParameters)
     zero_zb = zero(F)
     zero_pw = F(0.0)
     @. s.pw = ifelse(s.mask == OCEAN, # hydrostatic pressure of the ocean water above zb
-                      p.p_atm - p.rho_sw * p.g * min(s.zb, zero_zb), # see linear_system.jl's OCEAN branch for the sign convention
+                      p.p_atm - p.rho_sw * p.g * min(s.zb, zero_zb), # see linear_solver.jl's dirichlet_head (OCEAN branch) for the sign convention
                ifelse((s.mask == LAND) | (s.mask == OTHER_BASIN),
                       p.p_atm,
                ifelse(s.mask == FROZEN_BED,

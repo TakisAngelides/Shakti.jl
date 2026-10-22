@@ -26,8 +26,10 @@ struct Harmonic <: AbstractKFaceScheme end
 """
 $(TYPEDSIGNATURES)
 
-Face conductance between cells `(i1,j1)` and `(i2,j2)`, `(K[i1,j1] + K[i2,j2]) / 2` under
-[`Arithmetic`](@ref) or `2*K[i1,j1]*K[i2,j2] / (K[i1,j1] + K[i2,j2] + eps)` under [`Harmonic`](@ref).
+Face conductance between cells `(i1,j1)` and `(i2,j2)` from `face_mean`: `(K[i1,j1] + K[i2,j2]) / 2` under
+[`Arithmetic`](@ref), `2*K[i1,j1]*K[i2,j2] / (K[i1,j1] + K[i2,j2] + eps)` under [`Harmonic`](@ref), and the smaller of the
+two under [`Upwind`](@ref) when no head difference is given (the donor's otherwise, see the four-argument `face_mean`).
+[`ImplicitUpwind`](@ref) builds its faces in `compute_face_flux!` from the donor's water depth instead.
 Here @inline can help the compiler optimize its code and reduce the cost of function calls.
 """
 @inline compute_K_face(kfs::AbstractKFaceScheme, K, i1, j1, i2, j2) = face_mean(kfs, K[i1, j1], K[i2, j2])

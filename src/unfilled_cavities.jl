@@ -68,7 +68,7 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Marks, via `s.stor = 1/dt` on `GROUNDED` cells, where the gap may be partly empty this step, and records the water present as the step starts (`s.w_old = b - b_empty`). A no-op
+Marks, via `s.stor = 1/dt` on `GROUNDED` cells, where the gap may be partly empty this step, and records the water present as the step starts (`s.w_old = max(0, b - b_empty) + b_uplift`). A no-op
 under [`FilledCavities`](@ref) (`s.stor` stays 0, selecting the legacy equations everywhere).
 """
 set_cavity_storage!(s::State, dt, ::FilledCavities) = s
@@ -101,7 +101,7 @@ oscillates from step to step or Picard cycles. Taking the depth at the head iter
 iteration does not help: the one-cell Picard map then has slope ~ -3(W + dzb)/W, and neither Anderson
 acceleration nor [`NewtonJFNKSolver`](@ref) converged on the SHW12 benchmark at dt = 6 h. What does is
 the end-of-step depth together with the Newton terms of its dependence on the head,
-[`ImplicitUpwind`](@ref) ([`compute_b_w_iterate!`](@ref)).
+[`ImplicitUpwind`](@ref) ([`compute_b_w_iterate!`](@ref)). `p` is not used (kept for the call signature).
 """
 compute_b_w!(s::State, p::ModelParameters) = (@parallel compute_b_w_kernel!(s.b_w, s.b, s.b_empty, s.b_uplift); s)
 

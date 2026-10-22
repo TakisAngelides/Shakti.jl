@@ -2,13 +2,14 @@
 # Per-Picard-iteration fields
 # =============================================================================
 # Everything below is recomputed every Picard iteration, driven by the head h
-# most recently produced by the linear solve (see Picard_iteration! in
-# elliptic_solver.jl, which calls these in the same order they appear here).
+# most recently produced by the linear solve (refresh_head_dependents! in
+# elliptic_solver.jl calls the fused compute_dhdxy!/compute_dpwdxy!; the
+# single-direction kernels are used by set_initial_conditions!).
 
-# All four zero the result on any face flagged invalid by compute_face_masks!
-# (i.e. any face touching an OTHER_BASIN cell), so downstream flux/melt
-# computations never see a spurious gradient driven by a frozen,
-# non-evolving OTHER_BASIN value. First/last row (x) or column (y) are left
+# All of them zero the result on any face flagged invalid by compute_face_masks!
+# (a face touching an OTHER_BASIN or FROZEN_BED cell, or a LAND/OCEAN face closed
+# as outflow-only), so downstream flux/melt computations never see a spurious
+# gradient driven by a frozen, non-evolving neighbour value. First/last row (x) or column (y) are left
 # as zero: undefined at the grid domain boundary. dhdx/dhdy feed compute_q_x!/
 # compute_q_y! below; dpwdx/dpwdy feed the "sensible" heat term in
 # compute_mdot! further down.

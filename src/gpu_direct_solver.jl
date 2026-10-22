@@ -44,8 +44,9 @@
 """
 $(TYPEDSIGNATURES)
 
-GPU direct sparse Cholesky solver via CUDSS.jl, CUDA backend only -- errors at construction time
-under any other backend. See this file's module-level notes for the correctness discipline this
+GPU direct sparse solver via CUDSS.jl (Cholesky with `structure = :spd`, LU with `:general` for the non-symmetric
+`"implicit_upwind"` matrix). Requires the `"Threads"` backend: the fields stay on the CPU and only the matrix and the
+solve go to the GPU; errors at construction time under any other backend. See this file's module-level notes for the correctness discipline this
 implementation follows (never reconstruct the GPU matrix fresh; update its `nzVal` in place via a
 precomputed permutation).
 """

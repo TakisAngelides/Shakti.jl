@@ -21,8 +21,9 @@ This and [`compute_Re_x!`](@ref) are a LAGGED pair: `q` is computed from whateve
 *previous* Picard iteration left behind, then `Re` is updated to match the new `q` -- consistent
 with each other, but `q` is one iteration stale relative to the current `dhdx`/`b`. That lag can
 lock into a period-2 oscillation for large gradients instead of converging. The hot Picard path
-uses [`compute_q_and_Re_x!`](@ref) (exact, lag-free) instead; this pair is still used for the
-one-shot initial-condition seed, where a lagged initial guess is harmless.
+takes the exact, lag-free flux from [`compute_face_flux!`](@ref). This pair and [`compute_q_and_Re_x!`](@ref) are no
+longer called from `src/` (the face kernel reads the water depth `b_w`, not `b_x`); they are kept for the tests and the
+code tour.
 """
 compute_q_x!(s::State, p::ModelParameters) = (@parallel compute_q_x_kernel!(s.q_x, s.b_x, s.dhdx, s.Re_x, p.g, p.nu, p.omega); s)
 
@@ -128,10 +129,8 @@ compute_Re!(s::State) = (@parallel compute_Re_kernel!(s.Re, s.Re_x, s.Re_y); s)
 # current dhdx/b. That lag is a real defect, not just theoretically fragile:
 # for large gradients it can lock into a period-2 oscillation around the true
 # fixed point instead of converging to it at all (confirmed empirically,
-# see git history on the exact-q-re-solve branch). Still used for the
-# one-shot initial-condition seed (initial_conditions.jl) and in
-# test/runtests.jl's setup, where a lagged initial guess is harmless -- it's
-# immediately superseded by the first real Picard iteration either way.
+# see git history on the exact-q-re-solve branch). No longer called from src/
+# (compute_face_flux! below is the lag-free path); kept for the tests.
 #
 # q and Re are solved for here with no lag, given only the current b/dhdx:
 # substituting Re = |q|/nu into Eq. 5 (SHAKTI paper, Sommers et al. 2018)
@@ -157,9 +156,8 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Updates `s.q_x`/`s.Re_x` together, exactly (no lag), from the current `s.b_x`/`s.dhdx` -- the
-version used in the hot Picard path (see [`compute_q_x!`](@ref) for why the lagged pair isn't
-used there).
+Updates `s.q_x`/`s.Re_x` together, exactly (no lag), from the current `s.b_x`/`s.dhdx`. The Picard path now uses
+[`compute_face_flux!`](@ref) (same quadratic, from the water depth `b_w`); this one is kept for the code tour.
 
 # Notes
 
@@ -210,8 +208,7 @@ end
 $(TYPEDSIGNATURES)
 
 Fused version of [`compute_q_and_Re_x!`](@ref) + [`compute_q_and_Re_y!`](@ref): one `@parallel`
-launch instead of two. This is the method actually called from the Picard loop
-(`elliptic_solver.jl`'s `Picard_iteration!`).
+launch instead of two. No longer called from `src/` (see [`compute_q_and_Re_x!`](@ref)).
 """
 compute_q_and_Re_xy!(s::State, p::ModelParameters) = (@parallel compute_q_and_Re_xy_kernel!(s.q_x, s.q_y, s.Re_x, s.Re_y, s.b_x, s.b_y, s.dhdx, s.dhdy, p.g, p.nu, p.omega); s)
 

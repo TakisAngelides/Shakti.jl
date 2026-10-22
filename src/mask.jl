@@ -3,7 +3,7 @@
 # =============================================================================
 #
 # State.mask is allocated with @fill(0, ...) in state.jl, so -- like valid_x/
-# valid_y below -- it actually ends up float-valued (0.0/1.0/2.0/3.0), not a
+# valid_y below -- it actually ends up float-valued (0.0/1.0/2.0/3.0/4.0), not a
 # true Int array; @fill coerces to the backend's configured floattype
 # regardless of the literal fill value's type. The constants below are
 # therefore declared as Float64 literals too (not Int): comparisons like
@@ -62,7 +62,7 @@ const FROZEN_BED = 4.0
 # valid_x/valid_y hold float 1.0 (valid) / 0.0 (invalid), not Bool -- @fill
 # always coerces to the backend's configured floattype (see state.jl), so
 # there's no genuine Bool array available here. They're used as multiplicative
-# masks in fields_gradients.jl (e.g. `dhdx[...] * valid_x[...]`), which is
+# masks in field_gradients.jl (e.g. `dhdx[...] * valid_x[...]`), which is
 # exactly what a 1.0/0.0 float wants to be used for anyway.
 #
 # A face is invalid iff either cell it connects is OTHER_BASIN or FROZEN_BED: that cell's

@@ -29,8 +29,8 @@ struct MeltTerms{Geothermal,Frictional,Potential,Sensible,Conductive} end
 # energy released by water flowing downgradient + sensible heat exchanged as
 # water moves to regions of different pressure melting point - conductive
 # heat lost into cold ice above the bed, all divided by the latent heat of
-# fusion L. The four heat-source/sink terms are exposed as their own
-# standalone kernels below (compute_shear!/compute_potential!/
+# fusion L. The three computed heat terms (frictional, dissipation, sensible) are exposed as their own
+# standalone kernels below (G and q_T are input fields) (compute_shear!/compute_potential!/
 # compute_sensible!, writing into preallocated State fields s.Q_b/
 # s.Q_diss/s.Q_sens for standalone/diagnostic use, e.g. as a tracked_obs
 # name -- see Simulation's tracked_obs; q_T has no standalone kernel since
@@ -95,7 +95,8 @@ end
 $(TYPEDSIGNATURES)
 
 Updates `s.Q_diss`: the heat dissipated by water flowing down the hydraulic-head gradient,
-`rho_w*g*|q . grad(h)|` [W/m^2], averaged from faces onto cell centers.
+`rho_w*g*|q . grad(h)|` [W/m^2], summed from the faces onto cell centers with half of each face's heat per cell, and all
+of it for a grounded cell on a face to an `OCEAN`/`LAND` cell (`face_heat_share`), so the outlet flow's heat is kept.
 Standalone/diagnostic use, same caveat as [`compute_shear!`](@ref).
 """
 compute_potential!(s::State, p::ModelParameters) = (@parallel compute_potential_kernel!(s.Q_diss, s.mask, s.q_x, s.dhdx, s.q_y, s.dhdy, p.rho_w, p.g); s)

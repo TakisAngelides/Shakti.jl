@@ -38,14 +38,14 @@ abstract type AbstractLinearSolver end
 """
 $(TYPEDSIGNATURES)
 
-A direct linear solver (currently just [`CholeskyDirectSolver`](@ref)).
+A direct linear solver: [`CholeskyDirectSolver`](@ref), [`LUDirectSolver`](@ref) or `CUDSSDirectSolver`.
 """
 abstract type AbstractDirectSolver <: AbstractLinearSolver end
 
 """
 $(TYPEDSIGNATURES)
 
-An iterative linear solver (currently just [`CGIterativeSolver`](@ref)).
+An iterative linear solver: [`CGIterativeSolver`](@ref).
 """
 abstract type AbstractIterativeSolver <: AbstractLinearSolver end
 
@@ -166,8 +166,8 @@ end
 $(TYPEDSIGNATURES)
 
 Direct solve via sparse Cholesky factorization (`SparseArrays`/CHOLMOD) of the assembled
-[`SparseAssembledLinearSystem`](@ref) -- the fastest solver at every grid size benchmarked so far,
-but CPU-only. Refactorizes in place each solve, reusing the symbolic
+[`SparseAssembledLinearSystem`](@ref) -- the fastest CPU solver at every grid size benchmarked so far
+(`CUDSSDirectSolver` is faster on a GPU). Refactorizes in place each solve, reusing the symbolic
 factorization since the sparsity pattern never changes.
 """
 struct CholeskyDirectSolver{FACT, SALS <: SparseAssembledLinearSystem, V <: AbstractVector} <: AbstractDirectSolver
@@ -953,7 +953,7 @@ end
 # so this is just e_v*(h-h_old)/dt, giving the GROUNDED row an extra e_v/dt
 # on the diagonal and e_v/dt*h_old on the rhs, ON TOP OF the same Newton
 # linearization of the creep-closure term update_SALS_elliptic_kernel! has (aP
-# gets n*rho_w*g*A_visc*|N|^(n-1)*b too, rhs gets the matching Newton
+# gets n*rho_w*g*A_visc*|N|^(n-1)*lc too (lc the creep length, b under the legacy scheme), rhs gets the matching Newton
 # correction term, evaluated at `h` -- the CURRENT Picard-sub-iterate, the
 # correct linearization point). `h_old` is deliberately a SEPARATE argument
 # from `h`: it must stay fixed at the value from the *start of the real

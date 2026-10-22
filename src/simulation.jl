@@ -60,7 +60,7 @@ Implicit (backward-Euler) update of `b`: the creep-closure term is unconditional
 `dt`, but the opening-by-sliding term (`beta(b)*|u_b|`, active when `p.br != 0`) is still evaluated
 at the *lagged* `b` (last step's value, via `s.beta`) rather than the new one -- so this scheme
 inherits a real, if usually generous, `dt` cap from that term whenever `p.br != 0` and `b < p.br`
-(see [`compute_b_implicit_kernel!`](@ref)'s docstring for the exact bound). Confirmed in practice,
+(`beta = (br - b)/lr`, so the explicit opening overshoots `br` once `dt*|u_b|/lr > 1`). Confirmed in practice,
 not just in theory: a real AIS 32km run hit this at `dt=900s` and blew `b` up to the `b_max` safety
 cap in one cell, something [`FullyImplicitGapScheme`](@ref) -- now the default -- doesn't do.
 Unconditionally stable outright when `p.br == 0`.
@@ -225,7 +225,7 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
 # Notes
 
 - Head scheme: [`EllipticHeadScheme`](@ref) if `p.e_v == 0` (requires `ps`, a
-  [`PicardSolver`](@ref)), else [`ParabolicHeadScheme`](@ref) (requires `pps`, a
+  [`PicardSolver`](@ref) or [`NewtonJFNKSolver`](@ref)), else [`ParabolicHeadScheme`](@ref) (requires `pps`, a
   [`ParabolicPicardSolver`](@ref)).
 - `gap_scheme_choice`: `"explicit"`, `"implicit"`, or `"fully_implicit"` (see [`AbstractGapScheme`](@ref)).
 - Melt-rate terms: [`MeltTerms`](@ref)'s five flags are read directly off `p.mdot_includes_G`/

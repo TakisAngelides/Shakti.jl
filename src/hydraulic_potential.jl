@@ -18,7 +18,7 @@
 # frozen OTHER_BASIN/FROZEN_BED rows are untouched). The head gradients (`compute_dhdxy!`,
 # field_gradients.jl) add them, so everything built from `dhdx`/`dhdy` -- face flux and Re, the upwind
 # donor, the dissipation melt, SUHMO's D, the water budget -- sees the same potential, and the head rows
-# (linear_solver.jl, `sheet_top_source`) move the known part K*db to the right-hand side. Under
+# (linear_solver.jl, `add_sheet_top_source!`) move the known part K*db to the right-hand side. Under
 # [`BedPotential`](@ref) (legacy) the jumps stay zero and both places skip the addition, so results are
 # bit-for-bit those of the original equations. SheetTopPotential is the default: the water's level is h + b in
 # every regime, so grad(h) alone would miss the flow (and dissipation) along differences in gap size.

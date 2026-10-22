@@ -431,9 +431,8 @@ Use this one when the goal is reproducing the paper's own regularization, not Sh
 # Notes
 
 `v0` must be in the same units as `ub_x`/`ub_y`/`abs_ub` (Shakti's internal m/s, not the paper's
-m/a -- convert before constructing). `inv_n` (`1/m`) is read from `p.inv_n_exp` same as the other
-two laws; unlike them, `p.n_exp` itself is unused here since there's no `N^n` term in this law's
-denominator.
+m/a -- convert before constructing). The exponent `q` (`1/m` in K24, Yelmo's `beta_q`) is a field of the law,
+independent of Glen's `n` (default `1/3`, the old `1/n` at `n = 3`); `p.n_exp`/`p.inv_n_exp` are not read by this law.
 """
 struct RegularizedCoulombV0SlidingLaw{A <: AbstractArray, F <: AbstractFloat} <: AbstractSlidingLaw
     Cx::A # C staggered onto x-faces (Nx+1, Ny)
@@ -555,8 +554,9 @@ one `@parallel` launch instead of two.
 compute_taub_xy!(s::State, p::ModelParameters, sl::RegularizedCoulombV0SlidingLaw) = (@parallel compute_taub_xy_v0_kernel!(s.taub_x, s.taub_y, s.mask, s.N, s.ub_x, s.ub_y, s.abs_ub, sl.Cx, sl.Cy, sl.v0, sl.q); s)
 
 # taub = C^2*N*u_b (LinearSlidingLaw, see its struct docstring above): N
-# staggered onto the face with the same boundary-duplicate/interior-average
-# convention as RegularizedCoulombSlidingLaw's kernels, Cx2/Cy2 already
+# on the face from face_x/face_y (the mean of the two cells, the GROUNDED cell's
+# own value next to any other cell; the nearest cell on the outer boundary), as in
+# RegularizedCoulombSlidingLaw's kernels, Cx2/Cy2 already
 # staggered+squared once at construction. No abs_ub/lambda/n/inv_n needed --
 # this law is linear straight through ub=0, unlike the regularized-Coulomb
 # power-law ratio.

@@ -1,11 +1,12 @@
 # =============================================================================
 # Gap height (b) evolution
 # =============================================================================
-# Runs once per time step, after the Picard loop has converged on h. compute_beta!,
-# compute_lc!, and compute_b_x!/compute_b_y! are then refreshed from the new b, ready
-# to be read by the next time step's Picard loop (compute_q_x!/compute_q_y!
-# read b_x/b_y; the next compute_b! call reads beta; the elliptic/parabolic RHS
-# assembly kernels, linear_solver.jl, read lc).
+# Runs once per time step, after the Picard loop has converged on h. compute_beta! and
+# compute_lc! are then refreshed from the new b, ready to be read by the next time step
+# (the next compute_b! call reads beta; the elliptic/parabolic RHS assembly kernels,
+# linear_solver.jl, read lc). compute_b_x!/compute_b_y! are refreshed too, but the Picard
+# loop no longer reads b_x/b_y (the face conductances take the water depth b_w,
+# compute_face_flux!); they are kept as face diagnostics and for the old flux helpers of water_flux.jl.
 #
 # This file is included before simulation.jl (same reason melt_rate.jl is
 # included before elliptic_solver.jl, see its own docstring note):
@@ -126,12 +127,13 @@ check reproduced the same divergence at the same cell (`b~3.9m` by day 30) from 
 confirming this is not an artifact of one earlier run.
 
 **Mechanism** (`implicit_creep_update`, this file): while `b <= b_c` and `N < 0` (so the closure
-coefficient `C = A|N|^(n-1)*N` is negative), this scheme's cutoff branch returns
-`b_below = b_old + dt*opening` directly -- i.e. it DROPS the `(1 + dt*C)` implicit-closure
-denominator entirely in that regime, unlike [`StandardCreep`](@ref) which always applies it (even
-if only mildly, since `|dt*C|` is normally small). With nothing damping it, `b` then grows by the
-bare opening term every step, unchecked, until it crosses `b_c` onto the ordinary linear branch --
-by which point the growth already has enough momentum that it doesn't turn over.
+coefficient `C = A|N|^(n-1)*N` is negative), the cutoff branch used to return
+`b_below = b_old + dt*opening` directly, dropping the `(1 + dt*C)` implicit-closure term in that
+regime, unlike [`StandardCreep`](@ref). `b` then grew by the bare opening term every step until it
+crossed `b_c` onto the linear branch, by which point the growth did not turn over. That branch now
+falls back to the `StandardCreep` form at `C <= 0` ([`relax_update`](@ref): the exact exponential at
+`N < 0`); the real-data runs above predate that change and have not been repeated, so the caution
+below stands.
 
 **Not a generic problem**: clean (1 Picard iteration/step, no instability) on 3 of 5 real datasets
 tested (Drang Drung, Thwaites, Pan-Antarctica) at the same or larger `b_c`. Failed only on the two
@@ -340,8 +342,8 @@ Every linear branch goes through [`relax_update`](@ref): backward Euler while it
 `gamma + C`) is non-negative, and the exact exponential solution when it is negative (`N < 0`,
 where "closure" is really opening) -- so no branch ever divides by a vanishing or negative
 `1 + dt*rate`. The quadratic branches only run for `C > 0`. Unconditionally stable for any `dt`,
-unlike [`compute_b_implicit_kernel!`](@ref) (which inherits a
-`dt` cap from evaluating `beta` at the lagged `b`; see its own docstring).
+unlike [`ImplicitGapScheme`](@ref) (which inherits a `dt` cap from evaluating `beta` at the lagged `b`; see its
+docstring).
 """
 # `b0` is the old gap height and `m` the melt-opening rate mdot/rho_i (opening0 = b0 + dt*m); they
 # are passed separately because relax_update's exponential branch needs them apart.

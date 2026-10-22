@@ -92,7 +92,7 @@ function run!(sim::Simulation; checkpoint_every::Union{Nothing, Int} = nothing, 
 
         if sim.verbose
             converged, last_iter = picard_status(sim.hs)
-            println("$t / $(sim.tsteps) completed in $(round(step_time; digits = 4))s. Picard converged: $converged in $last_iter iterations")
+            println("$t / $(sim.tsteps) completed in $(round(step_time; digits = 4))s. head solve converged: $converged in $last_iter iterations")
             s = sim.state
             Narr = Array(s.N)
             if converged === false
@@ -154,8 +154,11 @@ $(TYPEDSIGNATURES)
 Advances `sim` by one timestep: recomputes `sim.dt[]` if `sim.ts` is adaptive
 ([`update_dt!`](@ref)), refreshes the melt input ([`update_ieb!`](@ref)), brings the head solve's
 inputs up to date and sets its initial guess ([`prepare_head_solve!`](@ref)), solves for the new
-head ([`step_h!`](@ref)), records it for the next step's extrapolation (`sim.he`), then evolves the
-gap height ([`step_b!`](@ref)).
+head ([`step_h!`](@ref)), records it for the next step's extrapolation (`sim.he`), sets the empty part of the gap
+([`update_b_empty!`](@ref), [`UnfilledCavities`](@ref)) and the uplift layer ([`update_b_uplift!`](@ref),
+[`IceUplift`](@ref)) from the solved head, evolves the gap height ([`step_b!`](@ref)), checks it
+([`check_gap_height`](@ref)), and under the elliptic scheme sets the empty volume from the water budget
+([`update_b_empty_budget!`](@ref)).
 """
 function step!(sim::Simulation)
     update_dt!(sim) # no-op under FixedTimeStep; must run before step_h!/step_b! since both read sim.dt[]
@@ -587,8 +590,9 @@ end
 $(TYPEDSIGNATURES)
 
 Evolves the gap height `sim.state.b` for one timestep ([`compute_b!`](@ref), dispatching
-internally on `sim.ds`/`sim.gs`), then refreshes everything that depends on it (`beta`, `lc`,
-`b_x`, `b_y`) so they're ready for the *next* timestep's Picard loop.
+internally on `sim.ds`/`sim.gs`), then refreshes everything that depends on it (`beta`, `lc`) so it is ready for the
+*next* timestep's Picard loop, and the face diagnostics `b_x`/`b_y` (no longer read by the solve; the face conductances
+take the water depth `b_w`, [`compute_face_flux!`](@ref)).
 """
 function step_b!(sim::Simulation)
 

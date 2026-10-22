@@ -53,7 +53,7 @@ struct State{A <: AbstractArray}
     lambda::A     # ratio of controlling bedrock bump wavelength to maximum slope
     A_visc::A     # Glen's flow law rate factor
     N::A          # effective pressure
-    mask::A       # 0 grounded, 1 ocean, 2 land, 3 other grounded-ice basin (static per run)
+    mask::A       # 0 grounded, 1 ocean, 2 land, 3 other grounded-ice basin, 4 frozen bed (changed only by the mask helpers, frozen_bed.jl)
 
     # XFace fields
     dhdx::A       # gradient of the head that drives the flux in x direction: of h, or of h + b under SheetTopPotential (hydraulic_potential.jl)
