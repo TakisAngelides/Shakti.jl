@@ -12,9 +12,11 @@ $(TYPEDSIGNATURES)
 
 Saves everything needed to resume `sim`'s physics at timestep `t`: the full `State` (not just
 the observer's `tracked_obs` subset, which is often a small slice picked for output/analysis),
-`sim.total_time[]`, and `sim.dt[]` (matters under [`AdaptiveTimeStep`](@ref): without it, a
+`sim.total_time[]`, `sim.dt[]` (matters under [`AdaptiveTimeStep`](@ref): without it, a
 resumed run would restart from the constructor's initial `dt` guess rather than whatever
-`AdaptiveTimeStep` had actually converged to before the checkpoint).
+`AdaptiveTimeStep` had actually converged to before the checkpoint), and the head-extrapolation
+history ([`HeadExtrapolation`](@ref); without it a resumed run starts its next head solves from
+another guess, and so ends them at another point within the tolerance).
 
 # Notes
 
@@ -32,6 +34,7 @@ function save_checkpoint(path::String, sim::Simulation, t::Int)
         file["t"] = t
         file["total_time"] = sim.total_time[]
         file["dt"] = sim.dt[]
+        save_head_history(file, sim.he)
         for name in fieldnames(typeof(state)) # for every field name in the State struct save it to file
             file[String(name)] = Array(getfield(state, name))
         end
@@ -43,10 +46,11 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Restores `sim.state`, `sim.total_time[]`, and `sim.dt[]` in place from a checkpoint written by
-[`save_checkpoint`](@ref), and returns the timestep it was saved at, so [`run!`](@ref) knows
+Restores `sim.state`, `sim.total_time[]`, `sim.dt[]` and the head-extrapolation history in place from a checkpoint
+written by [`save_checkpoint`](@ref), and returns the timestep it was saved at, so [`run!`](@ref) knows
 where to resume the loop. A checkpoint written before `dt` was added to it (no `"dt"` key) leaves
-`sim.dt[]` untouched, at whatever the `Simulation` constructor set it to.
+`sim.dt[]` untouched, at whatever the `Simulation` constructor set it to; one without the history clears it
+([`load_head_history!`](@ref)).
 """
 function load_checkpoint!(sim::Simulation, path::String)
     state = sim.state
@@ -67,6 +71,7 @@ function load_checkpoint!(sim::Simulation, path::String)
         # rebuild both from the loaded b and b_uplift when the checkpoint predates it
         haskey(file, "bump") || compute_beta!(state, sim.p, sim.oss)
         haskey(file, "mdot0") || copyto!(state.mdot0, state.mdot) # older checkpoints: the start-of-step melt of ImplicitUpwind is the saved melt
+        load_head_history!(sim.he, file)
         return file["t"], file["total_time"], (haskey(file, "dt") ? file["dt"] : nothing)
     end
     sim.total_time[] = total_time

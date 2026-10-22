@@ -67,6 +67,9 @@
                 @test Array(sim_resumed.state.h) ≈ Array(sim_full.state.h)
                 @test Array(sim_resumed.state.b) ≈ Array(sim_full.state.b)
                 @test sim_resumed.total_time[] ≈ sim_full.total_time[]
+                # the head-extrapolation history is restored too, so the resumed steps start from the same guesses
+                # and repeat the full run exactly (it differed within the Picard tolerance)
+                @test Array(sim_resumed.state.h) == Array(sim_full.state.h)
 
                 h_full    = NetCDF.ncread(full_path, "h")
                 h_resumed = NetCDF.ncread(crash_path, "h")

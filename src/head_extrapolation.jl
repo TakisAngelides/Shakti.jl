@@ -68,6 +68,45 @@ reset_head_history!(he::HeadExtrapolation) = (he.count = 0; he.clock = 0.0; noth
 """
 $(TYPEDSIGNATURES)
 
+Writes the history into an open checkpoint file ([`save_checkpoint`](@ref)): the valid heads (newest first), their times
+and the clock. Nothing under [`NoHeadExtrapolation`](@ref).
+"""
+save_head_history(file, ::NoHeadExtrapolation) = nothing
+function save_head_history(file, he::HeadExtrapolation)
+    file["he_count"] = he.count
+    file["he_clock"] = he.clock
+    file["he_times"] = he.times[1:he.count]
+    for j in 1:he.count
+        file["he_hist_$j"] = Array(he.hist[j])
+    end
+    return nothing
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Restores the history from a checkpoint file ([`load_checkpoint!`](@ref)), keeping the newest `order + 1` heads if the
+checkpoint holds more. A checkpoint without one (written before it was saved, or by a run without extrapolation) clears
+it instead, so a restart never extrapolates from heads of the run that held this `Simulation` before.
+"""
+load_head_history!(::NoHeadExtrapolation, file) = nothing
+function load_head_history!(he::HeadExtrapolation, file)
+    reset_head_history!(he)
+    haskey(file, "he_count") || return nothing
+    n = min(file["he_count"], he.order + 1)
+    times = file["he_times"]
+    for j in 1:n
+        copyto!(he.hist[j], file["he_hist_$j"])
+        he.times[j] = times[j]
+    end
+    he.count = n
+    he.clock = file["he_clock"]
+    return nothing
+end
+
+"""
+$(TYPEDSIGNATURES)
+
 Records `s.h` as the newest converged head, at the end of a step of length `dt` -- or, if the step
 did not converge, clears the history instead.
 """
