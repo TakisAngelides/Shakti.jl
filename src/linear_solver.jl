@@ -1639,6 +1639,20 @@ end
 """
 $(TYPEDSIGNATURES)
 
+Solves SUHMO's gap system with an [`LUDirectSolver`](@ref), as the [`CholeskyDirectSolver`](@ref) method does. The
+system is symmetric positive definite, so Cholesky is the cheaper choice; this method lets one LU solver type serve
+both the (non-symmetric, [`ImplicitUpwind`](@ref)) head solve and the gap solve.
+"""
+function solve_b_diffusion!(ls::LUDirectSolver, s::State, g::Grid, p::ModelParameters, dt, out = s.b)
+    update_SALS_b_diffusion!(ls.sals, s, g, p, dt)
+    lu!(ls.fact, ls.sals.M)
+    ls.h_vec .= ls.fact \ ls.sals.rhs
+    out .= clamp.(reshape(ls.h_vec, g.nx, g.ny), p.b_min, p.b_max)
+end
+
+"""
+$(TYPEDSIGNATURES)
+
 Solves the linearized elliptic equation for `h` with an [`LUDirectSolver`](@ref): rebuilds the system
 ([`update_SALS_elliptic!`](@ref)), refactorizes in place and solves.
 """

@@ -37,9 +37,9 @@
 #
 # Architecturally mirrors CholeskyDirectSolver otherwise: same SparseAssembledLinearSystem-based
 # assembly, same "factorize once, refactorize every solve reusing the symbolic analysis" discipline,
-# just kept on the GPU throughout. Scoped to the elliptic head equation only (like
-# NewtonJFNKSolver), not the parabolic/b-diffusion solves CholeskyDirectSolver also implements --
-# add those the same way if/when a GPU-backed parabolic or diffusion solve is actually needed.
+# just kept on the GPU throughout. Solves the elliptic and parabolic head systems and SUHMO's gap
+# system (solve_b_diffusion!): all three assemble values into the same fixed pattern of sals.M,
+# so one vals_perm and one symbolic analysis serve them (cudss_solve!).
 
 """
 $(TYPEDSIGNATURES)
@@ -112,20 +112,48 @@ matrix in place, refactorizes on the GPU reusing the symbolic analysis, solves, 
 result back into `s.h`.
 """
 function solve_elliptic_linear_system!(ls::CUDSSDirectSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
-
     update_SALS_elliptic!(ls.sals, s, g, p, kfs, ds, gc) # refresh sals.M/rhs on CPU
+    cudss_solve!(ls)
+    s.h .= reshape(ls.h_vec, g.nx, g.ny)
+    return s
+end
 
+"""
+$(TYPEDSIGNATURES)
+
+Solves the backward-Euler parabolic equation for `h` (`p.e_v != 0`) under [`CUDSSDirectSolver`](@ref): assembled by
+[`update_SALS_parabolic!`](@ref) (`h_old` as for [`CholeskyDirectSolver`](@ref)), then solved as the elliptic method.
+"""
+function solve_parabolic_linear_system!(ls::CUDSSDirectSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, dt, h_old, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
+    update_SALS_parabolic!(ls.sals, s, g, p, kfs, dt, h_old, ds, gc)
+    cudss_solve!(ls)
+    s.h .= reshape(ls.h_vec, g.nx, g.ny)
+    return s
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Solves SUHMO's gap system under [`CUDSSDirectSolver`](@ref) (the second solver of [`WithDiffusion`](@ref)), clamped
+into `out` as the [`CholeskyDirectSolver`](@ref) method. [`update_SALS_b_diffusion!`](@ref) writes values only into
+the fixed pattern of `ls.sals.M` (the same stencil slots as the head system), so the precomputed `vals_perm` and the
+symbolic analysis stay valid.
+"""
+function solve_b_diffusion!(ls::CUDSSDirectSolver, s::State, g::Grid, p::ModelParameters, dt, out = s.b)
+    update_SALS_b_diffusion!(ls.sals, s, g, p, dt)
+    cudss_solve!(ls)
+    out .= clamp.(reshape(ls.h_vec, g.nx, g.ny), p.b_min, p.b_max)
+end
+
+# Scatters the freshly assembled sals.M values into the existing GPU matrix in place (never a fresh conversion, see the
+# module notes), refactorizes reusing the symbolic analysis, and solves sals.rhs into ls.h_vec.
+function cudss_solve!(ls::CUDSSDirectSolver)
     host_vals = ls.sals.M.nzval[ls.vals_perm] # CPU-side gather into the GPU matrix's own nonzero order
     copyto!(ls.gpu_vals, host_vals)
     copyto!(ls.A_gpu.nzVal, ls.gpu_vals)
-
     ls.general ? lu!(ls.solver, ls.A_gpu) : cholesky!(ls.solver, ls.A_gpu) # refactorize in place, reusing the symbolic analysis
-
     copyto!(ls.b_gpu, ls.sals.rhs)
     ls.x_gpu .= ls.solver \ ls.b_gpu
-
     copyto!(ls.h_vec, ls.x_gpu)
-    s.h .= reshape(ls.h_vec, g.nx, g.ny)
-
-    return s
+    return ls.h_vec
 end

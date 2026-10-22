@@ -364,14 +364,14 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
     end
 
     # Linear solvers without a method for the equation they will be asked to solve: refused here rather than at the first
-    # step (a MethodError deep inside the Picard loop). CUDSSDirectSolver has no parabolic solve, and only Cholesky and CG
-    # solve SUHMO's gap system (solve_b_diffusion!).
+    # step (a MethodError deep inside the Picard loop). Every solver in the package has both methods; this catches a
+    # user-defined solver that lacks one.
     hs isa ParabolicHeadScheme &&
         !hasmethod(solve_parabolic_linear_system!, Tuple{typeof(hs.pps.ls), State, Grid, ModelParameters, AbstractKFaceScheme, Any, Any}) &&
-        error("The parabolic head scheme has no solve with $(nameof(typeof(hs.pps.ls))): use CholeskyDirectSolver, LUDirectSolver or CGIterativeSolver in the ParabolicPicardSolver")
+        error("The parabolic head scheme has no solve with $(nameof(typeof(hs.pps.ls))): use CholeskyDirectSolver, LUDirectSolver, CUDSSDirectSolver or CGIterativeSolver in the ParabolicPicardSolver")
     diffusion_scheme isa WithDiffusion &&
         !hasmethod(solve_b_diffusion!, Tuple{typeof(diffusion_scheme.ls), State, Grid, ModelParameters, Any}) &&
-        error("WithDiffusion's gap solve has no method for $(nameof(typeof(diffusion_scheme.ls))): use CholeskyDirectSolver(grid) or CGIterativeSolver (the gap system is symmetric positive definite)")
+        error("WithDiffusion's gap solve has no method for $(nameof(typeof(diffusion_scheme.ls))): use CholeskyDirectSolver(grid), CUDSSDirectSolver(grid) or CGIterativeSolver (the gap system is symmetric positive definite)")
 
     # Observer setup
     if isempty(tracked_obs)

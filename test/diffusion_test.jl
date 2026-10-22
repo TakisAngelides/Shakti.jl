@@ -437,9 +437,11 @@
         @test worst_budget(moulin_sim(ExplicitGapCoupling())) > 0.1
         @test worst_budget(moulin_sim(ConsistentGapCoupling())) < 1e-5
         @test moulin_sim(nothing).gcp isa ConsistentGapCoupling # the default under WithDiffusion on the Picard solver
-        # a gap solver without a solve_b_diffusion! method is refused at construction, not at the first step
-        @test_throws ErrorException Simulation(grid, State(grid), 1, floattype(dt), p, "fully_implicit", String[], ConstantMeltInput(), sl;
-                                               ps = PicardSolver(5, floattype(1e-6), CholeskyDirectSolver(grid), grid), diffusion_scheme = WithDiffusion(LUDirectSolver(grid)))
+        # LUDirectSolver also solves the gap system, to the same gap as Cholesky
+        chol, lu_ = moulin_sim(ConsistentGapCoupling()), moulin_sim(ConsistentGapCoupling(); diffusion_scheme = WithDiffusion(LUDirectSolver(grid)))
+        step!(chol); step!(lu_)
+        @test Shakti.picard_status(lu_.hs)[1]
+        @test maximum(abs, Array(lu_.state.b) .- Array(chol.state.b)) <= 1e-8 * maximum(Array(chol.state.b))
         # Unfilled cavities and uplift: the budget keeps the mismatch in b_empty, but where it would leave a cell less than
         # no water the floor W >= 0 of update_b_empty_budget! creates it (the explicit coupling: 1.2 % of the melt in step 2)
         function worst_created(sim)
