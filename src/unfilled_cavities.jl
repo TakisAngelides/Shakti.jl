@@ -9,7 +9,7 @@
 # gap faster than inflow, conductance and creep closure can follow.
 #
 # `State.b_empty` holds the empty part of the gap per unit bed area [m] (>= 0), so the water
-# present is `b - b_empty`. Under FilledCavities (default) nothing changes and `b_empty` stays 0.
+# present is `b - b_empty`. Under FilledCavities (SHAKTI's original sheet) nothing changes and `b_empty` stays 0.
 
 """
 $(TYPEDSIGNATURES)
@@ -24,7 +24,7 @@ abstract type AbstractCavityFilling end
 """
 $(TYPEDSIGNATURES)
 
-Legacy behavior: the gap is always completely full of water. `State.b_empty` stays zero.
+SHAKTI's original sheet: the gap is always completely full of water. `State.b_empty` stays zero.
 """
 struct FilledCavities <: AbstractCavityFilling end
 
@@ -36,7 +36,7 @@ cell whose head falls below the bed takes the unfilled head row ([`cavity_head_t
 `linear_solver.jl`): `N = po`, and the empty depth `zb - h` is the cell's storage. `State.b_empty`
 records the empty depth (from the water budget after the gap update, [`update_b_empty_budget!`](@ref)),
 the face conductances use the water depth `b - b_empty` ([`compute_b_w!`](@ref)), and `p_w` is
-floored at 0.
+floored at 0. The default of [`Simulation`](@ref) (with [`IceUplift`](@ref): the GlaDS-2 sheet).
 """
 struct UnfilledCavities <: AbstractCavityFilling end
 

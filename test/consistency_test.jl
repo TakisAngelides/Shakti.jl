@@ -27,7 +27,7 @@
             state = State(grid)
             set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b0, G, ub_x, ub_y, ieb, taub_x, taub_y)
             ps = PicardSolver(200, floattype(1e-8), CholeskyDirectSolver(grid), grid; alpha = alpha)
-            return Simulation(grid, state, tsteps, floattype(3600.0), p, gap, String[], ConstantMeltInput(), sl;
+            return Simulation(grid, state, tsteps, floattype(3600.0), p, gap, String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(),
                               ps = ps, head_extrapolation_order = order, k_face_choice = k_face_choice, gap_coupling = gap_coupling)
         end
 
@@ -139,7 +139,7 @@
             st = State(grid)
             set_initial_conditions!(st, grid, p_ev, sl, mask, A_visc, zb, zs, b0, G, ub_x, ub_y, ieb, taub_x, taub_y)
             pps = ParabolicPicardSolver(50, floattype(1e-6), CholeskyDirectSolver(grid), grid)
-            sim_par = Simulation(grid, st, 2, floattype(3600.0), p_ev, "implicit", String[], ConstantMeltInput(), sl; pps = pps)
+            sim_par = Simulation(grid, st, 2, floattype(3600.0), p_ev, "implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), pps = pps)
             @test sim_par.he isa NoHeadExtrapolation
         end
 
@@ -179,7 +179,7 @@
             p = ModelParameters(e_v = 0.0)
             set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b0, G, ub_x, ub_y, ieb, taub_x, taub_y)
             @test Array(state.N)[3, 3] > 1.0 # unclamped from the setup
-            sim = Simulation(grid, state, 2, floattype(3600.0), p, "implicit", String[], ConstantMeltInput(), sl;
+            sim = Simulation(grid, state, 2, floattype(3600.0), p, "implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(),
                              ps = PicardSolver(200, floattype(1e-8), CholeskyDirectSolver(grid), grid),
                              cell_N_clamping = CellNClamping(Dict((3, 3) => (0.0, 1.0))))
             @test Array(sim.state.N)[3, 3] == 1.0
@@ -193,7 +193,7 @@
             p = ModelParameters(e_v = 0.0)
             set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b0, G, ub_x, ub_y, ieb, taub_x, taub_y)
             ts = AdaptiveTimeStep(grid, state; use_percentile = true, safety_factor = 1e9, dt_min = 1000.0, dt_max = 3000.0, target_time = 6500.0)
-            sim = Simulation(grid, state, 10, floattype(3000.0), p, "implicit", String[], ConstantMeltInput(), sl;
+            sim = Simulation(grid, state, 10, floattype(3000.0), p, "implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(),
                              ps = PicardSolver(200, floattype(1e-8), CholeskyDirectSolver(grid), grid), timestep_scheme = ts)
             # the grounded set after freezing cells, not the one at construction
             fm = falses(size(mask)); fm[2:3, 2:4] .= Array(sim.state.mask)[2:3, 2:4] .== GROUNDED
@@ -221,7 +221,7 @@
                 st = State(grid)
                 p = ModelParameters(e_v = 0.0)
                 set_initial_conditions!(st, grid, p, sl, mask, A_visc, zb, zs, b0, G, ub_x, ub_y, ieb, taub_x, taub_y)
-                sim = Simulation(grid, st, 3, floattype(3600.0), p, "implicit", String[], ConstantMeltInput(), sl;
+                sim = Simulation(grid, st, 3, floattype(3600.0), p, "implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(),
                                  ps = PicardSolver(200, floattype(1e-8), ls, grid), head_extrapolation_order = 0)
                 for _ in 1:3; step!(sim); end
                 @test maximum(abs, Array(st.N) .- Array(ref.state.N)) / maximum(abs, Array(ref.state.N)) < 1e-6

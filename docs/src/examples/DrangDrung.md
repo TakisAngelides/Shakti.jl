@@ -76,7 +76,7 @@ ls = CholeskyDirectSolver(grid)
 ps = PicardSolver(500, 1e-6, ls, grid)
 
 sim = Simulation(grid, state, 17520, 1800.0, p, "fully_implicit",
-                 ["h", "pw", "po", "b", "N", "mdot", "Re", "K"], mi, sl;
+                 ["h", "pw", "po", "b", "N", "mdot", "Re", "K"], mi, sl; cavity_filling = FilledCavities(), uplift = NoUplift(),
                  ps = ps, which_observer = "IO", which_file_writer = "NetCDF",
                  path = "drangdrung_winter.nc")
 run!(sim)

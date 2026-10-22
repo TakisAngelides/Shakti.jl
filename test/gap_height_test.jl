@@ -149,7 +149,7 @@
 
             ls = CholeskyDirectSolver(grid)
             ps = PicardSolver(50, floattype(1e-6), ls, grid)
-            sim_cutoff = Simulation(grid, state_cutoff, 1, floattype(3600.0), p_cutoff, "implicit", String[], ConstantMeltInput(), sl; ps = ps)
+            sim_cutoff = Simulation(grid, state_cutoff, 1, floattype(3600.0), p_cutoff, "implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps)
             @test sim_cutoff.cls isa CreepCutoff
 
             p_std = ModelParameters(e_v = 0.0) # b_c defaults to 0.0
@@ -160,7 +160,7 @@
 
             ls2 = CholeskyDirectSolver(grid)
             ps2 = PicardSolver(50, floattype(1e-6), ls2, grid)
-            sim_std = Simulation(grid, state_std, 1, floattype(3600.0), p_std, "implicit", String[], ConstantMeltInput(), sl; ps = ps2)
+            sim_std = Simulation(grid, state_std, 1, floattype(3600.0), p_std, "implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps2)
             @test sim_std.cls isa StandardCreep
         end
 
@@ -171,7 +171,7 @@
 
             ls = CholeskyDirectSolver(grid)
             ps = PicardSolver(50, floattype(1e-6), ls, grid)
-            sim = Simulation(grid, state, 3, floattype(3600.0), p, "fully_implicit", String[], ConstantMeltInput(), sl; ps = ps)
+            sim = Simulation(grid, state, 3, floattype(3600.0), p, "fully_implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps)
 
             @test sim.cls isa CreepCutoff
             @test sim.gs isa FullyImplicitGapScheme

@@ -32,7 +32,7 @@
             set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b0, G, ub_x, ub_y, ieb, taub_x, taub_y)
             ls = CholeskyDirectSolver(grid)
             kw = e_v == 0 ? (; ps = PicardSolver(500, floattype(1e-12), ls, grid)) : (; pps = ParabolicPicardSolver(500, floattype(1e-12), ls, grid))
-            return Simulation(grid, state, 1, floattype(dt), p, gap, String[], ConstantMeltInput(), sl; cavity_filling = cf, uplift = up, kw...)
+            return Simulation(grid, state, 1, floattype(dt), p, gap, String[], ConstantMeltInput(), sl; k_face_choice = "upwind", cavity_filling = cf, uplift = up, kw...)
         end
         grounded(s) = Array(s.mask) .== GROUNDED
         h_o(s, p) = Array(s.zb) .+ Array(s.po) ./ (p.rho_w * p.g)

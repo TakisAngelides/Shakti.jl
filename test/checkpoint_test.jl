@@ -36,7 +36,7 @@
             set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
             ls = CholeskyDirectSolver(grid)
             ps = PicardSolver(500, 1e-6, ls, grid)
-            return Simulation(grid, state, sim_tsteps, floattype(dt), p, "fully_implicit", tracked_obs, mi, sl;
+            return Simulation(grid, state, sim_tsteps, floattype(dt), p, "fully_implicit", tracked_obs, mi, sl; cavity_filling = FilledCavities(), uplift = NoUplift(),
                                ps = ps, which_observer = "IO", which_file_writer = which_file_writer,
                                tracked_times = tracked_times, path = path)
         end
@@ -204,7 +204,7 @@
             set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
             ls = CholeskyDirectSolver(grid)
             ps = PicardSolver(500, 1e-6, ls, grid)
-            return Simulation(grid, state, sim_tsteps, floattype(dt), p, "fully_implicit", tracked_obs, mi, sl;
+            return Simulation(grid, state, sim_tsteps, floattype(dt), p, "fully_implicit", tracked_obs, mi, sl; cavity_filling = FilledCavities(), uplift = NoUplift(),
                                ps = ps, which_observer = "IO", which_file_writer = which_file_writer,
                                tracked_times = 0:sim_tsteps, path = path)
         end
@@ -336,7 +336,7 @@
                                  zeros(nx, ny), zeros(nx + 1, ny), zeros(nx, ny + 1))
         ls = CholeskyDirectSolver(grid)
         ps = PicardSolver(500, 1e-6, ls, grid)
-        sim = Simulation(grid, state, 3, floattype(3600.0), p, "fully_implicit", String[], mi, sl; ps = ps)
+        sim = Simulation(grid, state, 3, floattype(3600.0), p, "fully_implicit", String[], mi, sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps)
 
         mktempdir() do dir
             mkpath(dir)

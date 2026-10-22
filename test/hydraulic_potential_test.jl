@@ -28,8 +28,8 @@
             state = State(grid)
             set_initial_conditions!(state, grid, p, sl, base_mask(), A_visc, zb, zs, b0, G, ub_x, ub_y, ieb, taub_x, taub_y)
             ps = PicardSolver(500, floattype(1e-12), CholeskyDirectSolver(grid), grid)
-            return Simulation(grid, state, 1, floattype(dt), p, gap, String[], ConstantMeltInput(), sl; ps = ps,
-                              cavity_filling = cf, hydraulic_potential = hp, k_face_choice = kface)
+            return Simulation(grid, state, 1, floattype(dt), p, gap, String[], ConstantMeltInput(), sl; uplift = NoUplift(), ps = ps,
+                              cavity_filling = cf, hydraulic_potential = hp, k_face_choice = something(kface, cf isa UnfilledCavities ? "upwind" : "arithmetic"))
         end
         grounded(s) = Array(s.mask) .== GROUNDED
 
@@ -58,7 +58,7 @@
                 @test make_sim(; hp = BedPotential(), cf = cf).hp isa BedPotential
             end
             sim = make_sim()
-            default = Simulation(grid, sim.state, 1, floattype(dt), sim.p, "explicit", String[], ConstantMeltInput(), sl; ps = sim.hs.ps)
+            default = Simulation(grid, sim.state, 1, floattype(dt), sim.p, "explicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = sim.hs.ps)
             @test default.hp isa SheetTopPotential
         end
 

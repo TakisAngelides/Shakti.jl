@@ -27,11 +27,11 @@
             state = State(grid)
             set_initial_conditions!(state, grid, p_parabolic, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
 
-            @test_throws ErrorException Simulation(grid, state, 1, floattype(60.0), p_parabolic, "fully_implicit", String[], ConstantMeltInput(), sl)
+            @test_throws ErrorException Simulation(grid, state, 1, floattype(60.0), p_parabolic, "fully_implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift())
 
             ls = CholeskyDirectSolver(grid)
             pps = ParabolicPicardSolver(50, 1e-6, ls, grid)
-            sim = Simulation(grid, state, 1, floattype(60.0), p_parabolic, "fully_implicit", String[], ConstantMeltInput(), sl; pps = pps)
+            sim = Simulation(grid, state, 1, floattype(60.0), p_parabolic, "fully_implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), pps = pps)
             @test sim.hs isa ParabolicHeadScheme
         end
 
@@ -74,12 +74,12 @@
 
             ls_elliptic = CholeskyDirectSolver(grid)
             ps_elliptic = PicardSolver(500, 1e-6, ls_elliptic, grid)
-            sim_elliptic = Simulation(grid, state_elliptic, tsteps, floattype(dt), p_elliptic, "fully_implicit", String[], ConstantMeltInput(), sl; ps = ps_elliptic)
+            sim_elliptic = Simulation(grid, state_elliptic, tsteps, floattype(dt), p_elliptic, "fully_implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps_elliptic)
             run!(sim_elliptic)
 
             ls_parabolic = CholeskyDirectSolver(grid)
             pps_parabolic = ParabolicPicardSolver(50, 1e-6, ls_parabolic, grid)
-            sim_parabolic = Simulation(grid, state_parabolic, tsteps, floattype(dt), p_parabolic, "fully_implicit", String[], ConstantMeltInput(), sl; pps = pps_parabolic)
+            sim_parabolic = Simulation(grid, state_parabolic, tsteps, floattype(dt), p_parabolic, "fully_implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), pps = pps_parabolic)
             run!(sim_parabolic)
 
             # Empirically ~3e-7 relative -- rtol here leaves ample margin rather than pinning the exact residual.
@@ -95,7 +95,7 @@
 
             ls = CholeskyDirectSolver(grid)
             pps = ParabolicPicardSolver(50, 1e-6, ls, grid)
-            sim = Simulation(grid, state, 5, floattype(60.0), p, "fully_implicit", ["h", "b"], ConstantMeltInput(), sl;
+            sim = Simulation(grid, state, 5, floattype(60.0), p, "fully_implicit", ["h", "b"], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(),
                              pps = pps, which_observer = "Live", tracked_times = 0:5)
             run!(sim)
 
@@ -128,7 +128,7 @@
 
             ls = CholeskyDirectSolver(grid)
             pps = ParabolicPicardSolver(50, 1e-6, ls, grid)
-            sim = Simulation(grid, state, 5, floattype(60.0), p, "fully_implicit", String[], ConstantMeltInput(), sl; pps = pps)
+            sim = Simulation(grid, state, 5, floattype(60.0), p, "fully_implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), pps = pps)
             run!(sim)
 
             @test all(isfinite, Array(sim.state.h))

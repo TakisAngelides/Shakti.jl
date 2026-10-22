@@ -210,9 +210,9 @@ struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHea
     cnc::CNC # per-cell N-clamping override, see cell_N_clamping.jl; NoCellNClamping() (a no-op) by default
     ts::TS # AbstractTimeStepScheme; FixedTimeStep() (a no-op, dt never changes) by default
     he::HE # AbstractHeadExtrapolation: the head solve's initial guess, see head_extrapolation.jl
-    cf::CF # AbstractCavityFilling: FilledCavities() (legacy, gap always water-filled) by default, see unfilled_cavities.jl
+    cf::CF # AbstractCavityFilling: UnfilledCavities() by default (FilledCavities(): SHAKTI's always water-filled gap), see unfilled_cavities.jl
     hp::HP # AbstractHydraulicPotential: SheetTopPotential() (q = -K grad(h + b)) by default, BedPotential() for the legacy flux, see hydraulic_potential.jl
-    up::UP # AbstractIceUplift: NoUplift() (legacy, pw may exceed po) by default, see ice_uplift.jl
+    up::UP # AbstractIceUplift: IceUplift() by default (NoUplift(): SHAKTI's, pw may exceed po), see ice_uplift.jl
     gcp::GCP # AbstractGapCoupling: ConsistentGapCoupling() by default where available, see the constructor and linear_solver.jl
 end
 
@@ -242,21 +242,22 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
   identically zero the way `p.br`/`p.b_c` do): pass `WithDiffusion(ls)` explicitly, with `ls` a
   second, independent [`AbstractLinearSolver`](@ref) instance for `b`'s own diffusion operator.
 - `k_face_choice`: `"arithmetic"`, `"harmonic"`, `"upwind"` or `"implicit_upwind"` (see [`AbstractKFaceScheme`](@ref));
-  by default `"arithmetic"`, or `"upwind"` under [`UnfilledCavities`](@ref) or [`IceUplift`](@ref): where the water
-  depth is free (a free surface or an uplift layer) the flux is a kinematic wave in it, `q ~ K(W)*grad(zb)`, with
-  `W` lagged to the start of the step, and a face mean is then unstable (explicit central advection) at any `dt`;
-  upwind is stable for `dt < dx*W/(3|q|)`. `"implicit_upwind"` ([`ImplicitUpwind`](@ref)) takes `W` at the end of
-  the step and is stable at any `dt`; it needs [`LUDirectSolver`](@ref) or `CUDSSDirectSolver(grid; structure =
-  :general)` in `ps`/`pps`.
+  by default `"implicit_upwind"` under [`UnfilledCavities`](@ref) or [`IceUplift`](@ref) (so with the default sheet),
+  `"arithmetic"` otherwise. Where the water depth is free (a free surface or an uplift layer) the flux is a kinematic
+  wave in it, `q ~ K(W)*grad(zb)`; with `W` lagged to the start of the step a face mean is unstable (explicit central
+  advection) at any `dt`, and `"upwind"` is stable only for `dt < dx*W/(3|q|)` (minutes at 100 m).
+  `"implicit_upwind"` ([`ImplicitUpwind`](@ref)) takes `W` at the end of the step and is stable at any `dt`; it needs
+  a Picard solver with [`LUDirectSolver`](@ref) or `CUDSSDirectSolver(grid; structure = :general)` in `ps`/`pps`, and
+  `Simulation` errors otherwise. `"upwind"` is the faster opt-out at short steps.
 - `cell_gap_clamping`: [`NoCellGapClamping`](@ref) (default, no-op) or a [`CellGapClamping`](@ref)
   overriding specific cells' `b_min`/`b_max` on top of `p`'s global values (see
   `cell_gap_clamping.jl`).
 - `cell_N_clamping`: [`NoCellNClamping`](@ref) (default, no-op) or a [`CellNClamping`](@ref)
   overriding specific cells' `N_min`/`N_max` on top of `p`'s global values (see
   `cell_N_clamping.jl`).
-- `cavity_filling`: [`FilledCavities`](@ref) (default, legacy: the gap is always full of water) or
-  [`UnfilledCavities`](@ref) (the gap may be partly empty, with `p_w = 0` there; see
-  `unfilled_cavities.jl`).
+- `cavity_filling`: [`UnfilledCavities`](@ref) (default: the gap may be partly empty, with `p_w = 0` there; see
+  `unfilled_cavities.jl`) or [`FilledCavities`](@ref) (SHAKTI's original sheet, Sommers et al. 2018: the gap is always
+  full of water, and `p_w` can fall below 0 where sliding opens the gap faster than water arrives).
 - `hydraulic_potential`: [`SheetTopPotential`](@ref) (default: the potential includes the thickness of the
   flowing water, GlaDS-2 Eq. 7: `q = -K grad(h + b)`; see `hydraulic_potential.jl`) or [`BedPotential`](@ref)
   (legacy, Sommers et al. 2018: the flux is driven by the bed-referenced head, `q = -K grad(h)`). The water's
@@ -264,11 +265,13 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
   `h_o + W - b` with an uplift layer), so `grad(h)` misses `-grad(b)`: water (and dissipation heat) would not follow
   differences in gap size, or would move under a flat water surface. Pass `BedPotential()` to reproduce the
   original equations bit for bit.
-- `uplift`: [`NoUplift`](@ref) (default, legacy: the water pressure may exceed the overburden, `N < 0`) or
-  [`IceUplift`](@ref) (the pressure is capped at the overburden and the extra water lifts the ice, stored
-  in an uplift layer at `N = 0`; see `ice_uplift.jl`). With `cavity_filling = UnfilledCavities()` and
-  the default `hydraulic_potential = SheetTopPotential()` this is the sheet of GlaDS-2 (Wells et al. 2026), with the
-  pressure bounded by `0 <= p_w <= p_o`.
+- `uplift`: [`IceUplift`](@ref) (default: the pressure is capped at the overburden and the extra water lifts the
+  ice, stored in an uplift layer at `N = 0`; see `ice_uplift.jl`) or [`NoUplift`](@ref) (SHAKTI's original: the water
+  pressure may exceed the overburden, `N < 0`). The defaults, `UnfilledCavities()` and `IceUplift()` with
+  `hydraulic_potential = SheetTopPotential()`, are the sheet of GlaDS-2 (Wells et al. 2026), with the pressure bounded
+  by `0 <= p_w <= p_o` (the range a coupled ice model's sliding law expects). Pass `cavity_filling = FilledCavities(),
+  uplift = NoUplift()` for SHAKTI's sheet (with `hydraulic_potential = BedPotential()` and
+  `gap_coupling = ExplicitGapCoupling()` for its original equations bit for bit).
 - Observer: [`NoObserver`](@ref) if `tracked_obs` is empty; otherwise `which_observer` must be
   `"IO"` (writes to `path` via `which_file_writer`, one of `"NetCDF"`/`"HDF5"`/`"JLD2"`/`"CSV"`,
   at `tracked_times`) or `"Live"` (keeps `tracked_times` in memory instead of writing to disk).
@@ -292,7 +295,7 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
   initial guess ([`HeadExtrapolation`](@ref); default `1`, linear). `0` starts every solve from the
   previous step's head. Ignored (always `0`) under [`ParabolicHeadScheme`](@ref).
 """
-function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::Vector{String}, mi::AbstractMeltInput, sl::AbstractSlidingLaw; ps = nothing, pps = nothing, which_observer = nothing, which_file_writer = nothing, tracked_times = nothing, path = nothing, k_face_choice = nothing, verbose = false, cell_gap_clamping::AbstractCellGapClamping = NoCellGapClamping(), cell_N_clamping::AbstractCellNClamping = NoCellNClamping(), timestep_scheme::AbstractTimeStepScheme = FixedTimeStep(), diffusion_scheme::AbstractDiffusionScheme = NoDiffusion(), head_extrapolation_order::Int = 1, cavity_filling::AbstractCavityFilling = FilledCavities(), hydraulic_potential::AbstractHydraulicPotential = SheetTopPotential(), uplift::AbstractIceUplift = NoUplift(), gap_coupling::Union{Nothing, AbstractGapCoupling} = nothing)
+function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::Vector{String}, mi::AbstractMeltInput, sl::AbstractSlidingLaw; ps = nothing, pps = nothing, which_observer = nothing, which_file_writer = nothing, tracked_times = nothing, path = nothing, k_face_choice = nothing, verbose = false, cell_gap_clamping::AbstractCellGapClamping = NoCellGapClamping(), cell_N_clamping::AbstractCellNClamping = NoCellNClamping(), timestep_scheme::AbstractTimeStepScheme = FixedTimeStep(), diffusion_scheme::AbstractDiffusionScheme = NoDiffusion(), head_extrapolation_order::Int = 1, cavity_filling::AbstractCavityFilling = UnfilledCavities(), hydraulic_potential::AbstractHydraulicPotential = SheetTopPotential(), uplift::AbstractIceUplift = IceUplift(), gap_coupling::Union{Nothing, AbstractGapCoupling} = nothing)
 
     # Check that all tracked observables are valid State fields
     for name in tracked_obs
@@ -333,7 +336,11 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
 
     # K-face averaging scheme setup. Unfilled cavities need the donor-cell (upwind) face conductance, see Upwind
     # (k_face_scheme.jl): with an average, a nearly empty cell discharges through its neighbour's much larger conductance.
-    k_face_choice === nothing && (k_face_choice = (cavity_filling isa UnfilledCavities || uplift isa IceUplift) ? "upwind" : "arithmetic")
+    # The default is the implicit water depth, stable at any dt; "upwind" (explicit depth) only below the free-surface
+    # limit of compute_b_w! (minutes at 100 m), above which it overshoots or cycles.
+    free_surface = cavity_filling isa UnfilledCavities || uplift isa IceUplift
+    k_face_default = k_face_choice === nothing
+    k_face_default && (k_face_choice = free_surface ? "implicit_upwind" : "arithmetic")
     if k_face_choice == "arithmetic"
         kfs = Arithmetic()
     elseif k_face_choice == "harmonic"
@@ -359,9 +366,12 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
         # The Newton terms of the donors' water depths make the head matrix non-symmetric (add_water_depth_newton!).
         solver = hs isa EllipticHeadScheme ? hs.ps : hs.pps
         hasproperty(solver, :ls) && supports_nonsymmetric(solver.ls) ||
-            error("k_face_choice = \"implicit_upwind\" assembles a non-symmetric head matrix: it needs a Picard solver (PicardSolver/ParabolicPicardSolver) " *
+            error("k_face_choice = \"implicit_upwind\"" * (k_face_default ? " (the default with $(nameof(typeof(cavity_filling)))/$(nameof(typeof(uplift))))" : "") *
+                  " assembles a non-symmetric head matrix: it needs a Picard solver (PicardSolver/ParabolicPicardSolver) " *
                   "with LUDirectSolver(grid) or CUDSSDirectSolver(grid; structure = :general) as its linear solver, got $(nameof(typeof(solver)))" *
-                  (hasproperty(solver, :ls) ? " with $(nameof(typeof(solver.ls)))" : ""))
+                  (hasproperty(solver, :ls) ? " with $(nameof(typeof(solver.ls)))" : "") *
+                  (k_face_default ? ". Alternatively pass k_face_choice = \"upwind\" (stable only at short dt), or cavity_filling = FilledCavities(), " *
+                                    "uplift = NoUplift() for SHAKTI's original filled sheet." : ""))
     end
 
     # Linear solvers without a method for the equation they will be asked to solve: refused here rather than at the first

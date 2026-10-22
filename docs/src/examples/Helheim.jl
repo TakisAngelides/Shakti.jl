@@ -179,7 +179,7 @@ ls = CholeskyDirectSolver(grid)
 ps = PicardSolver(500, 1e-6, ls, grid)
 
 dt, tsteps = 1800.0, 4320
-sim = Simulation(grid, state, tsteps, floattype(dt), p, "fully_implicit", ["h", "b", "N", "mdot", "pw", "po", "Re"], mi, sl;
+sim = Simulation(grid, state, tsteps, floattype(dt), p, "fully_implicit", ["h", "b", "N", "mdot", "pw", "po", "Re"], mi, sl; cavity_filling = FilledCavities(), uplift = NoUplift(),
                  ps = ps, which_observer = "Live", tracked_times = [tsteps])
 run!(sim)
 

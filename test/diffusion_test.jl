@@ -380,7 +380,7 @@
                 ls_h = CholeskyDirectSolver(grid)
                 ps = PicardSolver(50, floattype(1e-6), ls_h, grid)
                 ls_b = CholeskyDirectSolver(grid)
-                return Simulation(grid, state, 1, floattype(3600.0), p4, gap_scheme_choice, String[], ConstantMeltInput(), sl; ps = ps, diffusion_scheme = WithDiffusion(ls_b))
+                return Simulation(grid, state, 1, floattype(3600.0), p4, gap_scheme_choice, String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps, diffusion_scheme = WithDiffusion(ls_b))
             end
 
             sim_explicit = build("explicit")
@@ -414,7 +414,7 @@
             state = State(grid)
             set_initial_conditions!(state, grid, p, sl, mask, fill(2.4e-24, nx, ny), zb, zb .+ H, fill(1e-3, nx, ny), fill(0.06, nx, ny),
                                     fill(30.0 / (365 * 86400), nx + 1, ny), zeros(nx, ny + 1), ieb, zeros(nx + 1, ny), zeros(nx, ny + 1))
-            return Simulation(grid, state, 3, floattype(dt), p, "fully_implicit", String[], ConstantMeltInput(), sl;
+            return Simulation(grid, state, 3, floattype(dt), p, "fully_implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(),
                               ps = PicardSolver(500, floattype(1e-9), CholeskyDirectSolver(grid), grid),
                               diffusion_scheme = WithDiffusion(CholeskyDirectSolver(grid)), gap_coupling = gc, kw...)
         end
@@ -495,7 +495,7 @@
         p = ModelParameters(rho_i = 917.0, omega = 1e-3, br = 0.0, lr = 2.0, ct = 0.0, mdot_includes_sensible = false)
         dt = 86400.0
         function helheim_budget(gc)
-            sim = Simulation(grid, deepcopy(m.state), 2, floattype(dt), p, "fully_implicit", String[], m.mi, m.sl;
+            sim = Simulation(grid, deepcopy(m.state), 2, floattype(dt), p, "fully_implicit", String[], m.mi, m.sl; cavity_filling = FilledCavities(), uplift = NoUplift(),
                              ps = PicardSolver(500, floattype(1e-6), CholeskyDirectSolver(grid), grid),
                              diffusion_scheme = WithDiffusion(CholeskyDirectSolver(grid)), gap_coupling = gc)
             worst = 0.0

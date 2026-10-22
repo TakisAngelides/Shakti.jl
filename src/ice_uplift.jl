@@ -40,7 +40,7 @@ abstract type AbstractIceUplift end
 """
 $(TYPEDSIGNATURES)
 
-Default: no upper bound on the water pressure (`N < 0` allowed, as in the original equations).
+No upper bound on the water pressure (`N < 0` allowed, as in SHAKTI's original equations).
 """
 struct NoUplift <: AbstractIceUplift end
 
@@ -48,7 +48,7 @@ struct NoUplift <: AbstractIceUplift end
 $(TYPEDSIGNATURES)
 
 The water pressure is capped at the overburden: above it the ice is lifted and the extra water is stored
-in an uplift layer at `p_w = p_o`, `N = 0`. See this file's header.
+in an uplift layer at `p_w = p_o`, `N = 0`. See this file's header. The default of [`Simulation`](@ref).
 """
 struct IceUplift <: AbstractIceUplift end
 

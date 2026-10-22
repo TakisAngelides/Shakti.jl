@@ -147,7 +147,7 @@ taub_y = zeros(NX, NY + 1)
 state = State(grid)
 set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b0, G, ub_x, ub_y, ieb, taub_x, taub_y)
 
-sim = Simulation(grid, state, 10, floattype(3600.0), p, gap_scheme_choice, tracked_obs, mi, sl;
+sim = Simulation(grid, state, 10, floattype(3600.0), p, gap_scheme_choice, tracked_obs, mi, sl; cavity_filling = FilledCavities(), uplift = NoUplift(),
                  ps = ps, which_observer = which_observer, tracked_times = tracked_times,
                  k_face_choice = k_face_choice, verbose = false)
 run!(sim)

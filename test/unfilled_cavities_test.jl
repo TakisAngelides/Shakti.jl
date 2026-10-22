@@ -72,7 +72,7 @@
             state = State(grid)
             set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b0, G, ub_x, ub_y, ieb .* ieb_scale, taub_x, taub_y)
             ps = PicardSolver(500, floattype(1e-12), CholeskyDirectSolver(grid), grid)
-            return Simulation(grid, state, 1, floattype(dt), p, gap, String[], ConstantMeltInput(), sl; ps = ps, cavity_filling = cf, k_face_choice = kface, gap_coupling = gcp,
+            return Simulation(grid, state, 1, floattype(dt), p, gap, String[], ConstantMeltInput(), sl; uplift = NoUplift(), ps = ps, cavity_filling = cf, k_face_choice = something(kface, cf isa UnfilledCavities ? "upwind" : "arithmetic"), gap_coupling = gcp,
                               hydraulic_potential = BedPotential()) # compare cavity filling alone (the default is SheetTopPotential)
         end
 
@@ -158,7 +158,7 @@
             state = State(grid)
             set_initial_conditions!(state, grid, p, sl, base_mask(), A_visc, zb, zs, b0, G, ub_x, ub_y, zeros(nx, ny), taub_x, taub_y) # no moulin: with 3 m^3/s into ice this stiff the pressurized cells are a numerical stress test of their own
             ps = PicardSolver(500, floattype(1e-12), CholeskyDirectSolver(grid), grid)
-            sim = Simulation(grid, state, 1, floattype(dt), p, "explicit", String[], ConstantMeltInput(), sl; ps = ps, cavity_filling = UnfilledCavities())
+            sim = Simulation(grid, state, 1, floattype(dt), p, "explicit", String[], ConstantMeltInput(), sl; uplift = NoUplift(), k_face_choice = "upwind", ps = ps, cavity_filling = UnfilledCavities())
             s = state
             for k in 1:6
                 b_old, e_old = copy(Array(s.b)), copy(Array(s.b_empty))
@@ -239,7 +239,7 @@
             # through the face kernel: a nearly empty cell next to a full one
             sim = make_sim(UnfilledCavities())
             s, p = sim.state, sim.p
-            @test sim.kfs isa Upwind # the default under unfilled cavities
+            @test sim.kfs isa Upwind
             s.b .= 0.05; s.b_empty .= 0.0
             s.b_empty[3, 3] = 0.05 - 1e-4 # (3,3) holds 0.1 mm of water, its neighbours 5 cm
             Shakti.compute_b_w!(s, p)
@@ -304,7 +304,7 @@
             state = State(grid)
             set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b0, G, ub_x, zeros(nx, ny + 1), ieb, taub_x, taub_y)
             pps = ParabolicPicardSolver(500, floattype(pres), CholeskyDirectSolver(grid), grid)
-            return Simulation(grid, state, 1, floattype(dt), p, "explicit", String[], ConstantMeltInput(), sl; pps = pps, cavity_filling = cf, k_face_choice = kface,
+            return Simulation(grid, state, 1, floattype(dt), p, "explicit", String[], ConstantMeltInput(), sl; uplift = NoUplift(), pps = pps, cavity_filling = cf, k_face_choice = something(kface, cf isa UnfilledCavities ? "upwind" : "arithmetic"),
                               hydraulic_potential = BedPotential()) # as above
         end
 
@@ -344,7 +344,7 @@
                 p = ModelParameters(e_v = 0.0, b_min = 1e-6)
                 state = State(grid)
                 set_initial_conditions!(state, grid, p, sl, base_mask(), fill(1e-24, nx, ny), zb, zs, fill(1e-6, nx, ny), G, fill(3e-7, nx + 1, ny), zeros(nx, ny + 1), zeros(nx, ny), taub_x, taub_y)
-                sim = Simulation(grid, state, 1, floattype(dt), p, "explicit", String[], ConstantMeltInput(), sl; ps = mk(), cavity_filling = UnfilledCavities())
+                sim = Simulation(grid, state, 1, floattype(dt), p, "explicit", String[], ConstantMeltInput(), sl; uplift = NoUplift(), k_face_choice = "upwind", ps = mk(), cavity_filling = UnfilledCavities())
                 b_old, e_old = copy(Array(state.b)), copy(Array(state.b_empty))
                 step!(sim)
                 return sim, b_old, e_old
@@ -361,3 +361,35 @@
             @test maximum(abs, res[g]) < 1e-3 * scale # Newton stops at a looser head tolerance than the Picard test above
         end
     end
+
+@testset "Default sheet: GlaDS-2 (unfilled cavities, uplift, implicit_upwind, consistent coupling)" begin
+    nx, ny = 12, 6
+    grid = Grid(nx, ny, 1.1e3, 500.0)
+    x = Array(grid.x)
+    zb = [0.05 * xi for xi in x, _ in 1:ny]
+    H = [50 + 200 * sqrt(xi / x[end]) for xi in x, _ in 1:ny]
+    mask = fill(GROUNDED, nx, ny); mask[1, :] .= LAND
+    sl = RegularizedCoulombSlidingLaw(0.25)
+    function default_sim(ls; kw...)
+        state = State(grid)
+        set_initial_conditions!(state, grid, ModelParameters(), sl, mask, fill(2.4e-24, nx, ny), zb, zb .+ H, fill(1e-3, nx, ny),
+                                fill(0.06, nx, ny), fill(1e-6, nx + 1, ny), zeros(nx, ny + 1), fill(1e-8, nx, ny), zeros(nx + 1, ny), zeros(nx, ny + 1))
+        return Simulation(grid, state, 2, floattype(86400.0), ModelParameters(), "fully_implicit", String[], ConstantMeltInput(), sl;
+                          ps = PicardSolver(500, floattype(1e-8), ls, grid), kw...)
+    end
+    sim = default_sim(LUDirectSolver(grid))
+    @test sim.cf isa UnfilledCavities && sim.up isa IceUplift && sim.hp isa SheetTopPotential
+    @test sim.kfs isa ImplicitUpwind && sim.gcp isa ConsistentGapCoupling
+    for _ in 1:2
+        step!(sim)
+        @test first(Shakti.picard_status(sim.hs))
+    end
+    g = Array(sim.state.mask) .== GROUNDED
+    @test all(0 .<= Array(sim.state.N)[g] .<= Array(sim.state.po)[g] .* (1 + 1e-9)) # GlaDS-2: 0 <= N <= po
+    # a symmetric-only solver: refused, and the message names the opt-outs
+    err = try default_sim(CholeskyDirectSolver(grid)); "" catch e; sprint(showerror, e) end
+    @test occursin("the default", err) && occursin("FilledCavities()", err) && occursin("\"upwind\"", err)
+    # SHAKTI's sheet when asked for: arithmetic faces, Cholesky accepted
+    shakti = default_sim(CholeskyDirectSolver(grid); cavity_filling = FilledCavities(), uplift = NoUplift())
+    @test shakti.kfs isa Arithmetic && shakti.gcp isa ConsistentGapCoupling
+end
