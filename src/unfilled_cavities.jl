@@ -123,25 +123,30 @@ compute_b_w!(s::State, p::ModelParameters) = (@parallel compute_b_w_kernel!(s.b_
     return rho_w * ggrav * max(zero(b), (Gm - Gp) / (2δ))
 end
 
+# The end-of-step water depth of a cell at head h and its slope dW/dh, by regime (compute_b_w_iterate!): never below 0.
+@inline function iterate_water(gcc, bb, bd, h, z, po, Nv, stor, stor_up, b_min, b_max, rho_w, ggrav, mdot, beta, abs_ub, A, rho_i, n_minus_1)
+    x  = h - z                     # pressure head
+    xo = po / (rho_w * ggrav)      # pressure head at the overburden
+    if stor > 0 && x < 0           # unfilled: the gap at N = po minus the empty depth zb - h
+        W = end_of_step_gap(gcc, bb, bd, b_min, b_max, mdot, beta, abs_ub, A, po, rho_i, n_minus_1) + x
+        slope = one(bb)
+    elseif stor_up > 0 && x > xo   # uplifted: the gap at N = 0 plus the layer h - h_o
+        W = end_of_step_gap(gcc, bb, bd, b_min, b_max, mdot, beta, abs_ub, A, zero(bb), rho_i, n_minus_1) + (x - xo)
+        slope = one(bb)
+    else                           # filled: the gap (the start-of-step one, or G(N) under ConsistentGapCoupling)
+        W = end_of_step_gap(gcc, bb, bd, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1)
+        slope = end_of_step_gap_slope(gcc, bb, bd, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1, rho_w, ggrav)
+    end
+    return W > 0 ? (W, slope) : (zero(bb), zero(bb)) # no water, no conductance (compute_b_w!)
+end
+
 @parallel_indices (ix, iy) function compute_b_w_iterate_kernel!(b_w, dbw_dh, b, h, zb, po, N, stor, stor_up, b_min, b_max, rho_w, ggrav, gc, mdot, beta, abs_ub, A_visc, rho_i, n_minus_1, b_dry, bump)
     if ix <= size(b_w, 1) && iy <= size(b_w, 2)
-        bb, bd = b[ix, iy], b_dry[ix, iy]
         gcc = cell_gap(gc, bump[ix, iy]) # this cell's bump height (compute_beta!)
-        x  = h[ix, iy] - zb[ix, iy]                # pressure head
-        xo = po[ix, iy] / (rho_w * ggrav)          # pressure head at the overburden
-        if stor[ix, iy] > 0 && x < 0               # unfilled: the gap at N = po minus the empty depth zb - h
-            W = end_of_step_gap(gcc, bb, bd, b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], po[ix, iy], rho_i, n_minus_1) + x
-            slope = one(bb)
-        elseif stor_up[ix, iy] > 0 && x > xo       # uplifted: the gap at N = 0 plus the layer h - h_o
-            W = end_of_step_gap(gcc, bb, bd, b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], zero(bb), rho_i, n_minus_1) + (x - xo)
-            slope = one(bb)
-        else                                       # filled: the gap (the start-of-step one, or G(N) under ConsistentGapCoupling)
-            Nv = N[ix, iy]
-            W = end_of_step_gap(gcc, bb, bd, b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], Nv, rho_i, n_minus_1)
-            slope = end_of_step_gap_slope(gcc, bb, bd, b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], Nv, rho_i, n_minus_1, rho_w, ggrav)
-        end
-        b_w[ix, iy]    = W > 0 ? W : zero(bb) # no water, no conductance (compute_b_w!)
-        dbw_dh[ix, iy] = W > 0 ? slope : zero(bb)
+        W, slope = iterate_water(gcc, b[ix, iy], b_dry[ix, iy], h[ix, iy], zb[ix, iy], po[ix, iy], N[ix, iy], stor[ix, iy], stor_up[ix, iy], b_min, b_max,
+                                 rho_w, ggrav, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], rho_i, n_minus_1)
+        b_w[ix, iy]    = W
+        dbw_dh[ix, iy] = slope
     end
     return
 end
@@ -180,7 +185,16 @@ original scheme lags the whole gap.
 store_start_of_step_melt!(::AbstractKFaceScheme, s::State) = s
 store_start_of_step_melt!(::ImplicitUpwind, s::State) = (copyto!(s.mdot0, s.mdot); s)
 
-@parallel_indices (ix, iy) function limit_regime_crossing_kernel!(h, h_prev, dh_it, b, zb, po, stor, stor_up, rho_w, ggrav, filled_cap)
+# An outflow-only face (compute_face_masks!) is a kink of the head row like the bed: its flux is K (h - hb)/dx while
+# h >= hb and 0 below. Stop an iterate that crosses the boundary head hb there, the face closed on the way down and open
+# on the way up, so that each linear solve sees the face in the state it ends in.
+@inline function stop_at_boundary_head(hn, hp, hb, ins)
+    hp >= hb && hn < hb && return hb - ins # open -> closed: stop just below the boundary head
+    hp < hb && hn > hb && return hb        # closed -> open: stop at it
+    return hn
+end
+
+@parallel_indices (ix, iy) function limit_regime_crossing_kernel!(h, h_prev, dh_it, b, zb, po, stor, stor_up, rho_w, ggrav, filled_cap, mask, land, ocean)
     if ix <= size(h, 1) && iy <= size(h, 2)
         hn, hp, z = h[ix, iy], h_prev[ix, iy], zb[ix, iy]
         ins = max(1e-6 * b[ix, iy], 64 * eps(abs(z) + one(z))) # a step inside the new regime, keeping W ~ b
@@ -200,6 +214,12 @@ store_start_of_step_melt!(::ImplicitUpwind, s::State) = (copyto!(s.mdot0, s.mdot
             hp <= ho && hn > ho && (hn = ho + ins) # filled -> uplifted
             hp > ho && hn < ho && (hn = ho)        # uplifted -> filled
             hp > ho && (hn = min(hn, hp + (bc + hp - ho))) # within uplifted: the water depth at most doubles per iteration
+        end
+        if (land || ocean) && mask[ix, iy] == GROUNDED # outflow-only LAND/OCEAN faces (compute_face_masks!): open while h >= the boundary head
+            ix > 1          && closes_inflow(mask[ix-1, iy], land, ocean) && (hn = stop_at_boundary_head(hn, hp, h[ix-1, iy], ins))
+            ix < size(h, 1) && closes_inflow(mask[ix+1, iy], land, ocean) && (hn = stop_at_boundary_head(hn, hp, h[ix+1, iy], ins))
+            iy > 1          && closes_inflow(mask[ix, iy-1], land, ocean) && (hn = stop_at_boundary_head(hn, hp, h[ix, iy-1], ins))
+            iy < size(h, 2) && closes_inflow(mask[ix, iy+1], land, ocean) && (hn = stop_at_boundary_head(hn, hp, h[ix, iy+1], ins))
         end
         d, dl = hn - hp, dh_it[ix, iy]
         d * dl < 0 && abs(d) > abs(dl) / 2 && (hn = hp + copysign(abs(dl) / 2, d)) # step reverses without contracting: at most half the previous one
@@ -248,7 +268,7 @@ creep term is steep in `N`, is left unchanged.
 """
 limit_regime_crossing!(::AbstractKFaceScheme, s::State, h_prev, p::ModelParameters, gc::AbstractGapCoupling = ExplicitGapCoupling()) = s
 limit_regime_crossing!(::ImplicitUpwind, s::State, h_prev, p::ModelParameters, gc::AbstractGapCoupling = ExplicitGapCoupling()) =
-    (@parallel limit_regime_crossing_kernel!(s.h, h_prev, s.dh_it, s.b, s.zb, s.po, s.stor, s.stor_up, p.rho_w, p.g, gc isa SchemeGapUpdate); s)
+    (@parallel limit_regime_crossing_kernel!(s.h, h_prev, s.dh_it, s.b, s.zb, s.po, s.stor, s.stor_up, p.rho_w, p.g, gc isa SchemeGapUpdate, s.mask, p.outflow_only_land, p.outflow_only_ocean); s)
 
 @parallel_indices (ix, iy) function limit_filled_step_kernel!(h, h_prev, dh_it, mask, zb, po, rho_w, ggrav)
     if ix <= size(h, 1) && iy <= size(h, 2) && mask[ix, iy] == GROUNDED
@@ -311,6 +331,26 @@ after a Picard loop that did not converge. A no-op under [`FilledCavities`](@ref
 """
 clamp_b_empty!(s::State, ::FilledCavities) = s
 clamp_b_empty!(s::State, ::UnfilledCavities) = (@parallel clamp_b_empty_kernel!(s.b_empty, s.b); s)
+
+# Per GROUNDED cell: the head row's end-of-step water minus the water the fluxes and sources leave, w_old + dt (mdot/rho_w
+# + ieb - div q), as update_b_empty_budget! takes it (water_converged, elliptic_solver.jl). The row's water is that of
+# compute_b_w_iterate! but with the current melt rate: s.b_w takes the gap's melt opening from the start of the step (mdot0).
+# With `relative`, divided by the sum of the magnitudes of the cell's terms, the scale of its round-off.
+@parallel_indices (ix, iy) function water_budget_residual_kernel!(r, relative, mask, w_old, q_x, q_y, mdot, ieb, dx, dy, dt, rho_w, b, h, zb, po, N, stor, stor_up, b_min, b_max, ggrav, gc, beta, abs_ub, A_visc, rho_i, n_minus_1, b_dry, bump)
+    if ix <= size(r, 1) && iy <= size(r, 2)
+        if mask[ix, iy] == GROUNDED
+            div = (q_x[ix+1, iy] - q_x[ix, iy]) / dx + (q_y[ix, iy+1] - q_y[ix, iy]) / dy
+            W, _ = iterate_water(cell_gap(gc, bump[ix, iy]), b[ix, iy], b_dry[ix, iy], h[ix, iy], zb[ix, iy], po[ix, iy], N[ix, iy], stor[ix, iy], stor_up[ix, iy],
+                                 b_min, b_max, rho_w, ggrav, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], rho_i, n_minus_1)
+            res = W - (w_old[ix, iy] + dt * (mdot[ix, iy] / rho_w + ieb[ix, iy] - div))
+            scale = W + abs(w_old[ix, iy]) + dt * (abs(mdot[ix, iy] / rho_w) + abs(ieb[ix, iy]) + (abs(q_x[ix+1, iy]) + abs(q_x[ix, iy])) / dx + (abs(q_y[ix, iy+1]) + abs(q_y[ix, iy])) / dy)
+            r[ix, iy] = relative ? res / (scale + floatmin(scale)) : res
+        else
+            r[ix, iy] = zero(dt)
+        end
+    end
+    return
+end
 
 @parallel_indices (ix, iy) function update_b_empty_budget_kernel!(b_empty, mask, b, w_old, q_x, q_y, mdot, ieb, dx, dy, dt, rho_w, b_uplift, stor_up, h, zb, po, ggrav)
     if ix <= size(b_empty, 1) && iy <= size(b_empty, 2)

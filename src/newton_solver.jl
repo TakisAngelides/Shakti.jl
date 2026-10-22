@@ -267,7 +267,7 @@ Solves the nonlinear elliptic head equation via [`NewtonJFNKSolver`](@ref) -- th
 """
 function elliptic_solver!(ns::NewtonJFNKSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms,
                            kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping(),
-                           ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling()) # gc: only ExplicitGapCoupling (Simulation refuses another)
+                           ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), wdt = 0) # gc: only ExplicitGapCoupling (Simulation refuses another); wdt: the water test of the Picard loop, unused
     Newton_loop!(ns, state, grid, p, mt, kfs, sl; cnc, ds)
 end
 

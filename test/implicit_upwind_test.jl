@@ -359,4 +359,32 @@
             @test all(0 .< NP .< 1) # a filled sheet, neither at the bed nor at the overburden head
         end
 
+        @testset "thin ice with hollows at dt = 1 day (tol = $tol)" for tol in (1e-6, 1e-8)
+            # 50 to 250 m of ice on a bumpy bed: hollows by the outlet (below the LAND head) and inland fill with water while
+            # their filled rows are nearly flat in N. The head test alone accepted iterates parked at a stop of
+            # limit_regime_crossing! (water created and lost, up to 100 times the melt) or cycled to the iteration cap
+            # (an outflow-only face opening and closing, a block of filled cells moving together). The boundary-head stop, the
+            # stall damping and the water test of the Picard loop converge every step and close the budget.
+            nx, ny = 40, 12
+            grid = Grid(nx, ny, 3.9e3, 1.1e3)
+            x, y = Array(grid.x), Array(grid.y)
+            zb = [0.05 * xi + 15 * sin(2pi * xi / 800) * cos(pi * yj / 1100) for xi in x, yj in y]
+            H  = [50 + 200 * sqrt(xi / x[end]) for xi in x, yj in y]
+            mask = fill(GROUNDED, nx, ny); mask[1, :] .= LAND
+            p = ModelParameters()
+            state = State(grid)
+            set_initial_conditions!(state, grid, p, sl, mask, fill(2.4e-24, nx, ny), zb, zb .+ H, fill(1e-3, nx, ny), fill(0.06, nx, ny),
+                                    fill(30.0 / (365 * 86400), nx + 1, ny), zeros(nx, ny + 1), zeros(nx, ny), zeros(nx + 1, ny), zeros(nx, ny + 1))
+            sim = Simulation(grid, state, 1, floattype(86400.0), p, "fully_implicit", String[], ConstantMeltInput(), sl;
+                             ps = PicardSolver(500, floattype(tol), LUDirectSolver(grid), grid), cavity_filling = UnfilledCavities(),
+                             uplift = IceUplift(), k_face_choice = "implicit_upwind", gap_coupling = ConsistentGapCoupling())
+            g = grounded(sim)
+            for _ in 1:20
+                W_old = water(sim.state)
+                step!(sim)
+                @test first(Shakti.picard_status(sim.hs))
+                @test maximum(abs, budget_residual(sim, W_old)[g]) < 1e-9 * maximum(abs, Array(sim.state.mdot)[g] ./ p.rho_w)
+            end
+        end
+
     end

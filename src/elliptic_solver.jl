@@ -332,8 +332,45 @@ regularized Coulomb law, linear law, or prescribed by the user. The `ds` keyword
 channel-wall diffusion coefficient `D` is refreshed every Picard iteration ([`WithDiffusion`](@ref) recomputes it
 from the current `q`/`∇h`/`∇P_w`; `NoDiffusion` skips it entirely).
 """
-function elliptic_solver!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
-    Picard_loop!(ps, state, grid, p, mt, kfs, sl; cnc, ds, gc)
+function elliptic_solver!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), wdt = 0)
+    Picard_loop!(ps, state, grid, p, mt, kfs, sl; cnc, ds, gc, wdt)
+end
+
+# Stall damping of the Picard loops: when the largest head update has not fallen below its smallest value so far for
+# STALL_ITERS checks, the iteration is cycling (at a kink of the head rows that the per-cell limits of
+# limit_regime_crossing! do not catch, e.g. a block of filled cells whose heads move together), and the step factor halves,
+# down to MIN_STALL_FACTOR. A converging iteration never triggers it.
+const STALL_ITERS = 20
+const MIN_STALL_FACTOR = 1 / 8
+function stall_damping(ω, best, since, dh)
+    dh < best && return ω, dh, 0
+    since + 1 < STALL_ITERS && return ω, best, since + 1
+    return max(ω / 2, MIN_STALL_FACTOR), dh, 0
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Second convergence test of [`Picard_loop!`](@ref), on the water instead of the head: every `GROUNDED` cell's end-of-step
+water depth from its head row ([`compute_b_w_iterate!`](@ref)'s, with the current melt rate) must match the water its fluxes and sources
+leave it, `w_old + dt (mdot/rho_w + ieb - div q)` ([`update_b_empty_budget!`](@ref)), to `tol` times the sum of the
+magnitudes of the cell's terms (its water then and before, and `dt` times its sources and face fluxes: the scale of the
+balance's round-off) but no less than `WATER_TOL_FLOOR` = 1e-8, or to `atol` metres of water when `atol > 0`. `wdt` is the time step, 0 to skip the test: it applies
+where the head rows conserve exactly `b_w` ([`ImplicitUpwind`](@ref), [`ConsistentGapCoupling`](@ref),
+[`UnfilledCavities`](@ref), see `water_check_dt` in `run.jl`). The head test alone passes wherever a limit of
+[`limit_regime_crossing!`](@ref) stops the iterate, since the head then hardly moves, although the rows are not solved
+there: on a thin-ice slab (1-day steps) such steps created and destroyed up to 100 times the melt (code guide, pitfalls).
+The test also does not depend on the elevation of the bed, as the relative head test does.
+"""
+# The water test asks for no less than this (relative to the cell's terms): the coupled iteration levels off at about 1e-9
+# of them (thin-ice slab, ImplicitUpwind, dt = 1 h), while the iterates it must reject are off by 0.1 to 1.
+const WATER_TOL_FLOOR = 1e-8
+function water_converged(ps::PicardSolver, s::State, g::Grid, p::ModelParameters, gc::AbstractGapCoupling, wdt)
+    wdt > 0 || return true
+    @parallel water_budget_residual_kernel!(ps.delta_h, ps.atol == 0, s.mask, s.w_old, s.q_x, s.q_y, s.mdot, s.ieb, g.dx, g.dy, floattype(wdt), p.rho_w, s.b, s.h, s.zb, s.po, s.N,
+                                            s.stor, s.stor_up, p.b_min, p.b_max, p.g, gc, s.beta, s.abs_ub, s.A_visc, p.rho_i, p.n_minus_1_exp, s.b_dry, s.bump)
+    r_max = mapreduce(abs, max, ps.delta_h; init = zero(eltype(ps.delta_h)))
+    return ps.atol > 0 ? r_max < ps.atol : r_max < max(ps.tol, WATER_TOL_FLOOR, 100 * eps(eltype(ps.delta_h)))
 end
 
 """
@@ -344,7 +381,7 @@ Repeatedly calls [`Picard_iteration!`](@ref) (up to `ps.iters` times), checking 
 (`max|delta_h| / (max|h| + eps) < ps.tol`, or `max|delta_h| < ps.atol` when `ps.atol > 0`, see
 [`head_converged`](@ref)), and sets `ps.converged`/`ps.last_iter` accordingly.
 """
-function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
+function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), wdt = 0)
 
     s = state
 
@@ -353,13 +390,14 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
     ps.last_iter = 0
     reset_relaxation!(ps.hr) # no-op except for AndersonHeadRelaxation, whose history is only valid within one timestep's fixed-point map
     npol = 0 # donor polishing rounds this step (polish_donors!, ImplicitUpwind)
+    ω, best, since = 1.0, Inf, 0 # stall damping: the step factor, the smallest update so far and the iterations since it
 
     @inbounds for iter in 1:ps.iters # start the Picard loop
 
         # Store previous head for convergence check
         @. ps.h_prev = s.h
 
-        Picard_iteration!(ps.ls, ps.hr, state, grid, p, mt, kfs, sl, ps.h_prev; cnc, ds, gc) # run one linear solve to update h and the relevant fields
+        Picard_iteration!(ps.ls, ps.hr, state, grid, p, mt, kfs, sl, ps.h_prev; cnc, ds, gc, ω) # run one linear solve to update h and the relevant fields
 
         @. ps.delta_h = s.h - ps.h_prev
 
@@ -370,7 +408,8 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
             # call -- confirmed via Profile.Allocs to allocate ~1.3MB/call at a ~200x400 grid, pure waste since check_every=1's own comment already establishes there's no GPU sync to
             # amortize on the Threads backend. NOT the cause of a separate, much larger long-run memory leak also found on this workload (traced instead to a Julia SparseArrays/CHOLMOD
             # ldiv! bug, JuliaSparse/SparseArrays.jl#726, unrelated to this call) -- this fix reduces allocation/GC pressure, nothing more.
-            delta_h_max = raw_update_max(ps.hr, ps.delta_h) # the UNrelaxed update, see raw_update_max
+            delta_h_max = raw_update_max(ps.hr, ps.delta_h) / ω # the UNrelaxed update, see raw_update_max
+            ω, best, since = stall_damping(ω, best, since, delta_h_max)
             h_max = mapreduce(abs, max, s.h; init = zero(eltype(s.h)))
             if head_converged(delta_h_max, h_max, ps.tol, ps.atol)
                 if npol < MAX_DONOR_POLISH_ROUNDS && polish_donors!(kfs, s) > 0 # faces left frozen downstream: refrozen, iterate on
@@ -378,6 +417,7 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
                     refresh_head_dependents!(s, grid, p, mt, kfs, sl; cnc, ds, gc)
                     continue
                 end
+                water_converged(ps, s, grid, p, gc, wdt) || continue # the head stands still but a row is not solved: a stop of limit_regime_crossing!
                 ps.converged = true
                 ps.last_iter = iter
                 return
@@ -433,10 +473,11 @@ One Picard iteration: solves the linearized system for a new `h` ([`solve_ellipt
 optionally relaxes it ([`relax_h!`](@ref)), then refreshes every field that depends on the new `h`
 via [`refresh_head_dependents!`](@ref) so the next iteration's linearization is consistent.
 """
-function Picard_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation, s::State, g::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, h_prev; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
+function Picard_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation, s::State, g::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, h_prev; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), ω = 1)
 
     solve_elliptic_linear_system!(ls, s, g, p, kfs, ds, gc) # update the h field, including the -div(D*grad(b)) source term under WithDiffusion
     relax_h!(hr, s, h_prev) # update the h field again according to the relaxation parameter, damp the raw Picard update before anything downstream of h is recomputed, so the next iteration's coefficients are consistent with the relaxed h
+    ω < 1 && (@. s.h = h_prev + ω * (s.h - h_prev)) # stall damping of Picard_loop!, 1 unless the iteration stopped making progress; before the limits, so that a stop at a regime boundary stays exact
     limit_regime_crossing!(kfs, s, h_prev, p, gc) # ImplicitUpwind: stop at the bed/overburden head when crossing it (unfilled_cavities.jl); no-op otherwise
     limit_filled_step!(kfs, gc, s, h_prev, p) # dry floor, other K-face schemes: |dN| per iteration limited (unfilled_cavities.jl); no-op otherwise
 

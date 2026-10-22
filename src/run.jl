@@ -287,8 +287,14 @@ Solves for the new hydraulic head under [`EllipticHeadScheme`](@ref): runs the P
 solve (`sim.mi`'s melt input for the current time was already refreshed by [`step!`](@ref)).
 """
 function step_h!(hs::EllipticHeadScheme, sim::Simulation)
-    elliptic_solver!(hs.ps, sim.state, sim.grid, sim.p, sim.mt, sim.kfs, sim.sl; cnc = sim.cnc, ds = sim.ds, gc = gap_coupling_terms(sim))
+    elliptic_solver!(hs.ps, sim.state, sim.grid, sim.p, sim.mt, sim.kfs, sim.sl; cnc = sim.cnc, ds = sim.ds, gc = gap_coupling_terms(sim), wdt = water_check_dt(sim))
 end
+
+# The time step for the water test of the Picard loop (water_converged, elliptic_solver.jl), 0 where it does not apply: the
+# head rows conserve exactly the conductance's water depth b_w only under ImplicitUpwind with ConsistentGapCoupling, and
+# the water at the start of the step (w_old) is kept only under UnfilledCavities; CellNClamping's held rows conserve nothing.
+water_check_dt(sim::Simulation) = sim.kfs isa ImplicitUpwind && sim.gcp isa ConsistentGapCoupling && sim.cf isa UnfilledCavities &&
+                                  sim.cnc isa NoCellNClamping ? sim.dt[] : zero(sim.dt[])
 
 """
 $(TYPEDSIGNATURES)
