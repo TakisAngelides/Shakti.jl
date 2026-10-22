@@ -180,11 +180,16 @@ original scheme lags the whole gap.
 store_start_of_step_melt!(::AbstractKFaceScheme, s::State) = s
 store_start_of_step_melt!(::ImplicitUpwind, s::State) = (copyto!(s.mdot0, s.mdot); s)
 
-@parallel_indices (ix, iy) function limit_regime_crossing_kernel!(h, h_prev, dh_it, b, zb, po, stor, stor_up, rho_w, ggrav)
+@parallel_indices (ix, iy) function limit_regime_crossing_kernel!(h, h_prev, dh_it, b, zb, po, stor, stor_up, rho_w, ggrav, filled_cap)
     if ix <= size(h, 1) && iy <= size(h, 2)
         hn, hp, z = h[ix, iy], h_prev[ix, iy], zb[ix, iy]
         ins = max(1e-6 * b[ix, iy], 64 * eps(abs(z) + one(z))) # a step inside the new regime, keeping W ~ b
         bc = b[ix, iy]
+        rg = rho_w * ggrav
+        if filled_cap && (stor[ix, iy] > 0 || stor_up[ix, iy] > 0) && !(stor[ix, iy] > 0 && hp < z) && !(stor_up[ix, iy] > 0 && hp > z + po[ix, iy] / rg)
+            cap = max(max(abs(po[ix, iy] - rg * (hp - z)) / 2, po[ix, iy] / 4) / rg, one(hn)) # from a filled cell: |dN| <= max(|N|/2, po/4), as limit_filled_step!
+            hn = clamp(hn, hp - cap, hp + cap)
+        end
         if stor[ix, iy] > 0
             hp >= z && hn < z && (hn = z - ins) # filled -> unfilled: stop just below the bed (the unfilled row next)
             hp < z && hn > z && (hn = z)        # unfilled -> filled: stop at the bed (the filled row next)
@@ -232,10 +237,18 @@ cycles, at a kink of the row (the bed or the overburden head, where the slope of
 upwind donor flips), and there it brackets the root and halves the bracket each iteration, as bisection does (seen on
 Drang Drung at dt = 24 h: a cell just below the bed whose Newton step from W = b empties three quarters of the gap, and
 from there refills it, every iteration). The previous steps (`s.dh_it`) are zeroed at the start of each step.
+
+Under [`ConsistentGapCoupling`](@ref) (`gc` a [`SchemeGapUpdate`](@ref)) the step of a filled cell is also capped at
+`|dN| <= max(|N|/2, po/4)`, the cap of [`limit_filled_step!`](@ref). On thick ice the gap update closes a thin gap within
+one step for most `N`, so at `N` near `po` it is nearly flat in `N` and the Newton step of a filled row overshoots by
+kilometres; the iteration then jumped between the bed and the overburden head every iteration (synthetic slab under 1.5 to
+3 km of ice, dt = 1 h: 500 of 500 iterations from step 5, and the water budget off by 10 to 100 times the melt). With the
+cap it converges in 3 to 16 iterations at dt = 1 h and 1 day and closes the budget. [`ExplicitGapCoupling`](@ref), whose
+creep term is steep in `N`, is left unchanged.
 """
-limit_regime_crossing!(::AbstractKFaceScheme, s::State, h_prev, p::ModelParameters) = s
-limit_regime_crossing!(::ImplicitUpwind, s::State, h_prev, p::ModelParameters) =
-    (@parallel limit_regime_crossing_kernel!(s.h, h_prev, s.dh_it, s.b, s.zb, s.po, s.stor, s.stor_up, p.rho_w, p.g); s)
+limit_regime_crossing!(::AbstractKFaceScheme, s::State, h_prev, p::ModelParameters, gc::AbstractGapCoupling = ExplicitGapCoupling()) = s
+limit_regime_crossing!(::ImplicitUpwind, s::State, h_prev, p::ModelParameters, gc::AbstractGapCoupling = ExplicitGapCoupling()) =
+    (@parallel limit_regime_crossing_kernel!(s.h, h_prev, s.dh_it, s.b, s.zb, s.po, s.stor, s.stor_up, p.rho_w, p.g, gc isa SchemeGapUpdate); s)
 
 @parallel_indices (ix, iy) function limit_filled_step_kernel!(h, h_prev, dh_it, mask, zb, po, rho_w, ggrav)
     if ix <= size(h, 1) && iy <= size(h, 2) && mask[ix, iy] == GROUNDED

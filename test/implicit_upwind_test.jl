@@ -332,4 +332,31 @@
             @test_throws ErrorException ramp(kface = "implicit_upwind", solver = :cholesky)
         end
 
+        @testset "ConsistentGapCoupling on thick ice (dt = $dt)" for dt in (3600.0, 86400.0)
+            # 1.5 to 3 km of ice: a 1 mm gap closes within a step at N = po, where the gap update is nearly flat in N and an
+            # unlimited Newton step from a filled cell jumps between the bed and the overburden head every iteration
+            nx, ny = 20, 3
+            grid = Grid(nx, ny, 19e3, 2e3)
+            x = Array(grid.x)
+            zb = repeat(-50.0 .* x ./ x[end], 1, ny)
+            H  = repeat(1500.0 .+ 1500.0 .* sqrt.(x ./ x[end]), 1, ny)
+            mask = fill(GROUNDED, nx, ny); mask[1, :] .= LAND
+            p = ModelParameters()
+            state = State(grid)
+            set_initial_conditions!(state, grid, p, sl, mask, fill(2.4e-24, nx, ny), zb, zb .+ H, fill(1e-3, nx, ny), fill(0.06, nx, ny),
+                                    fill(100.0 / (365 * 86400), nx + 1, ny), zeros(nx, ny + 1), zeros(nx, ny), zeros(nx + 1, ny), zeros(nx, ny + 1))
+            sim = Simulation(grid, state, 1, floattype(dt), p, "fully_implicit", String[], ConstantMeltInput(), sl;
+                             ps = PicardSolver(200, 1e-6, LUDirectSolver(grid), grid), cavity_filling = UnfilledCavities(),
+                             uplift = IceUplift(), k_face_choice = "implicit_upwind", gap_coupling = ConsistentGapCoupling())
+            g = grounded(sim)
+            for _ in 1:4
+                W_old = water(sim.state)
+                step!(sim)
+                @test sim.hs.ps.converged && sim.hs.ps.last_iter < 50
+                @test maximum(abs, budget_residual(sim, W_old)[g]) < 1e-12 * maximum(abs, Array(sim.state.mdot)[g] ./ p.rho_w)
+            end
+            NP = Array(sim.state.N)[g] ./ Array(sim.state.po)[g]
+            @test all(0 .< NP .< 1) # a filled sheet, neither at the bed nor at the overburden head
+        end
+
     end

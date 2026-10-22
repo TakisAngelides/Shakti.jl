@@ -126,7 +126,7 @@ function Parabolic_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxati
 
     solve_parabolic_linear_system!(ls, s, g, p, kfs, dt, h_old, ds, gc)
     relax_h!(hr, s, h_prev)
-    limit_regime_crossing!(kfs, s, h_prev, p) # ImplicitUpwind: stop at the bed/overburden head when crossing it (unfilled_cavities.jl); no-op otherwise
+    limit_regime_crossing!(kfs, s, h_prev, p, gc) # ImplicitUpwind: stop at the bed/overburden head when crossing it (unfilled_cavities.jl); no-op otherwise
 
     refresh_head_dependents!(s, g, p, mt, kfs, sl; cnc, ds, gc)
 
