@@ -135,7 +135,8 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Repeatedly calls [`Parabolic_iteration!`](@ref) (up to `pps.iters` times, at timestep `dt`),
+Repeatedly calls [`Parabolic_iteration!`](@ref) (up to `pps.iters` times, at timestep `dt`, plus the iterations of a
+donor polishing round as in [`Picard_loop!`](@ref)),
 checking convergence every `pps.check_every` iterations via a relative max-norm on the head update
 (`max|delta_h| / (max|h| + eps) < pps.tol`, or `max|delta_h| < pps.atol` when `pps.atol > 0`), and sets `pps.converged`/`pps.last_iter` accordingly
 -- the exact parabolic counterpart of [`Picard_loop!`](@ref). Captures `pps.h_old` from `s.h`
@@ -153,9 +154,12 @@ function Parabolic_loop!(pps::ParabolicPicardSolver, state::State, grid::Grid, p
 
     pps.converged = false
     pps.last_iter = 0
+    reset_relaxation!(pps.hr) # as Picard_loop!: an AndersonHeadRelaxation history is only valid within one time step
     npol = 0 # donor polishing rounds this step (polish_donors!, ImplicitUpwind)
 
-    @inbounds for iter in 1:pps.iters
+    iter, limit = 0, pps.iters # a donor polishing round may extend the limit (below)
+    @inbounds while iter < limit
+        iter += 1
 
         @. pps.h_prev = s.h
 
@@ -163,12 +167,13 @@ function Parabolic_loop!(pps::ParabolicPicardSolver, state::State, grid::Grid, p
 
         @. pps.delta_h = s.h - pps.h_prev
 
-        if iter % pps.check_every == 0 || iter == pps.iters
+        if iter % pps.check_every == 0 || iter == limit
             delta_h_max = raw_update_max(pps.hr, pps.delta_h) # the UNrelaxed update, see raw_update_max (elliptic_solver.jl)
             h_max = mapreduce(abs, max, s.h; init = zero(eltype(s.h)))
             if head_converged(delta_h_max, h_max, pps.tol, pps.atol)
                 if npol < MAX_DONOR_POLISH_ROUNDS && polish_donors!(kfs, s) > 0 # faces left frozen downstream: refrozen, iterate on
                     npol += 1
+                    limit = max(limit, iter + pps.check_every) # the head converged: the polish gets its iterations even past pps.iters
                     refresh_head_dependents!(s, grid, p, mt, kfs, sl; cnc, ds, gc)
                     continue
                 end
@@ -180,7 +185,7 @@ function Parabolic_loop!(pps::ParabolicPicardSolver, state::State, grid::Grid, p
 
     end
 
-    pps.last_iter = pps.iters
+    pps.last_iter = iter
     return
 
 end

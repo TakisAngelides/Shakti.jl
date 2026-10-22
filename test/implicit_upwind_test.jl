@@ -313,6 +313,13 @@
             @test Shakti.polish_donors!(ImplicitUpwind(), sim.state) == 1
             @test Array(sim.state.don_x)[k] == Shakti.DONOR_REFROZEN * sign(dh[k])
             @test Shakti.polish_donors!(Upwind(), sim.state) == 0
+            # a polish on the last allowed iteration is re-solved past ps.iters and reports converged (it reported
+            # converged = false): one iteration allowed, a tolerance any head meets, a face frozen downstream again
+            dx_[k] = -5 * sign(dh[k]); copyto!(sim.state.don_x, dx_)
+            ps1 = PicardSolver(1, 1.0, LUDirectSolver(sim.grid), sim.grid)
+            Picard_loop!(ps1, sim.state, sim.grid, sim.p, sim.mt, sim.kfs, sim.sl)
+            @test ps1.converged && ps1.last_iter == 2
+            @test Array(sim.state.don_x)[k] != dx_[k] # polished
         end
 
         @testset "absolute Picard tolerance (atol, metres of head)" begin

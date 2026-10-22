@@ -377,7 +377,8 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Repeatedly calls [`Picard_iteration!`](@ref) (up to `ps.iters` times), checking convergence every
+Repeatedly calls [`Picard_iteration!`](@ref) (up to `ps.iters` times; a donor polishing round of [`ImplicitUpwind`](@ref)
+after the head converged adds up to `ps.check_every` more, so a polish on the last iteration is still re-solved), checking convergence every
 `ps.check_every` iterations via a relative max-norm on the head update
 (`max|delta_h| / (max|h| + eps) < ps.tol`, or `max|delta_h| < ps.atol` when `ps.atol > 0`, see
 [`head_converged`](@ref)), and sets `ps.converged`/`ps.last_iter` accordingly.
@@ -395,7 +396,9 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
 
     solve_gap_iterate!(gc, ds, s, grid, p) # the gap the first head rows store (refresh_head_dependents! keeps it current after each solve)
 
-    @inbounds for iter in 1:ps.iters # start the Picard loop
+    iter, limit = 0, ps.iters # a donor polishing round may extend the limit (below)
+    @inbounds while iter < limit # start the Picard loop
+        iter += 1
 
         # Store previous head for convergence check
         @. ps.h_prev = s.h
@@ -404,7 +407,7 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
 
         @. ps.delta_h = s.h - ps.h_prev
 
-        if iter % ps.check_every == 0 || iter == ps.iters
+        if iter % ps.check_every == 0 || iter == limit
             # The convergence check uses the maximum difference between h and h_prev normalized by the maximum value of h to compare to the tolerance and stop the Picard loop if reached
             # Two separate single-array mapreduce calls, NOT one fused two-array mapreduce(f, op, A, B) as this used to be: mapreduce over a SINGLE array is Julia's genuinely non-allocating
             # streaming reduction, but the two-array form silently falls back to map+collect(zip(...)) internally, materializing a full temporary array of (delta_h, h) tuples every single
@@ -417,6 +420,7 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
             if head_converged(delta_h_max, h_max, ps.tol, ps.atol)
                 if npol < MAX_DONOR_POLISH_ROUNDS && polish_donors!(kfs, s) > 0 # faces left frozen downstream: refrozen, iterate on
                     npol += 1
+                    limit = max(limit, iter + ps.check_every) # the head converged: the polish gets its iterations even past ps.iters
                     refresh_head_dependents!(s, grid, p, mt, kfs, sl; cnc, ds, gc)
                     continue
                 end
@@ -429,7 +433,7 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
 
     end
 
-    ps.last_iter = ps.iters
+    ps.last_iter = iter
     return
 
 end
