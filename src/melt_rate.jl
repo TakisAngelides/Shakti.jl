@@ -42,6 +42,11 @@ struct MeltTerms{Geothermal,Frictional,Potential,Sensible,Conductive} end
 # valid every Picard iteration for anyone reading them (when the
 # corresponding MeltTerms flag is on -- see compute_mdot_kernel! below).
 
+# The frictional heat takes each component as the mean of its two faces, also at a face to an OCEAN/LAND cell, unlike the
+# dissipation terms (face_heat_share below): it is a heat density of the grounded bed, not the energy released along the
+# path between two cell centres. Its stress at that face is already the grounded cell's (face_x/face_y, sliding_law.jl),
+# so the mean holds the grounded value up to the face, and beyond it (floating ice, land) there is no friction to credit.
+# With uniform sliding the mean gives u_b.taub exactly; the full share of face_heat_share would give 1.5 times it.
 @parallel_indices (ix, iy) function compute_shear_kernel!(Q_b, ub_x, taub_x, ub_y, taub_y)
     if ix <= size(Q_b, 1) && iy <= size(Q_b, 2)
         Q_b[ix, iy] = abs((ub_x[ix+1, iy]*taub_x[ix+1, iy] + ub_x[ix, iy]*taub_x[ix, iy]) / 2 +
