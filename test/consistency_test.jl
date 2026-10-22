@@ -188,6 +188,30 @@
             @test Array(sim.state.N)[3, 3] == 1.0
         end
 
+        @testset "AdaptiveTimeStep: the percentile follows mask changes, and no short last step" begin
+            state = State(grid)
+            p = ModelParameters(e_v = 0.0)
+            set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b0, G, ub_x, ub_y, ieb, taub_x, taub_y)
+            ts = AdaptiveTimeStep(grid, state; use_percentile = true, safety_factor = 1e9, dt_min = 1000.0, dt_max = 3000.0, target_time = 6500.0)
+            sim = Simulation(grid, state, 10, floattype(3000.0), p, "implicit", String[], ConstantMeltInput(), sl;
+                             ps = PicardSolver(200, floattype(1e-8), CholeskyDirectSolver(grid), grid), timestep_scheme = ts)
+            # the grounded set after freezing cells, not the one at construction
+            fm = falses(size(mask)); fm[2:3, 2:4] .= Array(sim.state.mask)[2:3, 2:4] .== GROUNDED
+            freeze_cells!(sim, fm)
+            Shakti.update_dt!(sim)
+            rate, g = Array(ts.rate_field), Array(sim.state.mask) .== GROUNDED
+            @test all(rate[.!g] .== -Inf)
+            vals = sort(rate[g]); n = length(vals)
+            @test Shakti.rate_statistic(ts.rate_field, ts) == vals[clamp(round(Int, ts.percentile * n), 1, n)]
+            # dt is dt_max (safety_factor huge); 6500 s used to end 3000, 3000, 500 (below dt_min), now 3000, 2500, 1000
+            dts = Float64[]
+            while sim.total_time[] < ts.target_time
+                step!(sim); push!(dts, sim.dt[]); sim.total_time[] += sim.dt[] # as run! does
+            end
+            @test dts == [3000.0, 2500.0, 1000.0]
+            @test sim.total_time[] == ts.target_time
+        end
+
         @testset "Chebyshev (Gershgorin bounds) and matrix-free CG agree with Cholesky" begin
             ref = fresh_sim(; order = 0)
             for _ in 1:3; step!(ref); end

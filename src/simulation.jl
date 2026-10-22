@@ -121,7 +121,7 @@ current step's `N` before solving it) -- the same lagged-coefficient idiom alrea
 `s.beta` in [`ImplicitGapScheme`](@ref).
 
 Build with the [`AdaptiveTimeStep(grid, state; ...)`](@ref) convenience constructor below, not
-this one directly -- it sizes `rate_field`/`scratch`/`grounded_indices` correctly.
+this one directly -- it sizes `rate_field`/`host_rate`/`scratch` correctly.
 """
 struct AdaptiveTimeStep{UsePercentile, F} <: AbstractTimeStepScheme
     safety_factor::F
@@ -131,8 +131,7 @@ struct AdaptiveTimeStep{UsePercentile, F} <: AbstractTimeStepScheme
     target_time::F                # physical duration to run for; run! breaks out of its tsteps loop once total_time[] reaches this
     rate_field::AbstractMatrix{F} # preallocated once (same backend as State), holds C+gamma per cell each step
     host_rate::Vector{F}          # preallocated once, CPU-side; empty when UsePercentile=false. Bridges a possibly-GPU-resident rate_field via one bulk copyto! (CUDA.jl/Metal.jl's real device->host transfer -- scalar-indexing a GPU array per grounded cell would be illegal/catastrophically slow, see checkpoint.jl's own note on this)
-    scratch::Vector{F}            # preallocated once; empty when UsePercentile=false. Gathered from host_rate via grounded_indices, then sorted in place each step
-    grounded_indices::Vector{Int} # linear indices of GROUNDED cells into rate_field, precomputed once from the (static) mask; empty when UsePercentile=false
+    scratch::Vector{F}            # preallocated once (one slot per cell); empty when UsePercentile=false. Each step gathers the grounded cells' rates (the cells compute_dt_rate_kernel! did not mark -Inf, so the mask as it is now) and sorts them in place
 end
 
 """
@@ -157,18 +156,18 @@ Builds an [`AdaptiveTimeStep`](@ref), sizing its scratch buffers from `grid`/`st
   so a `target_time`-based run takes at most `ceil((target_time-total_time)/dt_min)` steps -- pass
   that same bound as `tsteps` when constructing the [`Simulation`](@ref).
 - `target_time`: the physical duration (seconds) this run is meant to cover -- the final step is
-  clipped to land exactly on it rather than overshoot.
+  clipped to land exactly on it rather than overshoot, and the step before it is shortened when the
+  remainder would otherwise be less than `dt_min` (see [`update_dt!`](@ref)).
 """
 function AdaptiveTimeStep(grid::Grid, state::State; use_percentile::Bool = false, safety_factor, percentile = 0.75, dt_min, dt_max, target_time)
     F = eltype(state.N)
     rate_field = initialize_center_field(grid)
     if use_percentile
-        grounded_indices = findall(vec(Array(state.mask)) .== GROUNDED)
         host_rate = Vector{F}(undef, length(rate_field))
-        scratch = Vector{F}(undef, length(grounded_indices))
-        return AdaptiveTimeStep{true, F}(F(safety_factor), F(percentile), F(dt_min), F(dt_max), F(target_time), rate_field, host_rate, scratch, grounded_indices)
+        scratch = Vector{F}(undef, length(rate_field)) # every cell, so the grounded set may change during the run (set_mask!, freezing)
+        return AdaptiveTimeStep{true, F}(F(safety_factor), F(percentile), F(dt_min), F(dt_max), F(target_time), rate_field, host_rate, scratch)
     else
-        return AdaptiveTimeStep{false, F}(F(safety_factor), F(percentile), F(dt_min), F(dt_max), F(target_time), rate_field, F[], F[], Int[])
+        return AdaptiveTimeStep{false, F}(F(safety_factor), F(percentile), F(dt_min), F(dt_max), F(target_time), rate_field, F[], F[])
     end
 end
 

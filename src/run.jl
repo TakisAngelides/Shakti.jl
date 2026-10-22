@@ -275,7 +275,10 @@ previous step's converged `N`/`u_b` -- into `ts.rate_field` via [`compute_dt_rat
 reduces that field to a single statistic ([`rate_statistic`](@ref), dispatched on
 `AdaptiveTimeStep`'s `UsePercentile` type parameter), then sets
 `sim.dt[] = clamp(safety_factor/stat, dt_min, dt_max)`, clipped further so the final step lands
-exactly on `target_time` rather than overshooting it.
+exactly on `target_time` rather than overshooting it. When the time left after this step would be
+less than `dt_min`, this step is shortened so the last one is exactly `dt_min`; with less than
+`2dt_min` left it takes all of it (at most `dt_max`; beyond that, two halves). So no step falls below
+`dt_min` unless less than `dt_min` was left to begin with or `dt_max < 2dt_min`.
 """
 update_dt!(sim::Simulation) = update_dt!(sim, sim.ts)
 update_dt!(sim::Simulation, ::FixedTimeStep) = sim
@@ -286,7 +289,14 @@ function update_dt!(sim::Simulation, ts::AdaptiveTimeStep)
     stat = rate_statistic(ts.rate_field, ts)
     dt = stat > 0 ? ts.safety_factor / stat : ts.dt_max # stat<=0 means no grounded cell has a positive rate (e.g. all N<=0) -- fall back to dt_max rather than dividing by zero/a negative
     dt = clamp(dt, ts.dt_min, ts.dt_max)
-    dt = min(dt, ts.target_time - sim.total_time[]) # clip the final step to land exactly on target_time instead of overshooting it
+    rem = ts.target_time - sim.total_time[]
+    if rem <= dt
+        dt = rem # the final step lands exactly on target_time instead of overshooting it
+    elseif rem - dt < ts.dt_min
+        dt = rem - ts.dt_min >= ts.dt_min ? rem - ts.dt_min : # leave exactly dt_min for the last step
+             rem <= ts.dt_max             ? rem :             # less than 2dt_min left: take it all now
+                                            rem / 2           # ... unless that exceeds dt_max (only when dt_max < 2dt_min)
+    end
     sim.dt[] = dt
     return sim
 end
@@ -300,25 +310,29 @@ maximum -- a single GPU-native reduction, no allocation, fully conservative (gov
 single fastest-relaxing cell). `UsePercentile=true`: one bulk `copyto!` of `rate` into
 `ts.host_rate` (CUDA.jl/Metal.jl's real device->host transfer -- scalar-indexing `rate` directly
 per grounded cell would be illegal/catastrophically slow on a GPU backend), then a plain CPU loop
-gathers the `GROUNDED`-cell values (precomputed indices) into `ts.scratch`, sorts it in place, and
-indexes the `ts.percentile`-th entry. None of this allocates -- every buffer is preallocated once
-by [`AdaptiveTimeStep`](@ref)'s constructor. Returns `0` outright if there are no `GROUNDED` cells
-at all (an empty `ts.grounded_indices`, fixed at construction) -- `ts.scratch` would be empty too,
-so indexing it would otherwise throw; `0` feeds the same `stat <= 0 -> dt_max` fallback
-[`update_dt!`](@ref) already uses for "no cell has a positive rate" under `UsePercentile=false`.
+gathers the `GROUNDED`-cell values (those [`compute_dt_rate_kernel!`](@ref) did not mark `-Inf`,
+so the grounded set follows mask changes during the run) into `ts.scratch`, sorts them in place,
+and indexes the `ts.percentile`-th entry. None of this allocates -- every buffer is preallocated
+once by [`AdaptiveTimeStep`](@ref)'s constructor. Returns `0` outright if there are no `GROUNDED`
+cells, which feeds the same `stat <= 0 -> dt_max` fallback [`update_dt!`](@ref) uses for "no cell
+has a positive rate" (the maximum of an all-`-Inf` field is `-Inf`, so `UsePercentile=false` falls
+back the same way).
 """
 rate_statistic(rate, ts::AdaptiveTimeStep{false}) = maximum(rate)
 
 function rate_statistic(rate, ts::AdaptiveTimeStep{true})
-    n = length(ts.grounded_indices)
-    n == 0 && return zero(eltype(ts.scratch))
     copyto!(ts.host_rate, rate)
-    for i in 1:n
-        ts.scratch[i] = ts.host_rate[ts.grounded_indices[i]]
+    n = 0
+    for r in ts.host_rate
+        r == -Inf && continue # not grounded
+        n += 1
+        ts.scratch[n] = r
     end
-    sort!(ts.scratch)
+    n == 0 && return zero(eltype(ts.scratch))
+    grounded = view(ts.scratch, 1:n)
+    sort!(grounded)
     idx = clamp(round(Int, ts.percentile * n), 1, n)
-    return ts.scratch[idx]
+    return grounded[idx]
 end
 
 """
