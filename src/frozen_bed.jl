@@ -33,7 +33,7 @@ Freezes every cell where `freeze_mask` is `true` and currently `GROUNDED` to
 is harmless, not an error).
 
 Sets `b:=0` and `pw:=0` on those cells, then refreshes everything that depends on `s.mask`/`s.b`/
-`s.pw`: `s.h` via [`compute_h!`](@ref) (`pw=0` gives `h=zb` exactly), `s.K` via
+`s.pw`: `s.h = zb` on those cells (`pw = 0`; the other cells keep their head), `s.K` via
 [`compute_K!`](@ref) (`b=0` gives `K=0` exactly), `s.valid_x`/`s.valid_y` via
 [`compute_face_masks!`](@ref), and
 `s.N` via [`compute_N!`](@ref) -- which, per `FROZEN_BED`'s own convention, evaluates to `po - 0
@@ -42,7 +42,10 @@ deliberately -- they're recomputed from the current `h`/`pw` at the top of every
 during the next [`step_h!`](@ref) anyway, so refreshing them now would just be redone.
 
 For a threshold-based driver on a basal-temperature field, see [`update_frozen_mask!`](@ref),
-which calls this (and [`thaw_cells!`](@ref)) for you.
+which calls this (and [`thaw_cells!`](@ref)) for you. These `State` methods know none of the simulation's options (cell
+`N` clamps, outflow-only faces, face scheme); the `Simulation` methods, `freeze_cells!(sim, freeze_mask)` and likewise for
+[`thaw_cells!`](@ref), [`set_mask!`](@ref) and [`update_frozen_mask!`](@ref), refresh the derived fields with them
+afterwards ([`refresh_state!`](@ref)).
 
 # Limitation
 
@@ -60,7 +63,7 @@ function freeze_cells!(s::State, p::ModelParameters, freeze_mask::AbstractMatrix
     @. s.b_dry = ifelse(do_freeze, zero(eltype(s.b_dry)), s.b_dry)
     @. s.pw = ifelse(do_freeze, zero(eltype(s.pw)), s.pw)
     refresh_b_dependents!(s, p) # lc/beta are lagged fields derived from b (normally refreshed in step_b!): keep them consistent with the b just set
-    compute_h!(s, p)
+    @. s.h = ifelse(do_freeze, s.zb, s.h) # pw = 0; the other cells keep their head (recomputing it from pw dropped the empty depth and uplift layer it holds)
     compute_K!(s, p)
     compute_face_masks!(s)
     compute_N!(s, p)
@@ -200,7 +203,8 @@ function set_mask!(s::State, p::ModelParameters, new_mask::AbstractMatrix)
     @. s.b_dry = ifelse(on | off, zero(eltype(s.b_dry)), s.b_dry)
     apply_boundary_pw!(s, p)
     refresh_b_dependents!(s, p)
-    compute_h!(s, p)
+    rg = p.rho_w * p.g
+    @. s.h = ifelse(on | (s.mask != GROUNDED), s.pw / rg + s.zb, s.h) # the cells that changed and the boundaries from pw; a grounded cell keeps its head, with the empty depth or uplift layer it holds
     compute_K!(s, p)
     compute_face_masks!(s)
     compute_N!(s, p)

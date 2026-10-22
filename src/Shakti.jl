@@ -196,7 +196,7 @@ export relax_h!
 export PicardSolver
 export AbstractEllipticSolver
 export NewtonJFNKSolver, newton_status
-export elliptic_solver!, Picard_loop!, Picard_iteration!, refresh_head_dependents!
+export elliptic_solver!, Picard_loop!, Picard_iteration!, refresh_head_dependents!, refresh_state!
 
 # parabolic_solver.jl
 export parabolic_solver!

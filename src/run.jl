@@ -162,6 +162,7 @@ function step!(sim::Simulation)
     update_ieb!(sim.mi, sim.state, sim.total_time[]) # writes Shakti's own input (state.ieb_own) for e.g. SeasonalMeltInput, then state.ieb = ieb_own + ieb_external -- done once per timestep, before step_h!, since ieb only feeds the head equation (step_b! never reads it)
     prepare_head_solve!(sim)
     step_h!(sim.hs, sim)
+    store_start_of_step_melt!(sim.kfs, sim.state) # ImplicitUpwind: the converged melt, the next step's start-of-step melt (unfilled_cavities.jl); taken here so that a refresh_state! between steps cannot replace it
     record_head!(sim.he, sim.state, sim.dt[], first(picard_status(sim.hs)))
     update_b_empty!(sim.state, sim.cf) # from the solved head, before step_b! evolves b
     update_b_uplift!(sim.state, sim.p, sim.up) # IceUplift: the uplift layer from the solved head (no-op under NoUplift)
@@ -192,6 +193,16 @@ has just been evolved by the previous [`step_b!`](@ref), and an ice-flow model m
 """
 function prepare_head_solve!(sim::Simulation)
     s = sim.state
+    prepare_step_inputs!(sim)
+    extrapolate_head!(sim.he, s, sim.dt[])
+    limit_head_guess!(sim.kfs, sim.he, s, sim.p) # ImplicitUpwind: the extrapolated head obeys the regime and step limits of the iteration
+    refresh_from_head!(sim)
+    return sim
+end
+
+# The step's inputs that depend on b and the mask only (step 1 of prepare_head_solve!).
+function prepare_step_inputs!(sim::Simulation)
+    s = sim.state
     compute_H!(s)
     compute_po!(s, sim.p)
     set_cavity_storage!(s, sim.dt[], sim.cf) # 1/dt marks cells that may be partly empty, read by the head rows and compute_pw!
@@ -201,13 +212,43 @@ function prepare_head_solve!(sim::Simulation)
         freeze_on_capacity!(s.mdot_min, sim)
         s.mdot_min .*= -sim.p.rho_i
     end
-    extrapolate_head!(sim.he, s, sim.dt[])
-    limit_head_guess!(sim.kfs, sim.he, s, sim.p) # ImplicitUpwind: the extrapolated head obeys the regime and step limits of the iteration
-    store_start_of_step_melt!(sim.kfs, s) # ImplicitUpwind: the melt opening of the end-of-step gap in the conductance (unfilled_cavities.jl)
-    reset_donors!(sim.kfs, s) # ImplicitUpwind: every face starts the step with the higher-potential cell as donor (water_flux.jl)
-    refresh_head_dependents!(s, sim.grid, sim.p, sim.mt, sim.kfs, sim.sl; cnc = sim.cnc, ds = sim.ds, gc = gap_coupling_terms(sim))
     return sim
 end
+
+# Every field derived from the head, with the simulation's own options (step 3 of prepare_head_solve!).
+function refresh_from_head!(sim::Simulation)
+    reset_donors!(sim.kfs, sim.state) # ImplicitUpwind: every face starts with the higher-potential cell as donor (water_flux.jl)
+    refresh_head_dependents!(sim.state, sim.grid, sim.p, sim.mt, sim.kfs, sim.sl; cnc = sim.cnc, ds = sim.ds, gc = gap_coupling_terms(sim))
+    return sim
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Recomputes every field derived from the current `h`, `b` and mask with the simulation's own options: its face scheme,
+[`AbstractCellNClamping`](@ref), outflow-only faces, cavity filling, uplift, diffusion and gap coupling. The setup and mask
+helpers ([`set_initial_conditions!`](@ref), [`freeze_cells!`](@ref), [`thaw_cells!`](@ref), [`set_mask!`](@ref),
+[`update_frozen_mask!`](@ref)) know only the `State` and `ModelParameters`, so they leave `N` without the cell clamps,
+the outflow-only faces open and the face conductances arithmetic. Every step refreshes them before its first solve
+([`prepare_head_solve!`](@ref)), but what is read before that saw the helper's version: the observer's frame 0, step 1's
+start-of-step melt ([`ImplicitUpwind`](@ref)) and freeze-on capacity, and a coupled model reading `N` or `mdot` after a
+mask change. Called by `Simulation` at construction and by the `Simulation` methods of the mask helpers; `h` and `b` are
+not changed, nor is the start-of-step melt of [`ImplicitUpwind`](@ref) (`State.mdot0`, the melt at the start-of-step gap,
+kept from the setup or the last converged step): the refreshed melt is that of the end-of-step gap at the current head, a
+first iterate rather than a start state, and taken as the start-of-step melt it made step 1 of an uplift moulin fixture at
+dt = 1 day run to 500 iterations instead of 38.
+"""
+function refresh_state!(sim::Simulation)
+    sim.total_time[] == 0 && store_start_of_step_melt!(sim.kfs, sim.state) # the first step's start-of-step melt: the setup's, at the start-of-step gap
+    prepare_step_inputs!(sim)
+    refresh_from_head!(sim)
+    return sim
+end
+
+freeze_cells!(sim::Simulation, freeze_mask::AbstractMatrix{Bool}) = (freeze_cells!(sim.state, sim.p, freeze_mask); refresh_state!(sim))
+thaw_cells!(sim::Simulation, thaw_mask::AbstractMatrix{Bool}) = (thaw_cells!(sim.state, sim.p, thaw_mask); refresh_state!(sim))
+set_mask!(sim::Simulation, new_mask::AbstractMatrix) = (r = set_mask!(sim.state, sim.p, new_mask); refresh_state!(sim); r)
+update_frozen_mask!(sim::Simulation, T_prime_b::AbstractMatrix) = (r = update_frozen_mask!(sim.state, sim.p, T_prime_b); refresh_state!(sim); r)
 
 
 """

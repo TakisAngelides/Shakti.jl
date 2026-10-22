@@ -424,6 +424,7 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
         hs isa EllipticHeadScheme && !(hs.ps isa PicardSolver) && error("gap_coupling = ConsistentGapCoupling() needs a PicardSolver (not tested with $(nameof(typeof(hs.ps))))")
     end
 
-    return Simulation(tsteps, Ref(dt), p, hs, gs, mt, oss, cls, diffusion_scheme, observer, grid, state, mi, kfs, sl, verbose, Ref(zero(dt)), cell_gap_clamping, cell_N_clamping, timestep_scheme, he, cavity_filling, hydraulic_potential, uplift, gap_coupling)
+    sim = Simulation(tsteps, Ref(dt), p, hs, gs, mt, oss, cls, diffusion_scheme, observer, grid, state, mi, kfs, sl, verbose, Ref(zero(dt)), cell_gap_clamping, cell_N_clamping, timestep_scheme, he, cavity_filling, hydraulic_potential, uplift, gap_coupling)
+    return refresh_state!(sim) # the derived fields with this simulation's options (set_initial_conditions! knows none of them)
 
 end

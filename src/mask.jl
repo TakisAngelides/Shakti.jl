@@ -127,8 +127,10 @@ is physically meaningful.
 
 With `land = true` (`ocean = true`), a `LAND` (`OCEAN`) face is additionally closed where the boundary's
 fixed head lies above the neighbouring grounded cell's, so the boundary drains the ice but never feeds
-it. Both are on by default (`ModelParameters` `outflow_only_land`/`outflow_only_ocean`); set
-`outflow_only_ocean = false` to let ocean water into the bed (e.g. tidal intrusion).
+it. The arguments default to `false` here; the simulation passes `ModelParameters`' `outflow_only_land`/
+`outflow_only_ocean`, both on by default (set `outflow_only_ocean = false` to let ocean water into the bed, e.g. tidal
+intrusion). The setup and mask helpers call it without them, and `refresh_state!` (run at construction and by the
+`Simulation` methods of the mask helpers) or the next step's refresh closes those faces.
 
 The open/closed state is re-decided from the current head on every Picard iteration (see
 `refresh_head_dependents!`). On the 8-dataset check this cost up to ~2x wall time (Thwaites 2 km,

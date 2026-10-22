@@ -172,6 +172,22 @@
             @test s.b[2, 2] <= 1e-4
         end
 
+        @testset "the simulation's options apply from construction and after a mask change (refresh_state!)" begin
+            # set_initial_conditions! and the State methods of the mask helpers know none of the simulation's options; the
+            # Simulation refreshes the derived fields at construction, and its own mask-helper methods after the change
+            state = State(grid)
+            p = ModelParameters(e_v = 0.0)
+            set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b0, G, ub_x, ub_y, ieb, taub_x, taub_y)
+            @test Array(state.N)[3, 3] > 1.0 # unclamped from the setup
+            sim = Simulation(grid, state, 2, floattype(3600.0), p, "implicit", String[], ConstantMeltInput(), sl;
+                             ps = PicardSolver(200, floattype(1e-8), CholeskyDirectSolver(grid), grid),
+                             cell_N_clamping = CellNClamping(Dict((3, 3) => (0.0, 1.0))))
+            @test Array(sim.state.N)[3, 3] == 1.0
+            fm = falses(size(mask)); fm[2, 2] = mask[2, 2] == GROUNDED
+            freeze_cells!(sim, fm)
+            @test Array(sim.state.N)[3, 3] == 1.0
+        end
+
         @testset "Chebyshev (Gershgorin bounds) and matrix-free CG agree with Cholesky" begin
             ref = fresh_sim(; order = 0)
             for _ in 1:3; step!(ref); end
