@@ -111,11 +111,12 @@ compute_b_w!(s::State, p::ModelParameters) = (@parallel compute_b_w_kernel!(s.b_
 # scheme_head_terms) where N follows the head (a filled cell).
 # Under the dry floor (dry_floor, run.jl) the gap the conductance takes is the water held at b_min, as compute_b! leaves it:
 # the floor conducts whether or not it holds water (its row keeps the water from going below zero).
-@inline end_of_step_gap(::ExplicitGapCoupling, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1) = b
+# DiffusiveGapUpdate (WithDiffusion) keeps the start-of-step gap in the conductance too: its gap update is a global solve.
+@inline end_of_step_gap(::Union{ExplicitGapCoupling, DiffusiveGapUpdate}, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1) = b
 @inline end_of_step_gap(gu::SchemeGapUpdate, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1) =
     gu.dry_floor ? max(scheme_water(gu, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1), b_min) :
                    scheme_gap(gu, b, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1)
-@inline end_of_step_gap_slope(::ExplicitGapCoupling, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1, rho_w, ggrav) = zero(b)
+@inline end_of_step_gap_slope(::Union{ExplicitGapCoupling, DiffusiveGapUpdate}, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1, rho_w, ggrav) = zero(b)
 @inline function end_of_step_gap_slope(gu::SchemeGapUpdate, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1, rho_w, ggrav)
     δ = 1e-6 * max(abs(Nv), oftype(Nv, 1e3))
     Gm = end_of_step_gap(gu, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, Nv - δ, rho_i, n_minus_1)

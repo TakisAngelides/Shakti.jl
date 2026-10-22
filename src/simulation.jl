@@ -278,7 +278,9 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
   store the same water at any `dt`; needed with the implicit and fully implicit gap schemes when `dt*A*|N|^(n-1)*N` is not
   small, and with [`UnfilledCavities`](@ref)/[`IceUplift`](@ref) at large `dt`). Default: `ConsistentGapCoupling()` with
   `k_face_choice = "implicit_upwind"` (whose conductance then takes the end-of-step gap as well, so the head-gap step is
-  implicit throughout), `ExplicitGapCoupling()` otherwise.
+  implicit throughout), `ExplicitGapCoupling()` otherwise. With [`WithDiffusion`](@ref) (SUHMO) `ConsistentGapCoupling()`
+  solves the coupled gap system at every Picard iteration ([`DiffusiveGapUpdate`](@ref)), one extra linear solve per
+  iteration; it needs [`FilledCavities`](@ref), [`NoUplift`](@ref) and the elliptic head scheme, and is not the default.
 - `timestep_scheme`: [`FixedTimeStep`](@ref) (default, `dt` never changes) or
   [`AdaptiveTimeStep`](@ref) (`dt` recomputed every step from `C+gamma`). With the latter, `dt` is
   still the *first* step's value (until the first recomputation) and `tsteps` should be sized from
@@ -404,7 +406,8 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
     gap_coupling === nothing && (gap_coupling = (kfs isa ImplicitUpwind && !(diffusion_scheme isa WithDiffusion) &&
                                                  (hs isa ParabolicHeadScheme || hs.ps isa PicardSolver)) ? ConsistentGapCoupling() : ExplicitGapCoupling())
     if gap_coupling isa ConsistentGapCoupling
-        diffusion_scheme isa WithDiffusion && error("gap_coupling = ConsistentGapCoupling() is not available with WithDiffusion (its gap update is a coupled linear system)")
+        diffusion_scheme isa WithDiffusion && !(cavity_filling isa FilledCavities && uplift isa NoUplift && hs isa EllipticHeadScheme) &&
+            error("gap_coupling = ConsistentGapCoupling() with WithDiffusion is available only with FilledCavities, NoUplift and the elliptic head scheme")
         hs isa EllipticHeadScheme && !(hs.ps isa PicardSolver) && error("gap_coupling = ConsistentGapCoupling() needs a PicardSolver (not tested with $(nameof(typeof(hs.ps))))")
     end
 

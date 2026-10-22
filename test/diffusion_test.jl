@@ -393,3 +393,48 @@
         end
 
     end
+
+    @testset "ConsistentGapCoupling under WithDiffusion: the head rows store SUHMO's gap change" begin
+        # Thin ice with a 1 m^3/s moulin at dt = 1 day, filled cavities: a channel forms within two steps and the wall
+        # diffusion matters. The explicit coupling assumes the explicit gap change plus the diffusion of the old gap, and
+        # loses or creates up to 1.8 times the melt input of a step; with the gap solve in the Picard loop
+        # (DiffusiveGapUpdate) the budget closes to the Picard tolerance.
+        nx, ny = 40, 12
+        grid = Grid(nx, ny, 3.9e3, 1.1e3)
+        x, y = Array(grid.x), Array(grid.y)
+        zb = [0.05 * xi + 15 * sin(2pi * xi / 800) * cos(pi * yj / 1100) for xi in x, yj in y]
+        H  = [50 + 200 * sqrt(xi / x[end]) for xi in x, yj in y]
+        mask = fill(GROUNDED, nx, ny); mask[1, :] .= LAND
+        g = mask .== GROUNDED
+        p  = ModelParameters()
+        sl = RegularizedCoulombSlidingLaw(0.25)
+        ieb = fill(1e-9, nx, ny); ieb[25, 6] += 1.0 / (grid.dx * grid.dy)
+        dt = 86400.0
+        function moulin_sim(gc; kw...)
+            state = State(grid)
+            set_initial_conditions!(state, grid, p, sl, mask, fill(2.4e-24, nx, ny), zb, zb .+ H, fill(1e-3, nx, ny), fill(0.06, nx, ny),
+                                    fill(30.0 / (365 * 86400), nx + 1, ny), zeros(nx, ny + 1), ieb, zeros(nx + 1, ny), zeros(nx, ny + 1))
+            return Simulation(grid, state, 3, floattype(dt), p, "fully_implicit", String[], ConstantMeltInput(), sl;
+                              ps = PicardSolver(500, floattype(1e-9), CholeskyDirectSolver(grid), grid),
+                              diffusion_scheme = WithDiffusion(CholeskyDirectSolver(grid)), gap_coupling = gc, kw...)
+        end
+        # worst |(b_new - b_old)/dt + div q - mdot/rho_w - ieb| over three steps, against the grounded source
+        function worst_budget(sim)
+            worst = 0.0
+            for _ in 1:3
+                s = sim.state
+                b0 = Array(s.b)
+                step!(sim)
+                @test Shakti.picard_status(sim.hs)[1]
+                qx, qy = Array(s.q_x), Array(s.q_y)
+                dv = [(qx[i+1, j] - qx[i, j]) / grid.dx + (qy[i, j+1] - qy[i, j]) / grid.dy for i in 1:nx, j in 1:ny]
+                src = Array(s.mdot) ./ p.rho_w .+ Array(s.ieb)
+                res = (Array(s.b) .- b0) ./ dt .+ dv .- src
+                worst = max(worst, sum(abs, res[g]) / sum(abs, src[g]))
+            end
+            return worst
+        end
+        @test worst_budget(moulin_sim(ExplicitGapCoupling())) > 0.1
+        @test worst_budget(moulin_sim(ConsistentGapCoupling())) < 1e-5
+        @test_throws ErrorException moulin_sim(ConsistentGapCoupling(); cavity_filling = UnfilledCavities(), k_face_choice = "implicit_upwind")
+    end

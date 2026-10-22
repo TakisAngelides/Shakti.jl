@@ -476,7 +476,8 @@ via [`refresh_head_dependents!`](@ref) so the next iteration's linearization is 
 """
 function Picard_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation, s::State, g::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, h_prev; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), ω = 1)
 
-    solve_elliptic_linear_system!(ls, s, g, p, kfs, ds, gc) # update the h field, including the -div(D*grad(b)) source term under WithDiffusion
+    solve_gap_iterate!(gc, ds, s, g, p) # ConsistentGapCoupling under WithDiffusion: SUHMO's gap solve at this iterate, for the head rows; no-op otherwise
+    solve_elliptic_linear_system!(ls, s, g, p, kfs, ds, gc) # update the h field, including the -div(D*grad(b)) source term under WithDiffusion (ExplicitGapCoupling)
     relax_h!(hr, s, h_prev) # update the h field again according to the relaxation parameter, damp the raw Picard update before anything downstream of h is recomputed, so the next iteration's coefficients are consistent with the relaxed h
     ω < 1 && (@. s.h = h_prev + ω * (s.h - h_prev)) # stall damping of Picard_loop!, 1 unless the iteration stopped making progress; before the limits, so that a stop at a regime boundary stays exact
     limit_regime_crossing!(kfs, s, h_prev, p, gc) # ImplicitUpwind: stop at the bed/overburden head when crossing it (unfilled_cavities.jl); no-op otherwise

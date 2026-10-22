@@ -451,12 +451,14 @@ $(TYPEDSIGNATURES)
 
 The gap coupling the head rows of this step use: [`ExplicitGapCoupling`](@ref) as it is, or, for
 [`ConsistentGapCoupling`](@ref), its kernel form [`SchemeGapUpdate`](@ref) with this step's `dt` and the simulation's gap
-and creep-length schemes.
+and creep-length schemes, or [`DiffusiveGapUpdate`](@ref) under [`WithDiffusion`](@ref).
 """
 gap_coupling_terms(sim::Simulation) = gap_coupling_terms(sim, sim.gcp)
 gap_coupling_terms(sim::Simulation, ::ExplicitGapCoupling) = ExplicitGapCoupling()
-gap_coupling_terms(sim::Simulation, ::ConsistentGapCoupling) =
+gap_coupling_terms(sim::Simulation, gcp::ConsistentGapCoupling) = gap_coupling_terms(sim, gcp, sim.ds)
+gap_coupling_terms(sim::Simulation, ::ConsistentGapCoupling, ::NoDiffusion) =
     SchemeGapUpdate{typeof(sim.gs), typeof(sim.cls), typeof(sim.dt[])}(sim.dt[], sim.p.br, sim.p.lr, sim.p.b_c, dry_floor(sim))
+gap_coupling_terms(sim::Simulation, ::ConsistentGapCoupling, ::WithDiffusion) = DiffusiveGapUpdate(sim.dt[], oftype(sim.dt[], sim.p.br), oftype(sim.dt[], sim.p.lr))
 
 """
 $(TYPEDSIGNATURES)
@@ -467,9 +469,10 @@ The head rows then store the water `W = b - b_dry`, moved by the gap scheme's up
 (`State.b_dry`), so the head equation and the gap update store the same water also where creep closes the gap within a
 step. The conductances keep the gap: a dry floor still conducts, as the floor always did, and a cell with no water cannot
 drain through it, since its own row allows no less than zero water. Under [`UnfilledCavities`](@ref) the floor's volume
-is part of the empty volume `b_empty` instead, and with [`IceUplift`](@ref) the floor stays full.
+is part of the empty volume `b_empty` instead, and with [`IceUplift`](@ref) the floor stays full. Not under [`WithDiffusion`](@ref),
+whose gap solve clamps at `b_min` ([`solve_b_diffusion!`](@ref)).
 """
-dry_floor(sim::Simulation) = sim.gcp isa ConsistentGapCoupling && sim.cf isa FilledCavities && sim.up isa NoUplift
+dry_floor(sim::Simulation) = sim.gcp isa ConsistentGapCoupling && sim.cf isa FilledCavities && sim.up isa NoUplift && sim.ds isa NoDiffusion
 
 @parallel_indices (ix, iy) function compute_b_dry_floor_kernel!(b, b_dry, mask, mdot, beta, abs_ub, A_visc, N, rho_i, n_minus_1, b_min, b_max, gu, bump)
     if ix <= size(b, 1) && iy <= size(b, 2) && mask[ix, iy] == GROUNDED
