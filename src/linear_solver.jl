@@ -436,12 +436,15 @@ abstract type AbstractGapCoupling end
 """
 $(TYPEDSIGNATURES)
 
-Default (the original equations): the head rows assume `db = dt*rate(N, b_old)`, the gap rate at the new effective
+The original equations (the default before [`ConsistentGapCoupling`](@ref) became it wherever available, see
+[`Simulation`](@ref)): the head rows assume `db = dt*rate(N, b_old)`, the gap rate at the new effective
 pressure and the old gap, with its creep term Newton-linearised in the head ([`gap_budget_terms`](@ref)). That is the
 explicit gap update; the implicit and fully implicit gap schemes move the gap by less when creep is fast,
 `dt*A*|N|^(n-1)*N > 1`, so the head equation and the gap disagree on the water stored: water is created or lost (under
 [`UnfilledCavities`](@ref) the difference goes into `b_empty`, and where it exceeds its limits it is lost), and the
-explicit closure in the head row overshoots (the gap would close by more than its height).
+explicit closure in the head row overshoots (the gap would close by more than its height). At `N < 0` (water above the
+overburden) creep opens the gap, which these schemes grow as `exp(dt*|C|)` while the head rows assume linear growth, so `N`
+does not recover; with `b_max = Inf` the gap can run away ([`check_gap_height`](@ref) reports it).
 """
 struct ExplicitGapCoupling <: AbstractGapCoupling end
 
@@ -455,7 +458,10 @@ update then store the same water at any `dt` (mass is conserved, the empty-volum
 [`UnfilledCavities`](@ref) stays consistent with the head), and an implicit or fully implicit gap scheme stays implicit in
 the head equation too. With the explicit gap scheme it differs from [`ExplicitGapCoupling`](@ref) only by the clamp.
 Under [`WithDiffusion`](@ref) the gap update is SUHMO's coupled linear system: the head rows then take the gap that system
-gives at each head iterate ([`DiffusiveGapUpdate`](@ref)), the default there on the elliptic Picard solver.
+gives at each head iterate ([`DiffusiveGapUpdate`](@ref)). The default wherever available (see [`Simulation`](@ref)).
+At `N < 0` the head rows see the gap's exponential opening, so `N` recovers where the explicit coupling runs away; at large
+enough `dt` the Picard iteration itself stops converging and the gap can still run away (Helheim at 500 m, filled cavities:
+5-day steps hold, 10-day steps do not), which [`check_gap_height`](@ref) reports.
 """
 struct ConsistentGapCoupling <: AbstractGapCoupling end
 

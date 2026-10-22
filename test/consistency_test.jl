@@ -243,7 +243,7 @@
         @testset "limit_freeze_on: a cold bed freezes no more water than the gap holds" begin
             # Strong conductive loss into cold ice (q_T >> G): without the limit, mdot stays
             # negative after the gap reaches b_min and the "frozen" water is expelled into the flow.
-            sim = fresh_sim(; tsteps = 30)
+            sim = fresh_sim(; tsteps = 30, gap_coupling = ExplicitGapCoupling())
             s = sim.state
             s.q_T .= 50.0   # freezes the ~1 cm gap within the 30 one-hour steps
             for _ in 1:30

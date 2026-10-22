@@ -213,7 +213,7 @@ struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHea
     cf::CF # AbstractCavityFilling: FilledCavities() (legacy, gap always water-filled) by default, see unfilled_cavities.jl
     hp::HP # AbstractHydraulicPotential: SheetTopPotential() (q = -K grad(h + b)) by default, BedPotential() for the legacy flux, see hydraulic_potential.jl
     up::UP # AbstractIceUplift: NoUplift() (legacy, pw may exceed po) by default, see ice_uplift.jl
-    gcp::GCP # AbstractGapCoupling: ExplicitGapCoupling() (legacy) by default, see linear_solver.jl
+    gcp::GCP # AbstractGapCoupling: ConsistentGapCoupling() by default where available, see the constructor and linear_solver.jl
 end
 
 """
@@ -275,12 +275,14 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
 - `gap_coupling`: [`ExplicitGapCoupling`](@ref) (legacy: the head rows assume the gap changes by `dt*rate(N, b_old)`) or
   [`ConsistentGapCoupling`](@ref) (they assume the change the gap scheme itself makes, so the head equation and the gap update
   store the same water at any `dt`; needed with the implicit and fully implicit gap schemes when `dt*A*|N|^(n-1)*N` is not
-  small, and with [`UnfilledCavities`](@ref)/[`IceUplift`](@ref) at large `dt`). Default: `ConsistentGapCoupling()` with
-  `k_face_choice = "implicit_upwind"` (whose conductance then takes the end-of-step gap as well, so the head-gap step is
-  implicit throughout), `ExplicitGapCoupling()` otherwise. With [`WithDiffusion`](@ref) (SUHMO) `ConsistentGapCoupling()`
-  solves the coupled gap system at every Picard iteration ([`DiffusiveGapUpdate`](@ref)), one extra linear solve per
-  iteration (two with `"implicit_upwind"`), with any cavity filling and uplift; it needs the elliptic head scheme, and is
-  the default there with a [`PicardSolver`](@ref).
+  small, and with [`UnfilledCavities`](@ref)/[`IceUplift`](@ref) at large `dt`). Default: `ConsistentGapCoupling()`
+  wherever it is available -- the elliptic head scheme with a [`PicardSolver`](@ref), or the parabolic scheme without
+  diffusion -- and `ExplicitGapCoupling()` otherwise (a [`NewtonJFNKSolver`](@ref), or the parabolic scheme with
+  [`WithDiffusion`](@ref)). Pass `ExplicitGapCoupling()` to reproduce results from before this default. With
+  `"implicit_upwind"` the conductance then also takes the end-of-step gap, so the head-gap step is implicit throughout.
+  With [`WithDiffusion`](@ref) (SUHMO) `ConsistentGapCoupling()` solves the coupled gap system at every Picard iteration
+  ([`DiffusiveGapUpdate`](@ref)), one extra linear solve per iteration (two with `"implicit_upwind"`), with any cavity
+  filling and uplift.
 - `timestep_scheme`: [`FixedTimeStep`](@ref) (default, `dt` never changes) or
   [`AdaptiveTimeStep`](@ref) (`dt` recomputed every step from `C+gamma`). With the latter, `dt` is
   still the *first* step's value (until the first recomputation) and `tsteps` should be sized from
@@ -410,13 +412,15 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
     head_extrapolation_order >= 0 || error("head_extrapolation_order must be >= 0 (got $head_extrapolation_order)")
     he = (head_extrapolation_order == 0 || hs isa ParabolicHeadScheme) ? NoHeadExtrapolation() : HeadExtrapolation(grid; order = head_extrapolation_order)
 
-    # Gap coupling: by default the original one, except with the implicit water depth, whose conductance then also takes the
-    # end-of-step gap (compute_b_w_iterate!), so that the whole head-gap step is implicit, and under WithDiffusion (SUHMO) on
-    # the elliptic Picard solver, where the explicit coupling lost or created up to 1.8 times the melt input of a 1-day step
-    # (a moulin slab; Helheim at 500 m: 17 % of the melt after 5 days, against 0.1 % consistent) for 10 to 20 % more iterations.
-    gap_coupling === nothing && (gap_coupling = diffusion_scheme isa WithDiffusion ?
-                                                (hs isa EllipticHeadScheme && hs.ps isa PicardSolver ? ConsistentGapCoupling() : ExplicitGapCoupling()) :
-                                                (kfs isa ImplicitUpwind && (hs isa ParabolicHeadScheme || hs.ps isa PicardSolver)) ? ConsistentGapCoupling() : ExplicitGapCoupling())
+    # Gap coupling: by default the consistent one wherever it is available. The explicit coupling's head rows assume linear
+    # gap growth while the implicit gap schemes apply their own update, so the two store different water: up to 1.8 times
+    # the melt input of a 1-day step under WithDiffusion (a moulin slab; Helheim at 500 m: 17 % of the melt after 5 days,
+    # against 0.1 % consistent), 22190 m^3/s on a GrIS cold start, and at N < 0 (a filled moulin slab, NoDiffusion, 1-day
+    # steps) a gap of 1e269 m in one step, where the consistent coupling keeps it at metres (check_gap_height, run.jl); on
+    # Helheim at 500 m (filled, NoDiffusion) the explicit gap reaches 1e10 m with 5-day steps, the consistent one 7 m, for
+    # 1 to 2 times the Picard iterations and about the same time per step at 1-day steps.
+    gap_coupling === nothing && (gap_coupling = (hs isa EllipticHeadScheme ? hs.ps isa PicardSolver : !(diffusion_scheme isa WithDiffusion)) ?
+                                                ConsistentGapCoupling() : ExplicitGapCoupling())
     if gap_coupling isa ConsistentGapCoupling
         diffusion_scheme isa WithDiffusion && !(hs isa EllipticHeadScheme) &&
             error("gap_coupling = ConsistentGapCoupling() with WithDiffusion is available only with the elliptic head scheme")

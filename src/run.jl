@@ -167,7 +167,38 @@ function step!(sim::Simulation)
     update_b_empty!(sim.state, sim.cf) # from the solved head, before step_b! evolves b
     update_b_uplift!(sim.state, sim.p, sim.up) # IceUplift: the uplift layer from the solved head (no-op under NoUplift)
     step_b!(sim)
+    check_gap_height(sim)
     sim.hs isa EllipticHeadScheme && update_b_empty_budget!(sim.state, sim.grid, sim.p, sim.dt[], sim.cf) # empty volume from the water budget, now that the gap is final
+end
+
+# A runaway gap: water above the overburden (N < 0) makes creep open the gap, and the implicit and fully implicit gap
+# schemes grow it as exp(|C| dt) at the step's N, which the explicit coupling's head rows (linear growth) never see, so N
+# does not recover. With b_max = Inf this reached 1e269 m in one 1-day step on a 1 m^3/s moulin slab (filled, NoUplift).
+# The consistent coupling keeps that slab at metres, but at large enough dt its Picard iteration stops converging and the
+# gap runs away as well (Helheim at 500 m, filled, 10-day steps), so the hint drops it once it is on.
+gap_runaway_hint(::AbstractGapCoupling) = "ConsistentGapCoupling() (the head rows then take the gap the scheme reaches, and N recovers), " *
+                                          "IceUplift() (water above the overburden lifts the ice instead), a finite b_max, or a smaller dt"
+gap_runaway_hint(::ConsistentGapCoupling) = "a smaller dt (check that the head solve converged), IceUplift() (water above the overburden " *
+                                            "lifts the ice instead), or a finite b_max"
+@noinline _gap_not_finite(gcp) = error("step!: the gap height b is not finite in a GROUNDED cell. The usual cause is a gap runaway at N < 0: use " * gap_runaway_hint(gcp) * ".")
+@noinline _warn_gap_thicker_than_ice(gcp) =
+    @warn "step!: the gap height b exceeds the ice thickness in a GROUNDED cell, likely a gap runaway at N < 0; consider " * gap_runaway_hint(gcp) maxlog = 1
+
+"""
+$(TYPEDSIGNATURES)
+
+Checks the gap after [`step_b!`](@ref): errors if `b` is not finite in a `GROUNDED` cell, and warns (once per session) if
+it exceeds the ice thickness `H` there. Both point to a gap runaway at `N < 0` and its remedies. One lazy reduction over
+the grid, no allocation.
+"""
+function check_gap_height(sim::Simulation)
+    s = sim.state
+    grounded = GROUNDED
+    bad = Broadcast.instantiate(Broadcast.broadcasted((m, b, H) -> m == grounded ? (isfinite(b) ? (b > H ? 1 : 0) : 2) : 0, s.mask, s.b, s.H))
+    worst = mapreduce(identity, max, bad; init = 0)
+    worst == 2 && _gap_not_finite(sim.gcp)
+    worst == 1 && _warn_gap_thicker_than_ice(sim.gcp)
+    return nothing
 end
 
 """
