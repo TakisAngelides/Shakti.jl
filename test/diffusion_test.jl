@@ -5,8 +5,8 @@
         p = ModelParameters(e_v = 0.0)
 
         # Seed the fields compute_D! reads directly with simple, known values -- bypassing
-        # the full elliptic solve entirely, since compute_D! only ever reads b/b_empty (averaged onto
-        # faces) and q_x/q_y/dhdx/dhdy/dpwdx/dpwdy (already face-centered), so this is a
+        # the full elliptic solve entirely, since compute_D! only ever reads mask/b/b_empty (cell-centred)
+        # and q_x/q_y/dhdx/dhdy/dpwdx/dpwdy (face-centred, summed onto cells as mdot does), so this is a
         # faithful, self-contained test of its own formula in isolation. Deliberately set uniformly
         # nonzero even at the domain-boundary faces (unlike the real pipeline, where dhdx/dpwdx are
         # left exactly zero there by compute_dhdx_kernel!/compute_dpwdx_kernel!) so the boundary
@@ -22,6 +22,11 @@
         state.dpwdy .= 80.0
 
         mt_full = MeltTerms{true, true, true, true, true}()
+        # SUHMO Eq. 10 in a cell of these uniform fields: the face-to-cell sum (half of each of the four faces)
+        # gives q.grad(h) = q_x*dhdx + q_y*dhdy, and likewise for pw.
+        heat_pot  = p.rho_w * p.g * abs(-1e-5 * 0.1 + -2e-5 * 0.2)
+        heat_sens = p.ct * p.cw * p.rho_w * (-1e-5 * 50.0 + -2e-5 * 80.0)
+        D_eq10(b, heat) = max(0.0, b / (p.rho_i * p.L) * heat)
 
         @testset "NoDiffusion skips the update entirely" begin
             s = State(grid)
@@ -38,13 +43,10 @@
             s.q_y .= state.q_y; s.dhdy .= state.dhdy; s.dpwdy .= state.dpwdy
             compute_D!(s, p, mt_full, WithDiffusion(CholeskyDirectSolver(grid)))
 
-            expected_Dx = (s.b[2, 1] / p.rho_i) * (1 / p.L) *
-                          (-p.rho_w * p.g * s.q_x[2, 1] * s.dhdx[2, 1] + p.ct * p.cw * p.rho_w * s.q_x[2, 1] * s.dpwdx[2, 1])
-            @test s.D_x[2, 1] ≈ expected_Dx
-
-            expected_Dy = (s.b[1, 2] / p.rho_i) * (1 / p.L) *
-                          (-p.rho_w * p.g * s.q_y[1, 2] * s.dhdy[1, 2] + p.ct * p.cw * p.rho_w * s.q_y[1, 2] * s.dpwdy[1, 2])
-            @test s.D_y[1, 2] ≈ expected_Dy
+            expected = D_eq10(0.02, heat_pot + heat_sens)
+            @test expected > 0
+            @test s.D_x[2, 1] ≈ expected
+            @test s.D_y[1, 2] ≈ expected # one scalar per cell: the same on x- and y-faces
 
             # Domain-boundary faces are left exactly zero, regardless of the (deliberately nonzero)
             # q_x/dhdx values seeded there -- compute_D_kernel!'s own restricted range, not an
@@ -60,17 +62,18 @@
             s1 = State(grid)
             s1.b .= state.b; s1.q_x .= state.q_x; s1.dhdx .= state.dhdx; s1.dpwdx .= state.dpwdx
             mt_pot_only = MeltTerms{true, true, true, false, true}()
+            s1.q_y .= state.q_y; s1.dhdy .= state.dhdy; s1.dpwdy .= state.dpwdy
             compute_D!(s1, p, mt_pot_only, WithDiffusion(CholeskyDirectSolver(grid)))
-            expected_pot_only = (s1.b[2, 1] / p.rho_i) * (1 / p.L) * (-p.rho_w * p.g * s1.q_x[2, 1] * s1.dhdx[2, 1])
+            expected_pot_only = D_eq10(0.02, heat_pot)
             @test s1.D_x[2, 1] ≈ expected_pot_only
 
             # Sensible only (Potential off): D_x should equal just the ct*cw*rho_w*q*dpwdx term.
             s2 = State(grid)
             s2.b .= state.b; s2.q_x .= state.q_x; s2.dhdx .= state.dhdx; s2.dpwdx .= state.dpwdx
+            s2.q_y .= state.q_y; s2.dhdy .= state.dhdy; s2.dpwdy .= state.dpwdy
             mt_sens_only = MeltTerms{true, true, false, true, true}()
             compute_D!(s2, p, mt_sens_only, WithDiffusion(CholeskyDirectSolver(grid)))
-            raw_sens_only = (s2.b[2, 1] / p.rho_i) * (1 / p.L) * (p.ct * p.cw * p.rho_w * s2.q_x[2, 1] * s2.dpwdx[2, 1])
-            expected_sens_only = max(0.0, raw_sens_only) # D is floored at 0 (a net heat deficit is freeze-on, handled by mdot, not backward diffusion)
+            expected_sens_only = D_eq10(0.02, heat_sens) # D is floored at 0 (a net heat deficit is freeze-on, handled by mdot, not backward diffusion)
             @test s2.D_x[2, 1] ≈ expected_sens_only
             @test all(>=(0), Array(s2.D_x)) && all(>=(0), Array(s2.D_y))
 
@@ -90,7 +93,7 @@
             compute_D!(s, p, mt_pot_only, wd) # b_empty = 0 (FilledCavities): the face mean of b
             D_full = copy(Array(s.D_x)); Dy_full = copy(Array(s.D_y))
             b = Array(s.b)
-            @test D_full[2, 1] ≈ ((b[2, 1] + b[1, 1]) / 2 / p.rho_i) / p.L * (-p.rho_w * p.g * s.q_x[2, 1] * s.dhdx[2, 1])
+            @test D_full[2, 1] ≈ (D_eq10(b[2, 1], heat_pot) + D_eq10(b[1, 1], heat_pot)) / 2
 
             # unfilled cell (2, 1): only b - b_empty of its gap holds water; an "over-full" cell (3, 1)
             # (b_empty < 0, from the water-budget bookkeeping) touches at most its gap b
@@ -102,6 +105,31 @@
             @test s.D_x[4, 1] == D_full[4, 1] # (3, 1) is clamped to its gap b
             @test s.D_y[2, 2] ≈ Dy_full[2, 2] * (0.25 * b[2, 1] + b[2, 2]) / (b[2, 1] + b[2, 2])
             @test s.D_x[2, 2] == D_full[2, 2] # faces not touching (2, 1) are unchanged
+        end
+
+        @testset "a channel along x diffuses sideways, and D turns with the grid" begin
+            # Flow along x only: the per-face D of old gave the y-faces (q_y = 0) D_y = 0, so a grid-aligned channel had
+            # no sideways wall melting. One D per cell makes D_x = D_y on a uniform sheet, and the rotated setup the
+            # transposed D.
+            wd = WithDiffusion(CholeskyDirectSolver(grid))
+            mt_pot_only = MeltTerms{true, true, true, false, true}()
+            s = State(grid)
+            s.b .= [0.01 + 0.002 * i + 0.001 * j for i in 1:nx, j in 1:ny]
+            s.q_x .= -1e-5; s.dhdx .= 0.1
+            compute_D!(s, p, mt_pot_only, wd)
+            @test all(>(0), Array(s.D_y)[:, 2:end-1])
+            s_uni = State(grid); s_uni.b .= 0.02; s_uni.q_x .= -1e-5; s_uni.dhdx .= 0.1
+            compute_D!(s_uni, p, mt_pot_only, wd)
+            @test Array(s_uni.D_y)[2:3, 2:3] ≈ Array(s_uni.D_x)[2:3, 2:3]
+            r = State(grid)
+            r.b .= permutedims(Array(s.b)); r.q_y .= permutedims(Array(s.q_x)); r.dhdy .= permutedims(Array(s.dhdx))
+            compute_D!(r, p, mt_pot_only, wd)
+            @test Array(r.D_y) ≈ permutedims(Array(s.D_x))
+            @test Array(r.D_x) ≈ permutedims(Array(s.D_y))
+            # only faces between two GROUNDED cells carry D
+            s.mask[2, 2] = OTHER_BASIN
+            compute_D!(s, p, mt_pot_only, wd)
+            @test s.D_x[2, 2] == 0 && s.D_x[3, 2] == 0 && s.D_y[2, 2] == 0 && s.D_y[2, 3] == 0
         end
 
         @testset "D through the real Picard loop (WithDiffusion)" begin
@@ -484,12 +512,9 @@
     @testset "ConsistentGapCoupling under WithDiffusion on Helheim (500 m, docs example input)" begin
         # Real data, two 1-day steps from the docs example's initial state: the explicit coupling is already 7 % of the melt
         # off in step 2 (17 % by step 5, growing), the consistent one 5e-5 (Picard tolerance 1e-6).
-        ex = joinpath(@__DIR__, "..", "docs", "src", "examples")
-        lines = readlines(joinpath(ex, "Helheim.jl"))
-        setup = join(filter(l -> !occursin("CairoMakie", l), lines[1:findfirst(startswith("# ## Running"), lines)-1]), "\n")
         m = Module()
         Core.eval(m, :(using Shakti, MAT))
-        cd(() -> include_string(m, replace(setup, "@__DIR__" => repr(ex))), ex)
+        Base.include(m, joinpath(@__DIR__, "helheim_setup.jl"))
         grid, mask = m.grid, m.mask
         g = mask .== GROUNDED
         p = ModelParameters(rho_i = 917.0, omega = 1e-3, br = 0.0, lr = 2.0, ct = 0.0, mdot_includes_sensible = false)

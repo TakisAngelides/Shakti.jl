@@ -199,62 +199,58 @@ function compute_mdot!(s::State, p::ModelParameters, mt::MeltTerms)
     return s
 end
 
-# D (SUHMO Eq. 10) is built from exactly the same two dissipation terms as mdot's own
-# Potential/Sensible contributions (potential-energy dissipation, sensible-heat exchange) -- just
-# with a different prefactor (b/(rho_i*L) instead of 1/L) and no geothermal/frictional/conductive
-# terms (those have no role in melting a channel's side walls). The b of the prefactor is the height
-# of wall the water touches: the filled part of the gap, b - b_empty (wet_gap below), which is b
-# except in an unfilled cell (UnfilledCavities), where only the bottom b - b_empty of the gap holds
-# water. Under FilledCavities b_empty is zero and D is bit-for-bit SUHMO's. Reusing mt's own type parameters
-# to gate them, rather than a fresh always-on formula, keeps D consistent with whatever a run
-# already chose for mdot: a run with Sensible off shouldn't have D silently include it just
-# because p.ct/p.cw happen to be nonzero -- same rationale as ModelParameters' own docstring note
-# on mdot_includes_sensible not being inferred from ct/cw.
+# D (SUHMO Eq. 10) is one scalar per cell, D = (b - b_empty)/(rho_i L) * (Q_diss + Q_sens), built from exactly
+# the same two dissipation terms as mdot's own Potential/Sensible contributions (potential-energy dissipation,
+# sensible-heat exchange; cell_face_sum, as compute_mdot_kernel! sums them) -- just with a different prefactor
+# (b/(rho_i*L) instead of 1/L) and no geothermal/frictional/conductive terms (those have no role in melting a
+# channel's side walls). It is then averaged onto the faces. Building it per face from that face's own flux
+# (D_y from q_y only) gave a channel along x no sideways diffusion at all (D_y 6-9 orders too small) and made
+# the result depend on the grid orientation. The b of the prefactor is the height of wall the water touches:
+# the filled part of the gap, b - b_empty (wet_gap below), which is b except in an unfilled cell
+# (UnfilledCavities), where only the bottom b - b_empty of the gap holds water. Reusing mt's own type
+# parameters to gate the terms, rather than a fresh always-on formula, keeps D consistent with whatever a run
+# already chose for mdot: a run with Sensible off shouldn't have D silently include it just because p.ct/p.cw
+# happen to be nonzero -- same rationale as ModelParameters' own docstring note on mdot_includes_sensible not
+# being inferred from ct/cw.
 #
-# D is floored at 0. D models channel walls melted by *surplus* dissipated heat; with the
+# D is floored at 0 per cell. D models channel walls melted by *surplus* dissipated heat; with the
 # sensible-heat (pressure-melting) term on, water flowing up a steep adverse bed slope can have a
 # net heat deficit (supercooling), which would make D negative -- a backward-diffusion operator,
 # ill-posed and no longer SPD. The deficit is already represented locally by mdot going negative
 # (freeze-on), so walls just stop melting there. A no-op whenever ct == 0 (SUHMO's own choice in
 # nearly all of Felden et al. 2023's experiments).
 #
-# Both faces in one launch (ParallelStencil infers the launch range from the union of every
-# argument's size, see compute_dhdxy_kernel!'s own note, field_gradients.jl); D_x/D_y are left
-# exactly zero (their @zeros default, never written) at domain-boundary faces -- via this kernel's
-# own explicit `ix > 1 && ix < size(D_x, 1)` / `iy > 1 && iy < size(D_y, 2)` guard, same convention
-# as compute_dhdx_kernel!/compute_dhdy_kernel! (field_gradients.jl) -- and at any face touching
-# OTHER_BASIN/FROZEN_BED, but there NOT via an explicit mask branch: those faces are built from
-# q_x/dhdx/dpwdx (and the y-face equivalents), which are themselves already exactly zero there
-# (see compute_dhdx_kernel!'s docstring): D_x = f(q_x, dhdx, dpwdx), and q_x itself comes out to 0
-# wherever dhdx=0 (compute_q_and_Re_x_kernel!, water_flux.jl), so the zero propagates through
-# automatically.
+# Both faces in one launch (ParallelStencil infers the launch range from the union of every argument's size, see
+# compute_dhdxy_kernel!'s own note, field_gradients.jl). D_x/D_y are exactly zero at domain-boundary faces (never
+# written, their @zeros default) and at every face that does not join two GROUNDED cells: only those faces carry
+# the diffusion (diffusion_source, linear_solver.jl). Each cell's D is recomputed by both faces that read it,
+# which is cheaper than a cell-sized scratch field for a stencil this small.
 # Filled part of the gap, b - b_empty, kept within [0, b]: the water-budget bookkeeping lets b_empty go
 # down to -b in a filled cell (update_b_empty_budget!), and the wall the water touches is at most b.
 @inline wet_gap(b, b_empty) = clamp(b - b_empty, zero(b), b)
 
-@parallel_indices (ix, iy) function compute_D_kernel!(D_x, D_y, b, b_empty, q_x, q_y, dhdx, dhdy, dpwdx, dpwdy, Linv, rho_w, rho_i, ggrav, ct, cw,
-                                                        ::MeltTerms{Geothermal,Frictional,Potential,Sensible,Conductive}) where {Geothermal,Frictional,Potential,Sensible,Conductive}
+@inline function cell_D(mask, b, b_empty, q_x, q_y, dhdx, dhdy, dpwdx, dpwdy, scale, rho_w, ggrav, ct, cw, ix, iy,
+                        ::MeltTerms{Geothermal,Frictional,Potential,Sensible,Conductive}) where {Geothermal,Frictional,Potential,Sensible,Conductive}
+    heat = zero(scale)
+    if Potential
+        heat += rho_w * ggrav * abs(cell_face_sum(mask, q_x, dhdx, q_y, dhdy, ix, iy))
+    end
+    if Sensible
+        heat += ct * cw * rho_w * cell_face_sum(mask, q_x, dpwdx, q_y, dpwdy, ix, iy)
+    end
+    return max(zero(heat), wet_gap(b[ix, iy], b_empty[ix, iy]) * scale * heat) # floored at 0, see above
+end
+
+@parallel_indices (ix, iy) function compute_D_kernel!(D_x, D_y, mask, b, b_empty, q_x, q_y, dhdx, dhdy, dpwdx, dpwdy, scale, rho_w, ggrav, ct, cw, mt)
     if ix > 1 && ix < size(D_x, 1) && iy <= size(D_x, 2)
-        acc = zero(eltype(D_x))
-        if Potential
-            acc -= rho_w * ggrav * q_x[ix, iy] * dhdx[ix, iy]
-        end
-        if Sensible
-            acc += ct * cw * rho_w * q_x[ix, iy] * dpwdx[ix, iy]
-        end
-        bw_x = (wet_gap(b[ix, iy], b_empty[ix, iy]) + wet_gap(b[ix-1, iy], b_empty[ix-1, iy])) / 2 # face mean, as compute_b_x_kernel! (gap_height.jl)
-        D_x[ix, iy] = max(zero(acc), (bw_x / rho_i) * Linv * acc) # floored at 0, see above
+        D_x[ix, iy] = (mask[ix, iy] == GROUNDED && mask[ix-1, iy] == GROUNDED) ?
+            (cell_D(mask, b, b_empty, q_x, q_y, dhdx, dhdy, dpwdx, dpwdy, scale, rho_w, ggrav, ct, cw, ix, iy, mt) +
+             cell_D(mask, b, b_empty, q_x, q_y, dhdx, dhdy, dpwdx, dpwdy, scale, rho_w, ggrav, ct, cw, ix-1, iy, mt)) / 2 : zero(scale)
     end
     if iy > 1 && iy < size(D_y, 2) && ix <= size(D_y, 1)
-        acc = zero(eltype(D_y))
-        if Potential
-            acc -= rho_w * ggrav * q_y[ix, iy] * dhdy[ix, iy]
-        end
-        if Sensible
-            acc += ct * cw * rho_w * q_y[ix, iy] * dpwdy[ix, iy]
-        end
-        bw_y = (wet_gap(b[ix, iy], b_empty[ix, iy]) + wet_gap(b[ix, iy-1], b_empty[ix, iy-1])) / 2
-        D_y[ix, iy] = max(zero(acc), (bw_y / rho_i) * Linv * acc)
+        D_y[ix, iy] = (mask[ix, iy] == GROUNDED && mask[ix, iy-1] == GROUNDED) ?
+            (cell_D(mask, b, b_empty, q_x, q_y, dhdx, dhdy, dpwdx, dpwdy, scale, rho_w, ggrav, ct, cw, ix, iy, mt) +
+             cell_D(mask, b, b_empty, q_x, q_y, dhdx, dhdy, dpwdx, dpwdy, scale, rho_w, ggrav, ct, cw, ix, iy-1, mt)) / 2 : zero(scale)
     end
     return
 end
@@ -271,12 +267,13 @@ compute_D!(s::State, p::ModelParameters, mt::MeltTerms, ::NoDiffusion) = s
 """
 $(TYPEDSIGNATURES)
 
-Updates `s.D_x`/`s.D_y` (the channel-wall diffusion coefficient, SUHMO Eq. 10) from the current
-`s.b`/`s.b_empty` (the filled part of the gap, averaged onto faces)/`s.q_x`/`s.q_y`/`s.dhdx`/`s.dhdy`/`s.dpwdx`/`s.dpwdy` under [`WithDiffusion`](@ref)
-(`linear_solver.jl`) -- its two terms (potential-energy dissipation, sensible-heat exchange) gated
+Updates `s.D_x`/`s.D_y` (the channel-wall diffusion coefficient, SUHMO Eq. 10) under [`WithDiffusion`](@ref)
+(`linear_solver.jl`): one scalar per cell, `D = (b - b_empty)/(rho_i L) * (Q_diss + Q_sens)` floored at 0, from the
+current `s.b`/`s.b_empty` (the filled part of the gap) and `s.q_x`/`s.q_y`/`s.dhdx`/`s.dhdy`/`s.dpwdx`/`s.dpwdy`, averaged
+onto the faces between two `GROUNDED` cells (zero elsewhere), so it is the same across and along a channel -- its two terms (potential-energy dissipation, sensible-heat exchange) gated
 by `mt`'s own `Potential`/`Sensible` flags, exactly like [`compute_mdot!`](@ref)'s matching terms.
 """
 function compute_D!(s::State, p::ModelParameters, mt::MeltTerms, ::WithDiffusion)
-    @parallel compute_D_kernel!(s.D_x, s.D_y, s.b, s.b_empty, s.q_x, s.q_y, s.dhdx, s.dhdy, s.dpwdx, s.dpwdy, 1/p.L, p.rho_w, p.rho_i, p.g, p.ct, p.cw, mt)
+    @parallel compute_D_kernel!(s.D_x, s.D_y, s.mask, s.b, s.b_empty, s.q_x, s.q_y, s.dhdx, s.dhdy, s.dpwdx, s.dpwdy, 1 / (p.rho_i * p.L), p.rho_w, p.g, p.ct, p.cw, mt)
     return s
 end
