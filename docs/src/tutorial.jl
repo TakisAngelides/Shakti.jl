@@ -98,7 +98,7 @@ geo
 #=
 ## 5. Parameters
 `ModelParameters(; ...)`, every field has a default. The ones that change results most:
-* `omega = 1e-4`  laminar-turbulent transition; the paper's `1e-3` puts channels where Picard converges poorly
+* `omega = 1e-3`  laminar-turbulent transition (Sommers et al. 2018, Table 2)
 * `br = 0.1`, `lr = 2.0`  bed-bump height and spacing [m]; `br = 0` switches opening by sliding off
 * `ct = 7.5e-8`  pressure-melting coefficient; `0` drops the sensible-heat term (as ISSM's SHAKTI does)
 * `b_min = 1e-6`  lower clamp of `b`; keep it well below the initial `b`, or every cell can sit on the clamp

@@ -50,11 +50,11 @@ value to `F` and precomputing the canonical Glen's-flow-law exponents.
 
 # Notes
 
-`omega`'s default (`1e-4`) deliberately differs from Table 2 of Sommers et al. (2018) (`0.001`):
-`0.001` puts the Reynolds range reached during channelization (`~1e3`-`1e4`) right in the flux
-law's steepest, hardest-to-converge transitional band (`omega*Re ~ O(1)-O(10)`), while `1e-4`
-pushes the same range into the flatter, near-linear part of the curve where Picard iteration
-actually converges.
+`omega` defaults to Table 2 of Sommers et al. (2018), `1e-3`. It sets the constitutive law, not just the
+solver: at `Re = 2e4` the transmissivity `K ∝ 1/(1 + omega*Re)` is 7 times higher at `1e-4` than at `1e-3`.
+The earlier default `1e-4` was chosen for convergence under the lagged `q`/`Re` pair; the flux now
+solves `Re` exactly at every iteration ([`compute_face_flux!`](@ref)), and on a channelizing moulin case
+`1e-3` took about 50 % more Picard iterations than `1e-4` with no convergence failures.
 
 `b_min` defaults to `1e-6` (m), not `0`: with `b = 0` both the transmissivity `K` and the creep-closure term
 (`l_c = b`) are exactly zero, so a cell whose neighbours are all dry has an all-zero matrix row
@@ -125,7 +125,7 @@ function ModelParameters(;
     g = 9.81,
     nu = 1.787e-6,
     n = 3.0,
-    omega = 1e-4, # Table 2 (Sommers et al. 2018) states 0.001, but that puts the Re range reached during channelization (~1e3-1e4) right in the flux law's steepest, hardest-to-converge transitional band (omega*Re ~ O(1)-O(10)); 1e-4 pushes the same Re range into the flatter, near-linear part of the curve where Picard actually converges
+    omega = 1e-3, # Table 2 (Sommers et al. 2018); see the note above on the former 1e-4
     L = 334e3,
     br = 0.1, # low/zero br (weak bed-bump opening) starves the Picard iteration and can fail to converge (observed on Thwaites: br=0 hit the 500-iteration cap every step); PicardSolver(...; alpha=0.5) (UnderHeadRelaxation) restored fast convergence there while leaving the converged N field essentially unchanged from the (non-converged) unrelaxed run -- prefer it over floor/cap hacks (N_min, b_min) which change the answer by clamping the very cells that were unstable
     lr = 2.0,

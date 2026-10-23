@@ -467,12 +467,17 @@
         @test moulin_sim(nothing).gcp isa ConsistentGapCoupling # the default under WithDiffusion on the Picard solver
         # Without diffusion (filled, NoUplift, b_max = Inf) the moulin drives N < 0, where creep opens the gap. The explicit
         # coupling's head rows assume linear growth, the fully implicit gap scheme grows it as exp(dt*|C|): 1e269 m in step 1,
-        # then NaN, which step! now refuses (check_gap_height). The consistent coupling, the default, keeps it at metres.
+        # then NaN, which step! now refuses (check_gap_height; at omega = 1e-3 already in step 1). The consistent coupling, the
+        # default, keeps it at metres.
         let nod = (; diffusion_scheme = NoDiffusion(), ps = PicardSolver(500, floattype(1e-6), CholeskyDirectSolver(grid), grid))
             ex = moulin_sim(ExplicitGapCoupling(); nod...)
-            step!(ex)
-            @test maximum(Array(ex.state.b)[g]) > 1e100
-            @test_throws ErrorException step!(ex)
+            refused = try
+                step!(ex); @test maximum(Array(ex.state.b)[g]) > 1e100
+                step!(ex); false
+            catch e
+                e isa ErrorException
+            end
+            @test refused
             @test occursin("ConsistentGapCoupling()", Shakti.gap_runaway_hint(ex.gcp))                 # the hint suggests it
             @test !occursin("ConsistentGapCoupling()", Shakti.gap_runaway_hint(ConsistentGapCoupling())) # but not once it is on
             cs = moulin_sim(nothing; nod...)
