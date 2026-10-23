@@ -216,3 +216,25 @@ end
         @test rhs / (1 + diag) ≈ b_min rtol = 1e-8
     end
 end
+
+@testset "fully_implicit_creep_update: continuous and monotone at N < 0" begin
+    # br = 0.1, dt*gamma = 1, dt*C = -0.5, m = 0: branch 1 is rejected for b0 >= ~0.05 and branch 2, the exponential
+    # solution, then fell below br (b0 = 0.05 gave 0.0824 after 0.0933 at b0 = 0.04).
+    br, b_c, dt = 0.1, 0.047, 1.0 # b_c = 0.05 puts a grid b0 exactly where CreepCutoff's solution is b_c, a rounding tie no branch accepts
+    for cls in (Shakti.StandardCreep(), Shakti.CreepCutoff())
+        for C in (-0.5, -0.2, 0.0, 0.3), gamma in (0.0, 1.0), m in (0.0, 0.01)
+            G = [Shakti.fully_implicit_creep_update(cls, b0, m, gamma, C, dt, br, b_c) for b0 in 0.0:0.0025:0.3]
+            @test all(diff(G) .>= -1e-14)
+        end
+        for b0 in (0.02, 0.05, 0.12), gamma in (0.0, 1.0)
+            G = [Shakti.fully_implicit_creep_update(cls, b0, 0.0, gamma, C, dt, br, b_c) for C in -0.9:0.05:0.9]
+            @test all(diff(G) .<= 1e-14) # more closure (larger N) never opens the gap
+        end
+    end
+    # unchanged where C >= 0: branch 2 is already >= br whenever branch 1 is rejected
+    for b0 in 0.0:0.01:0.3, gamma in (0.0, 1.0), C in (0.0, 0.3)
+        b_below = Shakti.relax_update(b0, gamma * br, gamma + C, dt)
+        @test Shakti.fully_implicit_creep_update(Shakti.StandardCreep(), b0, 0.0, gamma, C, dt, br, b_c) ==
+              (b_below < br ? b_below : Shakti.relax_update(b0, 0.0, C, dt))
+    end
+end

@@ -347,9 +347,15 @@ docstring).
 """
 # `b0` is the old gap height and `m` the melt-opening rate mdot/rho_i (opening0 = b0 + dt*m); they
 # are passed separately because relax_update's exponential branch needs them apart.
+#
+# For C >= 0 both branches are backward Euler on a monotone map, so exactly one is self-consistent, and a rejected
+# branch 1 leaves branch 2 >= br. For C < 0 (N < 0, only reachable without IceUplift) branch 2 is the exponential
+# solution, which can land below br after branch 1 was rejected: the new gap then fell as the old one grew, a jump
+# that ConsistentGapCoupling's dG/dN straddled. Flooring branch 2 at br keeps the update continuous and monotone in
+# b0 and N, and changes nothing for C >= 0.
 @inline function fully_implicit_creep_update(::StandardCreep, b0, m, gamma, C, dt, br, b_c)
     b_below = relax_update(b0, m + gamma * br, gamma + C, dt)
-    return b_below < br ? b_below : relax_update(b0, m, C, dt)
+    return b_below < br ? b_below : max(relax_update(b0, m, C, dt), br)
 end
 
 # Original (opening0, ...) form, kept for existing callers: identical to the above whenever the
@@ -383,8 +389,10 @@ end
 
     # Branch (iv): beta zero (b_{k+1} >= br) AND l_c linear (b_{k+1} > b_c) -- always
     # self-consistent as the final fallback (exactly one of the four branches must be, since
-    # beta/l_c are continuous and together partition the b_{k+1} axis into non-overlapping pieces).
-    return relax_update(b0, m, C, dt)
+    # beta/l_c are continuous and together partition the b_{k+1} axis into non-overlapping pieces). For C < 0 it is
+    # floored at br, as in the StandardCreep update above.
+    b4 = relax_update(b0, m, C, dt)
+    return C < zero(C) ? max(b4, br) : b4
 end
 
 @parallel_indices (ix, iy) function compute_b_fully_implicit_kernel!(b, mask, mdot, abs_ub, A_visc, N, rho_i, n_minus_1, dt, b_min, b_max, bump, lr, cls::AbstractCreepLengthScheme, b_c)
