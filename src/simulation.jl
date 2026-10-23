@@ -336,8 +336,7 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
 
     # K-face averaging scheme setup. Unfilled cavities need the donor-cell (upwind) face conductance, see Upwind
     # (k_face_scheme.jl): with an average, a nearly empty cell discharges through its neighbour's much larger conductance.
-    # The default is the implicit water depth, stable at any dt; "upwind" (explicit depth) only below the free-surface
-    # limit of compute_b_w! (minutes at 100 m), above which it overshoots or cycles.
+    # Under a free surface the implicit water depth is the default; averaged faces are refused there (below).
     free_surface = cavity_filling isa UnfilledCavities || uplift isa IceUplift
     k_face_default = k_face_choice === nothing
     k_face_default && (k_face_choice = free_surface ? "implicit_upwind" : "arithmetic")
@@ -355,13 +354,19 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
     # An averaged face lets an unfilled cell's outflow outgrow its water: the arithmetic mean gives a dry cell half its
     # neighbour's conductance, and the water it then delivers is created by the W >= 0 floor of update_b_empty_budget!
     # (Thwaites 2 km, uplift, dt = 1 h: 1.7e7 m^3/s after 12 h against 500 m^3/s of melt, lifting the ice by hundreds of
-    # metres). The harmonic mean closes every face of a dry cell, so it never wets again.
-    if (cavity_filling isa UnfilledCavities || uplift isa IceUplift) && (kfs isa Arithmetic || kfs isa Harmonic)
-        @warn "k_face_choice = \"$k_face_choice\" with $(nameof(typeof(cavity_filling)))/$(nameof(typeof(uplift))) does not conserve water: " *
+    # metres). The harmonic mean closes every face of a dry cell, so it never wets again. Both are refused under a free
+    # surface. "upwind" lags the water depth: correct, but stable only for dt < dx*W/(3|q|), minutes at 100 m (at 3 h a
+    # non-finite gap in step 1 without uplift, 500 Picard iterations and b = 1.7 m with it); it is kept, with a warning,
+    # as the only free-surface face for the symmetric solvers (Cholesky, CG, matrix-free) and NewtonJFNKSolver.
+    if free_surface && (kfs isa Arithmetic || kfs isa Harmonic)
+        error("k_face_choice = \"$k_face_choice\" with $(nameof(typeof(cavity_filling)))/$(nameof(typeof(uplift))) does not conserve water: " *
               (kfs isa Arithmetic ? "a dry cell discharges through half its neighbour's conductance and the water it lacks is created. " :
                                     "a dry cell's faces have no conductance, so it never refills. ") *
-              "Use \"implicit_upwind\" (or \"upwind\" at a time step below the free-surface limit, see compute_b_w!)."
+              "Use \"implicit_upwind\" (the default), or cavity_filling = FilledCavities(), uplift = NoUplift() for SHAKTI's original filled sheet.")
     end
+    free_surface && kfs isa Upwind && !k_face_default &&
+        @warn "k_face_choice = \"upwind\" with $(nameof(typeof(cavity_filling)))/$(nameof(typeof(uplift))) lags the water depth: stable only for " *
+              "dt < dx*W/(3|q|) (minutes at 100 m), above which the gap overshoots or the Picard iteration cycles. Use \"implicit_upwind\" (the default) at longer dt."
     if kfs isa ImplicitUpwind
         # The Newton terms of the donors' water depths make the head matrix non-symmetric (add_water_depth_newton!).
         solver = hs isa EllipticHeadScheme ? hs.ps : hs.pps

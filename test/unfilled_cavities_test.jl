@@ -88,7 +88,7 @@
         end
 
         @testset "no unfilled cell: identical to the legacy solve" begin
-            sims = [make_sim(cf; stuck = false, kface = "arithmetic") for cf in (FilledCavities(), UnfilledCavities())] # same face scheme: Upwind is the unfilled default and would differ
+            sims = [make_sim(cf; stuck = false, kface = "upwind") for cf in (FilledCavities(), UnfilledCavities())] # same face scheme (averaged faces are refused with unfilled cavities)
             for sim in sims
                 Shakti.prepare_head_solve!(sim); Shakti.step_h!(sim.hs, sim)
             end
@@ -98,11 +98,12 @@
             @test all(iszero, sims[2].state.b_empty .* 0) # b_empty not touched by the solve itself
         end
 
-        @testset "averaged faces with unfilled cavities warn" begin
-            @test_logs (:warn, r"does not conserve water") make_sim(UnfilledCavities(); kface = "arithmetic")
-            @test_logs (:warn, r"never refills") make_sim(UnfilledCavities(); kface = "harmonic")
-            @test_logs make_sim(UnfilledCavities(); kface = "upwind")
+        @testset "averaged faces with unfilled cavities are refused, upwind warns" begin
+            @test_throws r"does not conserve water" make_sim(UnfilledCavities(); kface = "arithmetic")
+            @test_throws r"never refills" make_sim(UnfilledCavities(); kface = "harmonic")
+            @test_logs (:warn, r"stable only for") make_sim(UnfilledCavities(); kface = "upwind")
             @test_logs make_sim(FilledCavities(); kface = "arithmetic")
+            @test_logs make_sim(FilledCavities(); kface = "upwind")
         end
 
         @testset "stuck cells: legacy gives pw < 0, unfilled cavities keep pw >= 0" begin
@@ -361,7 +362,7 @@
         end
 
         @testset "parabolic: no unfilled cell is identical to the legacy solve" begin
-            sims = [par_sim(cf; stuck = false, kface = "arithmetic") for cf in (FilledCavities(), UnfilledCavities())]
+            sims = [par_sim(cf; stuck = false, kface = "upwind") for cf in (FilledCavities(), UnfilledCavities())]
             for sim in sims
                 Shakti.prepare_head_solve!(sim); Shakti.step_h!(sim.hs, sim)
             end

@@ -141,7 +141,7 @@ The defaults are the GlaDS-2 sheet. Each keyword of `Simulation` has an opt-out:
 * `hydraulic_potential = SheetTopPotential()` (default)  `q = -K grad(h + b)`
   * `BedPotential()`  `q = -K grad(h)`, the original equations
 * `k_face_choice = "implicit_upwind"` (default with the two above)  face conductance from the upwind water depth at the end of the step: no time-step limit, needs an LU solver (step 8)
-  * `"upwind"`  faster, Cholesky allowed, but stable only for `dt < dx W / (3|q|)` (minutes at 100 m)
+  * `"upwind"`  symmetric matrix (Cholesky, CG, Newton allowed), but stable only for `dt < dx W / (3|q|)` (minutes at 100 m); warns with unfilled cavities or uplift
   * `"arithmetic"` (default with `FilledCavities`/`NoUplift`), `"harmonic"`  averaged faces; refused with unfilled cavities or uplift, where they create water
 * `gap_coupling = ConsistentGapCoupling()` (default with a Picard solver)  the head equation uses the gap change the gap scheme makes: the water budget closes
   * `ExplicitGapCoupling()`  SHAKTI's: the head equation assumes `dt*rate(N, b_old)`. Creates water where `b` is clamped (13 times the melt on Drang Drung) and can let the gap run away at `N < 0`; use it only to reproduce SHAKTI/ISSM
