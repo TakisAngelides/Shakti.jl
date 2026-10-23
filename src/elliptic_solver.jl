@@ -444,7 +444,7 @@ function refresh_head_dependents!(s::State, g::Grid, p::ModelParameters, mt::Mel
     compute_dhdxy!(s, g) # updates gradient of h in both x and y directions in one kernel to reduce the number of kernels
 
     compute_pw!(s, p) # update water pressure
-    compute_dpwdxy!(s, g) # update the water pressure gradient in both x and y in one kernel, feeds compute_sensible!'s sensible-heat term (via compute_mdot! below)
+    compute_dpwdxy!(s, g) # update the water pressure gradient in both x and y in one kernel, feeds the sensible-heat term (via compute_mdot! below)
     compute_N!(s, p, cnc) # update effective pressure (ice overburden pressure - pw)
     kfs isa ImplicitUpwind && solve_gap_iterate!(gc, ds, s, g, p) # ConsistentGapCoupling under WithDiffusion: SUHMO's gap at the new N for the conductance (compute_b_w_iterate!); no-op otherwise
 

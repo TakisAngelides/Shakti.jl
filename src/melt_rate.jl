@@ -29,18 +29,12 @@ struct MeltTerms{Geothermal,Frictional,Potential,Sensible,Conductive} end
 # energy released by water flowing downgradient + sensible heat exchanged as
 # water moves to regions of different pressure melting point - conductive
 # heat lost into cold ice above the bed, all divided by the latent heat of
-# fusion L. The three computed heat terms (frictional, dissipation, sensible) are exposed as their own
-# standalone kernels below (G and q_T are input fields) (compute_shear!/compute_potential!/
-# compute_sensible!, writing into preallocated State fields s.Q_b/
-# s.Q_diss/s.Q_sens for standalone/diagnostic use, e.g. as a tracked_obs
-# name -- see Simulation's tracked_obs; q_T has no standalone kernel since
-# it's an input field, not something Shakti computes), but compute_mdot!'s
-# hot path (below) does NOT call compute_shear!/compute_potential!/
-# compute_sensible!: it uses its own fused kernel that recomputes the same
-# terms and combines them into mdot in a single kernel launch instead of
-# four, while still writing shear/potential/sensible so those fields stay
-# valid every Picard iteration for anyone reading them (when the
-# corresponding MeltTerms flag is on -- see compute_mdot_kernel! below).
+# fusion L. compute_mdot! computes the three heat terms (frictional,
+# dissipation, sensible; G and q_T are input fields) and mdot in one fused
+# kernel, writing each term to its State field (s.Q_b/s.Q_diss/s.Q_sens) so
+# those fields hold the current values every Picard iteration (when the
+# corresponding MeltTerms flag is on -- see compute_mdot_kernel! below), e.g.
+# for a tracked_obs name.
 
 # The frictional heat takes each component as the mean of its two faces, also at a face to an OCEAN/LAND cell, unlike the
 # dissipation terms (face_heat_share below): it is a heat density of the grounded bed, not the energy released along the
@@ -49,23 +43,6 @@ struct MeltTerms{Geothermal,Frictional,Potential,Sensible,Conductive} end
 # With uniform sliding the mean gives u_b.taub exactly; the full share of face_heat_share would give 1.5 times it.
 # Each computed law gives a stress along u_b with N floored at 0 (bed_N, sliding_law.jl), so u_b.taub >= 0 and abs() is
 # a no-op for them; it is kept for PrescribedSlidingLaw, whose taub comes from the host with its own sign convention.
-@parallel_indices (ix, iy) function compute_shear_kernel!(Q_b, ub_x, taub_x, ub_y, taub_y)
-    if ix <= size(Q_b, 1) && iy <= size(Q_b, 2)
-        Q_b[ix, iy] = abs((ub_x[ix+1, iy]*taub_x[ix+1, iy] + ub_x[ix, iy]*taub_x[ix, iy]) / 2 +
-                            (ub_y[ix, iy+1]*taub_y[ix, iy+1] + ub_y[ix, iy]*taub_y[ix, iy]) / 2)
-    end
-    return
-end
-
-"""
-$(TYPEDSIGNATURES)
-
-Updates `s.Q_b`: the frictional (sliding) heat `|u_b . taub|` [W/m^2], averaged from faces onto
-cell centers. Standalone/diagnostic use (e.g. as a `tracked_obs` name,
-see `Simulation`'s `tracked_obs`) -- [`compute_mdot!`](@ref)'s hot path recomputes this term
-itself in a fused kernel rather than calling this function.
-"""
-compute_shear!(s::State) = (@parallel compute_shear_kernel!(s.Q_b, s.ub_x, s.taub_x, s.ub_y, s.taub_y); s)
 
 # Share of a face's dissipation (q.grad(h) or q.grad(pw) on that face) credited to cell (ix, iy):
 # half, as each interior face is split evenly between its two cells -- except the face between a
@@ -87,45 +64,9 @@ end
            face_heat_share(mask, ix, iy, ix, iy-1) * fy[ix, iy]   * gy[ix, iy]
 end
 
-@parallel_indices (ix, iy) function compute_potential_kernel!(Q_diss, mask, q_x, dhdx, q_y, dhdy, rho_w, ggrav)
-    if ix <= size(Q_diss, 1) && iy <= size(Q_diss, 2)
-        Q_diss[ix, iy] = rho_w * ggrav * abs(cell_face_sum(mask, q_x, dhdx, q_y, dhdy, ix, iy))
-    end
-    return
-end
-"""
-$(TYPEDSIGNATURES)
-
-Updates `s.Q_diss`: the heat dissipated by water flowing down the hydraulic-head gradient,
-`rho_w*g*|q . grad(h)|` [W/m^2], summed from the faces onto cell centers with half of each face's heat per cell, and all
-of it for a grounded cell on a face to an `OCEAN`/`LAND` cell (`face_heat_share`), so the outlet flow's heat is kept.
-Standalone/diagnostic use, same caveat as [`compute_shear!`](@ref).
-"""
-compute_potential!(s::State, p::ModelParameters) = (@parallel compute_potential_kernel!(s.Q_diss, s.mask, s.q_x, s.dhdx, s.q_y, s.dhdy, p.rho_w, p.g); s)
-
-# Requires dpwdx/dpwdy (computed above) already current.
-@parallel_indices (ix, iy) function compute_sensible_kernel!(Q_sens, mask, q_x, dpwdx, q_y, dpwdy, ct, cw, rho_w)
-    if ix <= size(Q_sens, 1) && iy <= size(Q_sens, 2)
-        Q_sens[ix, iy] = ct * cw * rho_w * cell_face_sum(mask, q_x, dpwdx, q_y, dpwdy, ix, iy)
-    end
-    return
-end
-
-"""
-$(TYPEDSIGNATURES)
-
-Updates `s.Q_sens`: the sensible heat exchanged as water moves to regions of different
-pressure-melting-point temperature, `ct*cw*rho_w*(q . grad(pw))` [W/m^2], averaged from faces onto
-cell centers. Requires `s.dpwdx`/`s.dpwdy` already current. Standalone/diagnostic use, same
-caveat as [`compute_shear!`](@ref).
-"""
-compute_sensible!(s::State, p::ModelParameters) = (@parallel compute_sensible_kernel!(s.Q_sens, s.mask, s.q_x, s.dpwdx, s.q_y, s.dpwdy, p.ct, p.cw, p.rho_w); s)
-
 # Fused hot-path kernel: Q_b/Q_diss/Q_sens/mdot in one launch instead of
-# four. Duplicates the per-cell math above rather than calling those
-# kernels, since each is itself a separate kernel launch. Each term is
-# stored as a heat flux [W/m^2] with its prefactor applied, so the stored
-# fields are exactly what enters mdot and can be passed to a coupled ice
+# four. Each term is stored as a heat flux [W/m^2] with its prefactor
+# applied, so the stored fields are exactly what enters mdot and can be passed to a coupled ice
 # model as is. A term whose MeltTerms flag is off is not computed (its
 # inputs are never read) and its field is set to 0, so it never holds a
 # stale value.
@@ -186,7 +127,7 @@ parameters (see [`MeltTerms`](@ref)). Also stores the heat terms `s.Q_b`/`s.Q_di
 [W/m^2], prefactors applied, so `L*mdot = G + Q_b + Q_diss + Q_sens - q_T`; a term that is off is
 stored as 0. With `p.limit_freeze_on`, `mdot` is floored at `s.mdot_min = -rho_i*C`, the
 freeze-on the gap can supply this step ([`freeze_on_capacity!`](@ref), set once per step by
-`prepare_head_solve!`); the heat terms are stored unlimited. Computed in one fused kernel rather than by calling [`compute_shear!`](@ref) etc. (one
+`prepare_head_solve!`); the heat terms are stored unlimited. Computed in one fused kernel (one
 launch instead of four). The englacial input `s.ieb` is not part of `mdot`: it enters the water
 mass balance only, not the gap opening.
 

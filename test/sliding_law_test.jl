@@ -93,7 +93,7 @@
                 s.N[2:4, 2:4] .= -1e5                   # a patch above overburden
                 compute_taub_xy!(s, p, sl)
                 @test s.taub_x[3, 3] == 0 && s.taub_x[4, 3] == 0 && s.taub_y[3, 3] == 0 && s.taub_y[3, 4] == 0
-                compute_shear!(s)
+                compute_mdot!(s, p, MeltTerms{false, true, false, false, false}()) # writes the frictional heat Q_b
                 @test s.Q_b[3, 3] == 0
                 @test s.Q_b[5, 5] > 0                   # outside the patch: unchanged
                 @test all(>=(0), Array(s.taub_x) .* Array(s.ub_x)) && all(>=(0), Array(s.taub_y) .* Array(s.ub_y))

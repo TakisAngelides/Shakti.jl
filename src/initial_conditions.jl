@@ -92,7 +92,7 @@ function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, sl::Abst
     # immediately) but keeps pw/N consistent from the start.
     # Vectorized rather than a scalar for-loop so that it is GPU compatible.
     apply_boundary_pw!(s, p)
-    compute_dpwdx!(s, g) # water pressure gradient in x and y, feeds compute_sensible!'s sensible-heat term (via compute_mdot! below)
+    compute_dpwdx!(s, g) # water pressure gradient in x and y, feeds the sensible-heat term (via compute_mdot! below)
     compute_dpwdy!(s, g)
     compute_N!(s, p) # Effective pressure
 
@@ -112,7 +112,7 @@ function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, sl::Abst
     # every Picard iteration uses (refresh_head_dependents!), so q_x/q_y/Re start
     # consistent with the initial water depth b_w and dhdx/dhdy.
     compute_face_flux!(s, p) # face transmissivity K_x/K_y, q and Re on faces (water_flux.jl); the Simulation's own k-face scheme is applied from the first step's refresh on
-    compute_Re!(s) # cell-centered average of Re_x/Re_y, feeds compute_K! below
+    compute_Re!(s) # cell-centered average of Re_x/Re_y, feeds compute_cell_K! below
 
     # Basal shear stress
     compute_taub_x!(s, p, sl)
@@ -122,7 +122,7 @@ function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, sl::Abst
     # mdot_includes_* fields (see MeltTerms, melt_rate.jl).
     mt = MeltTerms{p.mdot_includes_G, p.mdot_includes_frictional, p.mdot_includes_potential, p.mdot_includes_sensible, p.mdot_includes_qT}()
     compute_mdot!(s, p, mt) # melt rate
-    compute_K!(s, p) # transmissivity
+    compute_cell_K!(s, p) # cell-centred transmissivity (a diagnostic; the faces are compute_face_flux!'s)
 
 end
 

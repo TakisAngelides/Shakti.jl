@@ -6,7 +6,7 @@
 # (the next compute_b! call reads beta; the elliptic/parabolic RHS assembly kernels,
 # linear_solver.jl, read lc). compute_b_x!/compute_b_y! are refreshed too, but the Picard
 # loop no longer reads b_x/b_y (the face conductances take the water depth b_w,
-# compute_face_flux!); they are kept as face diagnostics and for the old flux helpers of water_flux.jl.
+# compute_face_flux!); they are kept as face diagnostics.
 #
 # This file is included before simulation.jl (same reason melt_rate.jl is
 # included before elliptic_solver.jl, see its own docstring note):

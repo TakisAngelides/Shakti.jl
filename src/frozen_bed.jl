@@ -33,8 +33,8 @@ Freezes every cell where `freeze_mask` is `true` and currently `GROUNDED` to
 is harmless, not an error).
 
 Sets `b:=0` and `pw:=0` on those cells, and zeroes the water fields (`b_empty`, `b_uplift`, `b_dry`, `w_old`), then refreshes everything that depends on `s.mask`/`s.b`/
-`s.pw`: `s.h = zb` on those cells (`pw = 0`; the other cells keep their head), `s.K` via
-[`compute_K!`](@ref) (`b=0` gives `K=0` exactly), `s.valid_x`/`s.valid_y` via
+`s.pw`: `s.h = zb` on those cells (`pw = 0`; the other cells keep their head), the cell-centred `s.K`
+(`b=0` gives `K=0` exactly; the face transmissivities are rebuilt by the next refresh), `s.valid_x`/`s.valid_y` via
 [`compute_face_masks!`](@ref), and
 `s.N` via [`compute_N!`](@ref) -- which, per `FROZEN_BED`'s own convention, evaluates to `po - 0
 = po` exactly there: full overburden, no water pressure. `s.dpwdx`/`s.dpwdy` are left stale here
@@ -64,7 +64,7 @@ function freeze_cells!(s::State, p::ModelParameters, freeze_mask::AbstractMatrix
     @. s.pw = ifelse(do_freeze, zero(eltype(s.pw)), s.pw)
     refresh_b_dependents!(s, p) # lc/beta are lagged fields derived from b (normally refreshed in step_b!): keep them consistent with the b just set
     @. s.h = ifelse(do_freeze, s.zb, s.h) # pw = 0; the other cells keep their head (recomputing it from pw dropped the empty depth and uplift layer it holds)
-    compute_K!(s, p)
+    compute_cell_K!(s, p) # the face transmissivities are rebuilt by the next refresh (compute_face_flux!)
     compute_face_masks!(s)
     compute_N!(s, p)
     return s
@@ -92,7 +92,7 @@ function thaw_cells!(s::State, p::ModelParameters, thaw_mask::AbstractMatrix{Boo
     @. s.mask = ifelse(do_thaw, GROUNDED, s.mask)
     seed_empty!(s, p, do_thaw)
     refresh_b_dependents!(s, p) # without this a thawed cell keeps lc = 0 (from its frozen b = 0) until the next step_b!, i.e. no creep-closure term in the first head solve
-    compute_K!(s, p)
+    compute_cell_K!(s, p) # the face transmissivities are rebuilt by the next refresh (compute_face_flux!)
     compute_face_masks!(s)
     compute_N!(s, p)
     return s
@@ -235,7 +235,7 @@ function set_mask!(s::State, p::ModelParameters, new_mask::AbstractMatrix)
     refresh_b_dependents!(s, p)
     rg = p.rho_w * p.g
     @. s.h = ifelse(on | (s.mask != GROUNDED), s.pw / rg + s.zb, s.h) # the cells that changed and the boundaries from pw; a grounded cell keeps its head, with the empty depth or uplift layer it holds
-    compute_K!(s, p)
+    compute_cell_K!(s, p) # the face transmissivities are rebuilt by the next refresh (compute_face_flux!)
     compute_face_masks!(s)
     compute_N!(s, p)
     n_isolated = freeze_isolated!(s, p)   # kept FROZEN_BED cells can cut a new GROUNDED cell off from every drainage path

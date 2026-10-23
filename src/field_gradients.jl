@@ -10,8 +10,8 @@
 # (a face touching an OTHER_BASIN or FROZEN_BED cell, or a LAND/OCEAN face closed
 # as outflow-only), so downstream flux/melt computations never see a spurious
 # gradient driven by a frozen, non-evolving neighbour value. First/last row (x) or column (y) are left
-# as zero: undefined at the grid domain boundary. dhdx/dhdy feed compute_q_x!/
-# compute_q_y! below; dpwdx/dpwdy feed the "sensible" heat term in
+# as zero: undefined at the grid domain boundary. dhdx/dhdy feed compute_face_flux!
+# (water_flux.jl); dpwdx/dpwdy feed the "sensible" heat term in
 # compute_mdot! further down.
 
 # Head difference across a face plus the gap jump `db` (nonzero only under SheetTopPotential, see
@@ -31,7 +31,7 @@ $(TYPEDSIGNATURES)
 Updates `s.dhdx` (x-gradient of the head that drives the flux) from the current `s.h`, plus the gap
 jump `s.db_x` under [`SheetTopPotential`](@ref) (zero otherwise), zeroed on any face touching an
 `OTHER_BASIN` cell (`s.valid_x`) so downstream flux/melt computations never see a spurious gradient
-driven by a frozen, non-evolving value. Feeds [`compute_q_x!`](@ref).
+driven by a frozen, non-evolving value. Feeds [`compute_face_flux!`](@ref).
 """
 function compute_dhdx!(s::State, g::Grid)
     @parallel compute_dhdx_kernel!(s.dhdx, s.h, s.db_x, s.valid_x, g.dx)

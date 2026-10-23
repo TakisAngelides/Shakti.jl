@@ -185,7 +185,7 @@ export compute_taub_x!, compute_taub_y!, compute_taub_xy!
 
 # melt_rate.jl
 export MeltTerms
-export compute_shear!, compute_potential!, compute_sensible!, compute_mdot!
+export compute_mdot!
 export compute_D!
 
 # elliptic_solver.jl
@@ -223,8 +223,7 @@ export compute_pw!, compute_N!
 export compute_dhdx!, compute_dhdy!, compute_dhdxy!, compute_dpwdx!, compute_dpwdy!, compute_dpwdxy!
 
 # water_flux.jl
-export compute_q_x!, compute_q_y!, compute_q_xy!, compute_Re_x!, compute_Re_y!, compute_Re_xy!, compute_Re!, compute_K!
-export compute_q_and_Re_x!, compute_q_and_Re_y!, compute_q_and_Re_xy!, compute_face_flux!
+export compute_Re!, compute_K!, compute_q_and_Re_xy!, compute_face_flux!
 
 # gap_height.jl
 export compute_beta!, compute_lc!, compute_b_x!, compute_b_y!, compute_b!

@@ -113,9 +113,6 @@ initialize_taub!
 compute_taub_x!
 compute_taub_y!
 compute_taub_xy!
-compute_shear!
-compute_potential!
-compute_sensible!
 compute_mdot!
 ```
 
@@ -213,18 +210,10 @@ compute_dpwdxy!
 ## Water flux, Reynolds number, transmissivity
 
 ```@docs
-compute_q_x!
-compute_q_y!
-compute_q_xy!
-compute_Re_x!
-compute_Re_y!
-compute_Re_xy!
-compute_Re!
-compute_K!
-compute_q_and_Re_x!
-compute_q_and_Re_y!
-compute_q_and_Re_xy!
 compute_face_flux!
+compute_Re!
+compute_q_and_Re_xy!
+compute_K!
 ```
 
 ## Gap height
