@@ -7,7 +7,7 @@
         # gap faster than the melt fills it in the upper part (free surface, pw = 0), the lower part is filled; LAND margin
         # in the last column. Melt terms off, so the melt input m is the only source and mdot does not depend on the head.
         function ramp(; kface = "implicit_upwind", solver = :auto, dt = 3600.0, m_mmd = 5.0, omega = 1e-4, e_v = 0.0,
-                        cf = UnfilledCavities(), up = NoUplift(), hp = BedPotential(), gap = "implicit", gc = ExplicitGapCoupling(), atol = 0, b_min = 1e-6)
+                        cf = UnfilledCavities(), up = NoUplift(), hp = BedPotential(), gap = "fully_implicit", gc = ExplicitGapCoupling(), atol = 0, b_min = 1e-6)
             nx, ny = 40, 3
             grid = Grid(nx, ny, 3.9e3, 200.0)
             x = Array(grid.x)

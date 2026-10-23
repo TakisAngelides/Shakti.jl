@@ -29,7 +29,7 @@
             state = State(grid)
             set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b0, G, ub_x, ub_y, ieb_seed, taub_x, taub_y)
             ps = PicardSolver(200, floattype(1e-8), CholeskyDirectSolver(grid), grid)
-            return Simulation(grid, state, 3, floattype(3600.0), p, "implicit", String[], mi, sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps)
+            return Simulation(grid, state, 3, floattype(3600.0), p, "fully_implicit", String[], mi, sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps)
         end
 
         @testset "standalone: ieb_external stays zero, ieb is Shakti's own input" begin

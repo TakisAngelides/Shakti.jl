@@ -61,7 +61,8 @@ inherits a real, if usually generous, `dt` cap from that term whenever `p.br != 
 (`beta = (br - b)/lr`, so the explicit opening overshoots `br` once `dt*|u_b|/lr > 1`). Confirmed in practice,
 not just in theory: a real AIS 32km run hit this at `dt=900s` and blew `b` up to the `b_max` safety
 cap in one cell, something [`FullyImplicitGapScheme`](@ref) -- now the default -- doesn't do.
-Unconditionally stable outright when `p.br == 0`.
+Unconditionally stable outright when `p.br == 0`. **Deprecated**: [`FullyImplicitGapScheme`](@ref) has the
+same cost without that cap; `gap_scheme_choice = "implicit"` warns, and the scheme will be removed.
 """
 struct ImplicitGapScheme <: AbstractGapScheme end
 
@@ -224,7 +225,9 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
 - Head scheme: [`EllipticHeadScheme`](@ref) if `p.e_v == 0` (requires `ps`, a
   [`PicardSolver`](@ref)), else [`ParabolicHeadScheme`](@ref) (requires `pps`, a
   [`ParabolicPicardSolver`](@ref)).
-- `gap_scheme_choice`: `"explicit"`, `"implicit"`, or `"fully_implicit"` (see [`AbstractGapScheme`](@ref)).
+- `gap_scheme_choice`: `"fully_implicit"` (recommended), `"explicit"` (a reference, stable only at short `dt`), or
+  `"implicit"` (deprecated, see [`ImplicitGapScheme`](@ref)); see [`AbstractGapScheme`](@ref). Ignored under
+  [`WithDiffusion`](@ref), whose gap solve has a single scheme of its own (`solve_b_diffusion!`).
 - Melt-rate terms: [`MeltTerms`](@ref)'s five flags are read directly off `p.mdot_includes_G`/
   `p.mdot_includes_frictional`/`p.mdot_includes_potential`/`p.mdot_includes_sensible`/
   `p.mdot_includes_qT` (each defaults to `true` in [`ModelParameters`](@ref)).
@@ -308,6 +311,7 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
     if gap_scheme_choice == "explicit"
         gs = ExplicitGapScheme()
     elseif gap_scheme_choice == "implicit"
+        @warn "gap_scheme_choice = \"implicit\" is deprecated and will be removed: \"fully_implicit\" costs the same and is stable at any dt (ImplicitGapScheme's lagged opening is not)" maxlog = 1
         gs = ImplicitGapScheme()
     elseif gap_scheme_choice == "fully_implicit"
         gs = FullyImplicitGapScheme()

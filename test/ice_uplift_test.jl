@@ -134,7 +134,7 @@
 
         @testset "parabolic scheme (e_v > 0): pw <= po" begin
             # e_v = 1e-4: the englacial storage below the overburden (e_v*p_o/(rho_w g), 5 cm) fills within the first steps
-            sim = make_sim(; up = IceUplift(), e_v = 1e-4, gap = "implicit")
+            sim = make_sim(; up = IceUplift(), e_v = 1e-4, gap = "fully_implicit")
             s = sim.state
             for _ in 1:4
                 step!(sim)

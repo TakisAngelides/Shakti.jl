@@ -174,8 +174,10 @@ ps = PicardSolver(200, 1e-6, LUDirectSolver(grid), grid)
 ## 9. Gap scheme and time step
 `gap_scheme_choice` (positional):
 * `"fully_implicit"`  unconditionally stable for any bump height; recommended
-* `"implicit"`  implicit creep, explicit opening
+* `"implicit"`  implicit creep, explicit opening; deprecated (warns), use `"fully_implicit"`
 * `"explicit"`  forward Euler; small steps only
+
+Under `WithDiffusion` the choice is ignored: the diffusive gap solve has its own scheme.
 
 Time step:
 * `FixedTimeStep()` (default)  `dt` every step; with the default sheet hours to days work
