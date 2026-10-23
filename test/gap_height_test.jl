@@ -186,6 +186,28 @@
             @test all(isfinite, Array(sim.state.N))
         end
 
+        @testset "gap_scheme keyword: FullyImplicitGapScheme by default, same run as the string form" begin
+            p = ModelParameters(e_v = 0.0, b_c = 0.05)
+            function build(args...; kw...)
+                state = State(grid)
+                set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b0, G, ub_x, ub_y, ieb, taub_x, taub_y)
+                ps = PicardSolver(50, floattype(1e-6), CholeskyDirectSolver(grid), grid)
+                return Simulation(grid, state, 3, floattype(3600.0), p, args..., String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps, kw...)
+            end
+            sim_kw = build()
+            sim_str = build("fully_implicit")
+            @test sim_kw.gs isa FullyImplicitGapScheme
+            @test build(; gap_scheme = ExplicitGapScheme()).gs isa ExplicitGapScheme
+            @test build("explicit").gs isa ExplicitGapScheme
+            @test_throws ErrorException build("crank_nicolson")
+            for _ in 1:3
+                step!(sim_kw)
+                step!(sim_str)
+            end
+            @test Array(sim_kw.state.b) == Array(sim_str.state.b)
+            @test Array(sim_kw.state.h) == Array(sim_str.state.h)
+        end
+
     end
 
 

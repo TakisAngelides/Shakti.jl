@@ -172,10 +172,13 @@ ps = PicardSolver(200, 1e-6, LUDirectSolver(grid), grid)
 
 #=
 ## 9. Gap scheme and time step
-`gap_scheme_choice` (positional):
-* `"fully_implicit"`  unconditionally stable for any bump height; recommended
-* `"implicit"`  implicit creep, explicit opening; deprecated (warns), use `"fully_implicit"`
-* `"explicit"`  forward Euler; small steps only
+`gap_scheme` (keyword):
+* `FullyImplicitGapScheme()` (default)  unconditionally stable for any bump height
+* `ImplicitGapScheme()`  implicit creep, explicit opening; deprecated (warns)
+* `ExplicitGapScheme()`  forward Euler; small steps only
+
+Older drivers name it by a string before the tracked observables (`"fully_implicit"`, `"implicit"`,
+`"explicit"`); that form still works.
 
 Under `WithDiffusion` the choice is ignored: the diffusive gap solve has its own scheme.
 
@@ -196,7 +199,7 @@ Checkpoints: `run!(sim; checkpoint_every, checkpoint_path)`, then `restart_path`
 and `extend_path` continues a finished one into a new file.
 =#
 path = joinpath(mktempdir(), "tutorial.nc")
-sim = Simulation(grid, state, nsteps, floattype(dt), p, "fully_implicit",
+sim = Simulation(grid, state, nsteps, floattype(dt), p,
                  ["N", "b", "Re", "po"], mi, sl; ps = ps,
                  which_observer = "IO", which_file_writer = "NetCDF",
                  tracked_times = 0:nsteps, path = path)
