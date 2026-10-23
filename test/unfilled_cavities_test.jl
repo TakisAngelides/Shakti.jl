@@ -177,7 +177,7 @@
             sim = Simulation(grid, st, 1, floattype(dt), p, "fully_implicit", String[], ConstantMeltInput(), sl;
                              ps = PicardSolver(500, floattype(1e-12), LUDirectSolver(grid), grid))
             for _ in 1:3; step!(sim); end
-            water(s) = sum(Array((max.(s.b .- s.b_empty .- s.b_dry, 0) .+ s.b_uplift) .* (s.mask .== GROUNDED)))
+            water(s) = sum(Array(s.W .* (s.mask .== GROUNDED)))
             lifted = Array(st.b_uplift) .> 0
             @test any(lifted)
             cell = findfirst(lifted)
@@ -187,13 +187,13 @@
             @test r.n_frozen == 1
             @test r.discarded_b > st.b[cell] + 0.0 # the uplift layer counts, not just the gap
             @test W0 - water(st) ≈ r.discarded_b rtol = 1e-12
-            @test st.b_empty[cell] == 0 && st.b_uplift[cell] == 0 && st.w_old[cell] == 0
+            @test st.b_empty[cell] == 0 && st.b_uplift[cell] == 0 && st.W[cell] == 0
             W1 = water(st)
             T[cell] = 100.0
             r = update_frozen_mask!(sim, T)
             @test r.n_thawed == 1
             @test st.b[cell] == p.b_min && st.b_empty[cell] == p.b_min && st.b_dry[cell] == 0 # dry_floor is off: b_dry zeroed
-            @test st.w_old[cell] == 0
+            @test st.W[cell] == 0
             @test water(st) ≈ W1 rtol = 1e-12
             step!(sim)
             @test all(isfinite, Array(st.h))
@@ -288,6 +288,7 @@
             s.b_empty .= 0.0
             s.b_empty[3, 3] = 9e-4  # nearly dry
             s.b_empty[4, 3] = 1e-3  # dry: no water, no conductance (no floor at b_min)
+            Shakti.sync_water!(s)   # the conductance reads the water W
             Shakti.compute_b_w!(s, un.p)
             s.dhdx .= 0.0; s.dhdy .= 0.0 # no gradient: the upwind face takes the smaller cell
             @test s.b_w[3, 3] ≈ 1e-4
@@ -312,6 +313,7 @@
             @test sim.kfs isa Upwind
             s.b .= 0.05; s.b_empty .= 0.0
             s.b_empty[3, 3] = 0.05 - 1e-4 # (3,3) holds 0.1 mm of water, its neighbours 5 cm
+            Shakti.sync_water!(s)
             Shakti.compute_b_w!(s, p)
             c0 = p.g / (12 * p.nu)
             K0(w) = c0 * w^3
@@ -339,6 +341,7 @@
                 s, p = sim.state, sim.p
                 s.b .= 0.01; s.b_empty .= 0.0
                 s.b_empty[3, 3] = 0.01 - 1e-5   # holds 10 micrometres of water, gap room 9.99 mm
+                Shakti.sync_water!(s)
                 hostdt = 86400.0
                 C = Array(freeze_on_capacity!(zeros(nx, ny), sim; dt = hostdt, water_limited = true))
                 limit = 1e-5 * p.rho_w / p.rho_i / hostdt
@@ -441,7 +444,7 @@
     @test shakti.kfs isa Arithmetic && shakti.gcp isa ConsistentGapCoupling
 end
 
-@testset "Water W (GAP-5 shadow): the budget's water equals b - b_empty - b_dry + b_uplift" begin
+@testset "Water W (GAP-5): the budget's water under unfilled cavities, the row's water elsewhere, both close the budget" begin
     nx, ny = 12, 6
     grid = Grid(nx, ny, 1.1e3, 500.0)
     x = Array(grid.x)
@@ -457,23 +460,32 @@ end
         return Simulation(grid, state, 4, floattype(dt), ModelParameters(), String[], ConstantMeltInput(), sl;
                           ps = PicardSolver(500, floattype(1e-8), ls, grid), kw...)
     end
-    # (sheet, budgeted, relative tolerance): exact up to round-off where the budget sets b_empty/b_uplift itself, to the
-    # Picard tolerance where the gap update sets b_dry or the head sets b_uplift, exact where W is the sum by definition
+    function budget_gap(s, W_old, dt)
+        qx, qy = Array(s.q_x), Array(s.q_y)
+        dv = [(qx[i+1, j] - qx[i, j]) / grid.dx + (qy[i, j+1] - qy[i, j]) / grid.dy for i in 1:nx, j in 1:ny]
+        r = Array(s.W) .- (W_old .+ dt .* (Array(s.mdot) ./ ModelParameters().rho_w .+ Array(s.ieb) .- dv))
+        return maximum(abs, r[Array(s.mask) .== GROUNDED])
+    end
+    # (sheet, budgeted, relative tolerance of the budget): W from the budget under unfilled cavities (b_empty and b_uplift
+    # then follow from it, to round-off), else the water the gap and the head leave (b - b_dry + b_uplift), which closes the
+    # budget to the Picard tolerance under the consistent coupling and not under the explicit one (2 % here)
     for (name, mk, budgeted, rtol) in (("GlaDS-2", () -> water_sim(LUDirectSolver(grid)), true, 1e-12),
-                                       ("filled, uplift, consistent", () -> water_sim(LUDirectSolver(grid); cavity_filling = FilledCavities()), true, 1e-5),
-                                       ("filled dry floor", () -> water_sim(CholeskyDirectSolver(grid); cavity_filling = FilledCavities(), uplift = NoUplift()), true, 1e-5),
+                                       ("filled, uplift, consistent", () -> water_sim(LUDirectSolver(grid); cavity_filling = FilledCavities()), false, 1e-5),
+                                       ("filled dry floor", () -> water_sim(CholeskyDirectSolver(grid); cavity_filling = FilledCavities(), uplift = NoUplift()), false, 1e-5),
                                        ("filled, explicit coupling", () -> water_sim(CholeskyDirectSolver(grid); dt = 3600.0, cavity_filling = FilledCavities(), uplift = NoUplift(),
-                                                                                     gap_coupling = ExplicitGapCoupling()), false, 0.0))
+                                                                                     gap_coupling = ExplicitGapCoupling()), false, Inf))
         @testset "$name" begin
             sim = mk()
             @test Shakti.water_is_budgeted(sim) == budgeted
             @test Shakti.water_mismatch(sim.state) == 0 # set at construction
             for _ in 1:4
+                W_old = Array(sim.state.W)
                 step!(sim)
                 @test first(Shakti.picard_status(sim.hs))
-                @test Shakti.water_mismatch(sim.state) <= rtol * maximum(Array(sim.state.W))
+                @test Shakti.water_mismatch(sim.state) <= (budgeted ? 1e-12 : 0.0) * maximum(Array(sim.state.W))
+                @test budget_gap(sim.state, W_old, sim.dt[]) <= rtol * maximum(Array(sim.state.W))
             end
-            budgeted || @test Array(sim.state.W) == Array(sim.state.b) # the legacy sheet's water is its gap
+            name == "filled, explicit coupling" && @test Array(sim.state.W) == Array(sim.state.b) # the legacy sheet's water is its gap
         end
     end
 end

@@ -49,9 +49,11 @@ struct NoOpenBySliding <: AbstractOpenBySlidingScheme end
 # gap is still smaller than the bump height, zero once b has grown past br.
 # The ice base is b + b_uplift above the bed; the bumps it still rides over are those above b_uplift, of height
 # bump = max(0, br - b_uplift) (= br without uplift, bit for bit), and sliding opens the gap only while b < bump.
-@parallel_indices (ix, iy) function compute_beta_kernel!(beta, bump, b, b_uplift, br, lr)
+# b_uplift is the water W beyond the gap where the ice is lifted (stor_up > 0 and h above the overburden head), else 0.
+@inline uplift_layer(W, b, h, zb, po, stor_up, rho_wg) = stor_up > 0 && h > zb + po / rho_wg ? max(zero(W), W - b) : zero(W)
+@parallel_indices (ix, iy) function compute_beta_kernel!(beta, bump, b, W, h, zb, po, stor_up, rho_wg, br, lr)
     if ix <= size(beta, 1) && iy <= size(beta, 2)
-        bu = max(zero(br), br - b_uplift[ix, iy])
+        bu = max(zero(br), br - uplift_layer(W[ix, iy], b[ix, iy], h[ix, iy], zb[ix, iy], po[ix, iy], stor_up[ix, iy], rho_wg))
         bump[ix, iy] = bu
         beta[ix, iy] = max(zero(br), (bu - b[ix, iy]) / lr)
     end
@@ -64,7 +66,8 @@ $(TYPEDSIGNATURES)
 Updates `s.beta` (opening rate of the gap by sliding over bedrock bumps of height `p.br` and
 spacing `p.lr`, Röthlisberger-style cavity opening): positive only while the gap is still smaller
 than the bump height, zero once `b` has grown past `br`. Under [`IceUplift`](@ref) the ice base is
-`b + b_uplift` above the bed, so the bumps it still rides over have height `s.bump = max(0, br - b_uplift)`
+`b + b_uplift` above the bed, `b_uplift = W - b` the water beyond the gap where the head is above the overburden
+(`s.W`, the water), so the bumps it still rides over have height `s.bump = max(0, br - b_uplift)`
 (also stored, for the fully implicit gap scheme and the gap update the head rows assume) and
 `beta = max(0, (bump - b)/lr)`: ice floating above the bumps opens no cavity. Without uplift `bump = br`.
 
@@ -72,7 +75,8 @@ Dispatches on `oss` (decided once, from `p.br`, see [`AbstractOpenBySlidingSchem
 [`NoOpenBySliding`](@ref) method skips the kernel launch entirely, since `p.br == 0` makes the term
 identically zero mathematically.
 """
-compute_beta!(s::State, p::ModelParameters, ::WithOpenBySliding) = (@parallel compute_beta_kernel!(s.beta, s.bump, s.b, s.b_uplift, p.br, p.lr); s)
+compute_beta!(s::State, p::ModelParameters, ::WithOpenBySliding) =
+    (@parallel compute_beta_kernel!(s.beta, s.bump, s.b, s.W, s.h, s.zb, s.po, s.stor_up, p.rho_w * p.g, p.br, p.lr); s)
 
 """
 $(TYPEDSIGNATURES)
@@ -474,9 +478,9 @@ end
 
 # Freezing turns water into ice: at rate `f` (ice thickness per time) it consumes `f*rho_i/rho_w` of water per
 # bed area, so a cell holding little water (a nearly empty cavity, see UnfilledCavities) cannot take more
-# than its water stock `W = b - b_empty` per host step: f <= (rho_w/rho_i)*W/dt. Only applied when
+# than its water stock `W` (State.W) per host step: f <= (rho_w/rho_i)*W/dt. Only applied when
 # `water_limited` (unfilled cavities on); with a water-filled gap (W = b) the gap room above is the limit.
-@parallel_indices (ix, iy) function freeze_on_capacity_kernel!(Cap, mask, b, beta, lc, abs_ub, A_visc, N, n_minus_1, dt, b_min, bump, lr, cls::AbstractCreepLengthScheme, b_c, beta_at_bmin, creep_at_bmin, diffusion, b_empty, water_ratio, water_limited)
+@parallel_indices (ix, iy) function freeze_on_capacity_kernel!(Cap, mask, b, beta, lc, abs_ub, A_visc, N, n_minus_1, dt, b_min, bump, lr, cls::AbstractCreepLengthScheme, b_c, beta_at_bmin, creep_at_bmin, diffusion, W, water_ratio, water_limited)
     if ix <= size(Cap, 1) && iy <= size(Cap, 2)
         if mask[ix, iy] == GROUNDED
             bb = b[ix, iy]
@@ -487,7 +491,7 @@ end
                 freeze_on_capacity_cell(bb, abs_ub[ix, iy], Cn, dt, b_min, br, lr, cls, b_c,
                                         beta_at_bmin ? b_min : bb, creep_at_bmin ? b_min : bb)
             if water_limited
-                Cap[ix, iy] = min(Cap[ix, iy], max(zero(bb), bb - b_empty[ix, iy]) * water_ratio / dt)
+                Cap[ix, iy] = min(Cap[ix, iy], max(zero(bb), W[ix, iy]) * water_ratio / dt)
             end
         else
             Cap[ix, iy] = zero(eltype(Cap))
@@ -496,13 +500,13 @@ end
     return
 end
 
-# Freeze-on capacity under the dry floor (freeze_on_capacity!, run.jl): the room is the water W = b - b_dry plus the opening
+# Freeze-on capacity under the dry floor (freeze_on_capacity!, run.jl): the room is the water W (State.W) plus the opening
 # by sliding (and minus the explicit creep closure under ExplicitGapScheme; the implicit schemes cannot close the water below
 # zero), and freezing takes no more water than W.
-@parallel_indices (ix, iy) function freeze_on_capacity_dry_floor_kernel!(Cap, mask, b, b_dry, beta, abs_ub, A_visc, N, n_minus_1, dt, cls::AbstractCreepLengthScheme, b_c, explicit_creep, water_ratio)
+@parallel_indices (ix, iy) function freeze_on_capacity_dry_floor_kernel!(Cap, mask, Wo, beta, abs_ub, A_visc, N, n_minus_1, dt, cls::AbstractCreepLengthScheme, b_c, explicit_creep, water_ratio)
     if ix <= size(Cap, 1) && iy <= size(Cap, 2)
         if mask[ix, iy] == GROUNDED
-            W = b[ix, iy] - b_dry[ix, iy]
+            W = Wo[ix, iy]
             Cn = A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy]
             creep = explicit_creep ? Cn * creep_length(cls, W, b_c, Cn) : zero(W)
             Cap[ix, iy] = max(zero(W), min(W / dt + beta[ix, iy] * abs_ub[ix, iy] - creep, W * water_ratio / dt))

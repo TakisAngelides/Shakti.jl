@@ -32,7 +32,7 @@
             s = State(grid)
             s.b .= state.b; s.q_x .= state.q_x; s.dhdx .= state.dhdx; s.dpwdx .= state.dpwdx
             s.q_y .= state.q_y; s.dhdy .= state.dhdy; s.dpwdy .= state.dpwdy
-            compute_D!(s, p, mt_full, NoDiffusion())
+            Shakti.sync_water!(s); compute_D!(s, p, mt_full, NoDiffusion())
             @test all(iszero, Array(s.D_x))
             @test all(iszero, Array(s.D_y))
         end
@@ -41,7 +41,7 @@
             s = State(grid)
             s.b .= state.b; s.q_x .= state.q_x; s.dhdx .= state.dhdx; s.dpwdx .= state.dpwdx
             s.q_y .= state.q_y; s.dhdy .= state.dhdy; s.dpwdy .= state.dpwdy
-            compute_D!(s, p, mt_full, WithDiffusion(CholeskyDirectSolver(grid)))
+            Shakti.sync_water!(s); compute_D!(s, p, mt_full, WithDiffusion(CholeskyDirectSolver(grid)))
 
             expected = D_eq10(0.02, heat_pot + heat_sens)
             @test expected > 0
@@ -63,7 +63,7 @@
             s1.b .= state.b; s1.q_x .= state.q_x; s1.dhdx .= state.dhdx; s1.dpwdx .= state.dpwdx
             mt_pot_only = MeltTerms{true, true, true, false, true}()
             s1.q_y .= state.q_y; s1.dhdy .= state.dhdy; s1.dpwdy .= state.dpwdy
-            compute_D!(s1, p, mt_pot_only, WithDiffusion(CholeskyDirectSolver(grid)))
+            Shakti.sync_water!(s1); compute_D!(s1, p, mt_pot_only, WithDiffusion(CholeskyDirectSolver(grid)))
             expected_pot_only = D_eq10(0.02, heat_pot)
             @test s1.D_x[2, 1] ≈ expected_pot_only
 
@@ -72,7 +72,7 @@
             s2.b .= state.b; s2.q_x .= state.q_x; s2.dhdx .= state.dhdx; s2.dpwdx .= state.dpwdx
             s2.q_y .= state.q_y; s2.dhdy .= state.dhdy; s2.dpwdy .= state.dpwdy
             mt_sens_only = MeltTerms{true, true, false, true, true}()
-            compute_D!(s2, p, mt_sens_only, WithDiffusion(CholeskyDirectSolver(grid)))
+            Shakti.sync_water!(s2); compute_D!(s2, p, mt_sens_only, WithDiffusion(CholeskyDirectSolver(grid)))
             expected_sens_only = D_eq10(0.02, heat_sens) # D is floored at 0 (a net heat deficit is freeze-on, handled by mdot, not backward diffusion)
             @test s2.D_x[2, 1] ≈ expected_sens_only
             @test all(>=(0), Array(s2.D_x)) && all(>=(0), Array(s2.D_y))
@@ -90,7 +90,7 @@
             s.b .= [0.01 * (i + j) for i in 1:nx, j in 1:ny]
             mt_pot_only = MeltTerms{true, true, true, false, true}()
             wd = WithDiffusion(CholeskyDirectSolver(grid))
-            compute_D!(s, p, mt_pot_only, wd) # b_empty = 0 (FilledCavities): the face mean of b
+            Shakti.sync_water!(s); compute_D!(s, p, mt_pot_only, wd) # b_empty = 0 (FilledCavities): the face mean of b
             D_full = copy(Array(s.D_x)); Dy_full = copy(Array(s.D_y))
             b = Array(s.b)
             @test D_full[2, 1] ≈ (D_eq10(b[2, 1], heat_pot) + D_eq10(b[1, 1], heat_pot)) / 2
@@ -99,7 +99,7 @@
             # (b_empty < 0, from the water-budget bookkeeping) touches at most its gap b
             be = zeros(nx, ny); be[2, 1] = 0.75 * b[2, 1]; be[3, 1] = -0.5 * b[3, 1]
             s.b_empty .= be
-            compute_D!(s, p, mt_pot_only, wd)
+            Shakti.sync_water!(s); compute_D!(s, p, mt_pot_only, wd)
             @test s.D_x[2, 1] ≈ D_full[2, 1] * (0.25 * b[2, 1] + b[1, 1]) / (b[2, 1] + b[1, 1])
             @test s.D_x[3, 1] ≈ D_full[3, 1] * (0.25 * b[2, 1] + b[3, 1]) / (b[2, 1] + b[3, 1])
             @test s.D_x[4, 1] == D_full[4, 1] # (3, 1) is clamped to its gap b
@@ -116,19 +116,19 @@
             s = State(grid)
             s.b .= [0.01 + 0.002 * i + 0.001 * j for i in 1:nx, j in 1:ny]
             s.q_x .= -1e-5; s.dhdx .= 0.1
-            compute_D!(s, p, mt_pot_only, wd)
+            Shakti.sync_water!(s); compute_D!(s, p, mt_pot_only, wd)
             @test all(>(0), Array(s.D_y)[:, 2:end-1])
             s_uni = State(grid); s_uni.b .= 0.02; s_uni.q_x .= -1e-5; s_uni.dhdx .= 0.1
-            compute_D!(s_uni, p, mt_pot_only, wd)
+            Shakti.sync_water!(s_uni); compute_D!(s_uni, p, mt_pot_only, wd)
             @test Array(s_uni.D_y)[2:3, 2:3] ≈ Array(s_uni.D_x)[2:3, 2:3]
             r = State(grid)
             r.b .= permutedims(Array(s.b)); r.q_y .= permutedims(Array(s.q_x)); r.dhdy .= permutedims(Array(s.dhdx))
-            compute_D!(r, p, mt_pot_only, wd)
+            Shakti.sync_water!(r); compute_D!(r, p, mt_pot_only, wd)
             @test Array(r.D_y) ≈ permutedims(Array(s.D_x))
             @test Array(r.D_x) ≈ permutedims(Array(s.D_y))
             # only faces between two GROUNDED cells carry D
             s.mask[2, 2] = OTHER_BASIN
-            compute_D!(s, p, mt_pot_only, wd)
+            Shakti.sync_water!(s); compute_D!(s, p, mt_pot_only, wd)
             @test s.D_x[2, 2] == 0 && s.D_x[3, 2] == 0 && s.D_y[2, 2] == 0 && s.D_y[2, 3] == 0
         end
 
@@ -499,12 +499,13 @@
             worst = 0.0
             for _ in 1:3
                 s = sim.state
+                W_old = Array(s.W) # the water at the start of the step
                 step!(sim)
                 @test Shakti.picard_status(sim.hs)[1]
                 qx, qy = Array(s.q_x), Array(s.q_y)
                 dv = [(qx[i+1, j] - qx[i, j]) / grid.dx + (qy[i, j+1] - qy[i, j]) / grid.dy for i in 1:nx, j in 1:ny]
                 src = Array(s.mdot) ./ p.rho_w .+ Array(s.ieb)
-                W = Array(s.w_old) .+ dt .* (src .- dv)
+                W = W_old .+ dt .* (src .- dv)
                 worst = max(worst, sum(max.(0, .-W[g])) / dt / sum(abs, src[g]))
             end
             return worst

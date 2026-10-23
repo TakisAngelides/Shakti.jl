@@ -62,7 +62,11 @@
             b = Array(s.b)
             @test all(==(p.br), Array(s.bump)) # no uplift yet: the full bump height, bit for bit
             bu = zeros(nx, ny); bu[3, 3] = 0.5 * p.br; bu[4, 3] = 2 * p.br
-            copyto!(s.b_uplift, bu)
+            copyto!(s.W, b .+ bu) # the uplift layer is the water beyond the gap where the head is above the overburden
+            hh = Array(s.h); ho = Array(s.zb) .+ Array(s.po) ./ (p.rho_w * p.g)
+            hh[3, 3] = ho[3, 3] + 1; hh[4, 3] = ho[4, 3] + 1
+            copyto!(s.h, hh)
+            @test Array(s.stor_up)[3, 3] > 0 && Array(s.stor_up)[4, 3] > 0
             compute_beta!(s, p, Shakti.WithOpenBySliding())
             bump, beta = Array(s.bump), Array(s.beta)
             @test bump[3, 3] ≈ 0.5 * p.br && bump[4, 3] == 0 && bump[2, 2] == p.br
@@ -108,8 +112,8 @@
             q = ModelParameters()
             b, mdot, beta, ub, A, lc, zb0, po0 = 1e-3, 0.0, 0.05, 1e-6, 5e-25, 1e-3, 10.0, 4e6
             ho = zb0 + po0 / (q.rho_w * q.g)
-            terms(h, N) = Shakti.cavity_head_terms(b, q.b_min, q.b_max, mdot, beta, ub, A, N, lc, h, zb0, po0, 0.0, 0.0,
-                                                    q.rho_w, q.rho_i, q.g, q.n, q.n_minus_1_exp, 0.0, 1 / dt)
+            terms(h, N) = Shakti.cavity_head_terms(b, q.b_min, q.b_max, mdot, beta, ub, A, N, lc, h, zb0, po0, 0.0,
+                                                    q.rho_w, q.rho_i, q.g, q.n, q.n_minus_1_exp, 1 / dt, b)
             # row residual at the head h: gd*h - gs (the head-dependent part of the row, without the flux)
             row(h, N) = (t = terms(h, N); t[2] * h - t[1])
             ϵ = 1e-6

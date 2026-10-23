@@ -32,7 +32,7 @@ Freezes every cell where `freeze_mask` is `true` and currently `GROUNDED` to
 `LAND`/`OTHER_BASIN`/already `FROZEN_BED` -- are left untouched, so passing an overly broad mask
 is harmless, not an error).
 
-Sets `b:=0` and `pw:=0` on those cells, and zeroes the water fields (`b_empty`, `b_uplift`, `b_dry`, `w_old`), then refreshes everything that depends on `s.mask`/`s.b`/
+Sets `b:=0` and `pw:=0` on those cells, and zeroes the water fields (`W`, `b_empty`, `b_uplift`, `b_dry`), then refreshes everything that depends on `s.mask`/`s.b`/
 `s.pw`: `s.h = zb` on those cells (`pw = 0`; the other cells keep their head), the cell-centred `s.K`
 (`b=0` gives `K=0` exactly; the face transmissivities are rebuilt by the next refresh), `s.valid_x`/`s.valid_y` via
 [`compute_face_masks!`](@ref), and
@@ -98,9 +98,8 @@ function thaw_cells!(s::State, p::ModelParameters, thaw_mask::AbstractMatrix{Boo
     return s
 end
 
-# The water a cell holds, as w_old counts it (set_cavity_storage!): the filled gap less the dry floor, plus the uplift
-# layer. Each term is zero under the options that do not own it, so this is the water under every sheet.
-held_water(s::State, cells) = sum((max.(s.b .- s.b_empty .- s.b_dry, zero(eltype(s.b))) .+ s.b_uplift) .* cells)
+# The water the cells hold (State.W).
+held_water(s::State, cells) = sum(s.W .* cells)
 
 # A cell leaving the dynamic sheet keeps no gap and no water.
 function clear_water!(s::State, cells)
@@ -109,7 +108,6 @@ function clear_water!(s::State, cells)
     @. s.b_empty = ifelse(cells, z, s.b_empty)
     @. s.b_uplift = ifelse(cells, z, s.b_uplift)
     @. s.b_dry = ifelse(cells, z, s.b_dry)
-    @. s.w_old = ifelse(cells, z, s.w_old)
     @. s.W = ifelse(cells, z, s.W)
     return s
 end
@@ -182,7 +180,7 @@ happens. Intended to be called whenever the basal temperature is refreshed (ther
 timescale), not every hydrology step.
 
 Returns `(n_frozen, n_thawed, discarded_b, n_isolated)`: the number of cells that changed each way, the sum
-of the water depth (m; the filled gap `b - b_empty - b_dry` plus the uplift layer `b_uplift`) over the freezing cells, i.e.
+of the water depth (m; the water `W`, the filled gap plus the uplift layer) over the freezing cells, i.e.
 the water thickness discarded by freezing
 (multiply by `dx*dy` for a volume, see the limitation note in [`freeze_cells!`](@ref)).
 """

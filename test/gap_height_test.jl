@@ -282,7 +282,7 @@ end
     F = Float32
     z = zero(F)
     gu = Shakti.SchemeGapUpdate{Shakti.FullyImplicitGapScheme, Shakti.StandardCreep, F}(F(3600), F(0.1), F(2), F(0), false)
-    r = @inferred Shakti.scheme_head_terms(gu, F(0.01), F(1e-6), F(Inf), F(1e-3), F(1e-3), F(1e-6), F(5e-25), F(1e6), F(100), F(0), F(4e6), z, z, F(1000), F(910), F(9.81), 2, z, z, z)
+    r = @inferred Shakti.scheme_head_terms(gu, F(0.01), F(1e-6), F(Inf), F(1e-3), F(1e-3), F(1e-6), F(5e-25), F(1e6), F(100), F(0), F(4e6), z, F(1000), F(910), F(9.81), 2, z, F(0.01))
     @test r isa Tuple{F, F}
     s = @inferred Shakti.end_of_step_gap_slope(gu, F(0.01), z, F(1e-6), F(Inf), F(1e-3), F(1e-3), F(1e-6), F(5e-25), F(1e6), F(910), 2, F(1000), F(9.81))
     @test s isa F

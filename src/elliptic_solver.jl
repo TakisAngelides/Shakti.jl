@@ -342,7 +342,7 @@ $(TYPEDSIGNATURES)
 
 Second convergence test of [`Picard_loop!`](@ref), on the water instead of the head: every `GROUNDED` cell's end-of-step
 water depth from its head row ([`compute_b_w_iterate!`](@ref)'s, with the current melt rate) must match the water its fluxes and sources
-leave it, `w_old + dt (mdot/rho_w + ieb - div q)` ([`update_b_empty_budget!`](@ref)), to `tol` times the sum of the
+leave it, `W + dt (mdot/rho_w + ieb - div q)` (`W` the water at the start of the step) ([`update_b_empty_budget!`](@ref)), to `tol` times the sum of the
 magnitudes of the cell's terms (its water then and before, and `dt` times its sources and face fluxes: the scale of the
 balance's round-off) but no less than `WATER_TOL_FLOOR` = 1e-2, or to `atol` metres of water when `atol > 0`. `wdt` is the time step, 0 to skip the test: it applies
 where the head rows conserve exactly `b_w` ([`ImplicitUpwind`](@ref), [`ConsistentGapCoupling`](@ref),
@@ -357,8 +357,8 @@ The test also does not depend on the elevation of the bed, as the relative head 
 const WATER_TOL_FLOOR = 1e-2
 function water_converged(ps::PicardSolver, s::State, g::Grid, p::ModelParameters, gc::AbstractGapCoupling, wdt)
     wdt > 0 || return true
-    @parallel water_budget_residual_kernel!(ps.delta_h, ps.atol == 0, s.mask, s.w_old, s.q_x, s.q_y, s.mdot, s.ieb, g.dx, g.dy, floattype(wdt), p.rho_w, s.b, s.h, s.zb, s.po, s.N,
-                                            s.stor, s.stor_up, p.b_min, p.b_max, p.g, gc, s.beta, s.abs_ub, s.A_visc, p.rho_i, p.n_minus_1_exp, s.b_dry, s.bump, s.b_next)
+    @parallel water_budget_residual_kernel!(ps.delta_h, ps.atol == 0, s.mask, s.W, s.q_x, s.q_y, s.mdot, s.ieb, g.dx, g.dy, floattype(wdt), p.rho_w, s.b, s.h, s.zb, s.po, s.N,
+                                            s.stor, s.stor_up, p.b_min, p.b_max, p.g, gc, s.beta, s.abs_ub, s.A_visc, p.rho_i, p.n_minus_1_exp, s.bump, s.b_next)
     r_max = mapreduce(abs, max, ps.delta_h; init = zero(eltype(ps.delta_h)))
     return ps.atol > 0 ? r_max < ps.atol : r_max < max(ps.tol, WATER_TOL_FLOOR, 100 * eps(eltype(ps.delta_h)))
 end

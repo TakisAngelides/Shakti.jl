@@ -133,6 +133,7 @@
             sim = ramp(kface = kface, b_min = 1e-3)
             s, nx = sim.state, sim.grid.nx
             s.b_empty[nx-4:nx-1, :] .= s.b[nx-4:nx-1, :]
+            Shakti.sync_water!(s) # the water W the rows and conductances read
             W_old = water(s)
             step!(sim)
             @test first(Shakti.picard_status(sim.hs))
