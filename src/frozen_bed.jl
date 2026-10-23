@@ -32,7 +32,7 @@ Freezes every cell where `freeze_mask` is `true` and currently `GROUNDED` to
 `LAND`/`OTHER_BASIN`/already `FROZEN_BED` -- are left untouched, so passing an overly broad mask
 is harmless, not an error).
 
-Sets `b:=0` and `pw:=0` on those cells, then refreshes everything that depends on `s.mask`/`s.b`/
+Sets `b:=0` and `pw:=0` on those cells, and zeroes the water fields (`b_empty`, `b_uplift`, `b_dry`, `w_old`), then refreshes everything that depends on `s.mask`/`s.b`/
 `s.pw`: `s.h = zb` on those cells (`pw = 0`; the other cells keep their head), `s.K` via
 [`compute_K!`](@ref) (`b=0` gives `K=0` exactly), `s.valid_x`/`s.valid_y` via
 [`compute_face_masks!`](@ref), and
@@ -49,7 +49,7 @@ afterwards ([`refresh_state!`](@ref)).
 
 # Limitation
 
-Freezing is a cutoff, not a phase-change model: any water still held in a freezing cell (`b`) is
+Freezing is a cutoff, not a phase-change model: any water still held in a freezing cell (the filled gap and any uplift layer) is
 discarded, not refrozen onto the ice base, and no latent heat is applied. Gradual refreezing is
 the job of the energy balance already in [`compute_mdot!`](@ref) (the `q_T` conductive-loss term
 drives `mdot < 0` and shrinks `b` on cold ice), so a more negative `T_freeze` lets that dry the
@@ -60,7 +60,7 @@ function freeze_cells!(s::State, p::ModelParameters, freeze_mask::AbstractMatrix
     do_freeze = freeze_mask .& (s.mask .== GROUNDED)
     @. s.mask = ifelse(do_freeze, FROZEN_BED, s.mask)
     @. s.b = ifelse(do_freeze, zero(eltype(s.b)), s.b)
-    @. s.b_dry = ifelse(do_freeze, zero(eltype(s.b_dry)), s.b_dry)
+    clear_water!(s, do_freeze)
     @. s.pw = ifelse(do_freeze, zero(eltype(s.pw)), s.pw)
     refresh_b_dependents!(s, p) # lc/beta are lagged fields derived from b (normally refreshed in step_b!): keep them consistent with the b just set
     @. s.h = ifelse(do_freeze, s.zb, s.h) # pw = 0; the other cells keep their head (recomputing it from pw dropped the empty depth and uplift layer it holds)
@@ -79,21 +79,50 @@ Thaws every cell where `thaw_mask` is `true` and currently [`FROZEN_BED`](@ref) 
 
 Reseeds `b:=p.b_min` (a cell can't re-enter the dynamic assembly at literal `b=0` -- see
 `FROZEN_BED`'s own docstring for why -- `compute_b!`'s usual kernels take over evolving it
-normally from here on). `pw`/`h` are deliberately left untouched: a thawing cell starts from
+normally from here on), marked empty: `b_empty = b_min` for [`UnfilledCavities`](@ref) and `b_dry = b_min`
+for the dry floor (`dry_floor`); the option that does not own a field zeroes it at the next step. So the
+cell starts with no water, except under the filled sheet without the dry floor, whose water is `b` itself
+(`b_min` per thawed cell). `pw`/`h` are deliberately left untouched: a thawing cell starts from
 whatever it was while frozen (`pw=0`/dry/high-`N` if it was actually frozen via
-[`freeze_cells!`](@ref)) and the head equation evolves it from there on the next solve -- no
-water is magically added. Refreshes `s.K`/`s.valid_x`/`s.valid_y`/`s.N` the same
+[`freeze_cells!`](@ref)) and the head equation evolves it from there on the next solve. Refreshes `s.K`/`s.valid_x`/`s.valid_y`/`s.N` the same
 way [`freeze_cells!`](@ref) does.
 """
 function thaw_cells!(s::State, p::ModelParameters, thaw_mask::AbstractMatrix{Bool})
     do_thaw = thaw_mask .& (s.mask .== FROZEN_BED)
     @. s.mask = ifelse(do_thaw, GROUNDED, s.mask)
-    @. s.b = ifelse(do_thaw, p.b_min, s.b)
-    @. s.b_dry = ifelse(do_thaw, zero(eltype(s.b_dry)), s.b_dry)
+    seed_empty!(s, p, do_thaw)
     refresh_b_dependents!(s, p) # without this a thawed cell keeps lc = 0 (from its frozen b = 0) until the next step_b!, i.e. no creep-closure term in the first head solve
     compute_K!(s, p)
     compute_face_masks!(s)
     compute_N!(s, p)
+    return s
+end
+
+# The water a cell holds, as w_old counts it (set_cavity_storage!): the filled gap less the dry floor, plus the uplift
+# layer. Each term is zero under the options that do not own it, so this is the water under every sheet.
+held_water(s::State, cells) = sum((max.(s.b .- s.b_empty .- s.b_dry, zero(eltype(s.b))) .+ s.b_uplift) .* cells)
+
+# A cell leaving the dynamic sheet keeps no gap and no water.
+function clear_water!(s::State, cells)
+    z = zero(eltype(s.b))
+    @. s.b = ifelse(cells, z, s.b)
+    @. s.b_empty = ifelse(cells, z, s.b_empty)
+    @. s.b_uplift = ifelse(cells, z, s.b_uplift)
+    @. s.b_dry = ifelse(cells, z, s.b_dry)
+    @. s.w_old = ifelse(cells, z, s.w_old)
+    return s
+end
+
+# A cell entering the dynamic sheet gets the gap b_min but no water: the gap is marked empty both as an unfilled
+# cavity (b_empty) and as the dry floor (b_dry). The option that does not own a field zeroes it at the next step
+# (prepare_step_inputs!), and the one that does keeps the cell dry. Only the filled sheet without the dry floor,
+# whose water is b itself, still starts these cells with b_min of water.
+function seed_empty!(s::State, p::ModelParameters, cells)
+    z = zero(eltype(s.b))
+    @. s.b = ifelse(cells, p.b_min, s.b)
+    @. s.b_empty = ifelse(cells, p.b_min, s.b_empty)
+    @. s.b_dry = ifelse(cells, p.b_min, s.b_dry)
+    @. s.b_uplift = ifelse(cells, z, s.b_uplift)
     return s
 end
 
@@ -150,8 +179,9 @@ refresh work in `freeze_cells!`/`thaw_cells!` only runs on calls where a transit
 happens. Intended to be called whenever the basal temperature is refreshed (thermodynamic
 timescale), not every hydrology step.
 
-Returns `(n_frozen, n_thawed, discarded_b)`: the number of cells that changed each way and the sum
-of the gap height `b` (m) over the freezing cells, i.e. the water thickness discarded by freezing
+Returns `(n_frozen, n_thawed, discarded_b, n_isolated)`: the number of cells that changed each way, the sum
+of the water depth (m; the filled gap `b - b_empty - b_dry` plus the uplift layer `b_uplift`) over the freezing cells, i.e.
+the water thickness discarded by freezing
 (multiply by `dx*dy` for a volume, see the limitation note in [`freeze_cells!`](@ref)).
 """
 function update_frozen_mask!(s::State, p::ModelParameters, T_prime_b::AbstractMatrix)
@@ -162,7 +192,7 @@ function update_frozen_mask!(s::State, p::ModelParameters, T_prime_b::AbstractMa
     n_thawed = count(thaw_mask)
     discarded_b = zero(eltype(s.b))
     if n_frozen > 0
-        discarded_b = sum((s.b .- s.b_dry) .* freeze_mask) # the water, read before freeze_cells! zeroes b
+        discarded_b = held_water(s, freeze_mask) # read before freeze_cells! zeroes it
         freeze_cells!(s, p, freeze_mask)
     end
     n_thawed > 0 && thaw_cells!(s, p, thaw_mask)
@@ -180,13 +210,13 @@ cells frozen where the host still has them grounded (the frozen bed is handled b
 [`update_frozen_mask!`](@ref) after this). Call it at each coupling step, before the hydrology step,
 so Shakti never solves where the host has no grounded ice and never ignores where it does.
 
-- A cell that stops being `GROUNDED` loses its water (`b = 0`, discarded, returned) and takes the
+- A cell that stops being `GROUNDED` loses its gap and water (discarded, returned as in [`update_frozen_mask!`](@ref)) and takes the
   prescribed `pw` of its new category ([`apply_boundary_pw!`](@ref)).
-- A cell that becomes `GROUNDED` is seeded at `b = p.b_min`, as a thawing cell is; its `pw` (the
+- A cell that becomes `GROUNDED` is seeded at `b = p.b_min` with no water, as a thawing cell is; its `pw` (the
   Dirichlet value of its old category) is the initial guess of the next head solve.
 
 Then refreshes the mask-dependent fields as [`freeze_cells!`](@ref) does. Returns
-`(n_on, n_off, discarded_b)`.
+`(n_on, n_off, discarded_b, n_isolated)`.
 """
 function set_mask!(s::State, p::ModelParameters, new_mask::AbstractMatrix)
     nm = similar(s.mask)
@@ -197,10 +227,10 @@ function set_mask!(s::State, p::ModelParameters, new_mask::AbstractMatrix)
     n_on, n_off = count(on), count(off)
     discarded_b = zero(eltype(s.b))
     (n_on == 0 && n_off == 0 && s.mask == nm) && return (n_on = 0, n_off = 0, discarded_b = discarded_b, n_isolated = 0)
-    discarded_b = sum((s.b .- s.b_dry) .* off)
+    discarded_b = held_water(s, off)
     s.mask .= nm
-    @. s.b = ifelse(on, p.b_min, ifelse(off, zero(eltype(s.b)), s.b))
-    @. s.b_dry = ifelse(on | off, zero(eltype(s.b_dry)), s.b_dry)
+    clear_water!(s, off)
+    seed_empty!(s, p, on)
     apply_boundary_pw!(s, p)
     refresh_b_dependents!(s, p)
     rg = p.rho_w * p.g

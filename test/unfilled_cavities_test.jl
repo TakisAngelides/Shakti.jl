@@ -151,6 +151,36 @@
             @test Array(st.b) == Array(ref.b)
         end
 
+        @testset "freezing and thawing a lifted cell: the water is reported and none is created" begin
+            A_visc = fill(1e-30, nx, ny); b0 = fill(1e-6, nx, ny); ub_x = fill(3e-7, nx + 1, ny); ub_y = zeros(nx, ny + 1)
+            p = ModelParameters(e_v = 0.0, b_min = 1e-6)
+            st = State(grid)
+            set_initial_conditions!(st, grid, p, sl, base_mask(), A_visc, zb, zs, b0, G, ub_x, ub_y, ieb, taub_x, taub_y)
+            sim = Simulation(grid, st, 1, floattype(dt), p, "fully_implicit", String[], ConstantMeltInput(), sl;
+                             ps = PicardSolver(500, floattype(1e-12), LUDirectSolver(grid), grid))
+            for _ in 1:3; step!(sim); end
+            water(s) = sum(Array((max.(s.b .- s.b_empty .- s.b_dry, 0) .+ s.b_uplift) .* (s.mask .== GROUNDED)))
+            lifted = Array(st.b_uplift) .> 0
+            @test any(lifted)
+            cell = findfirst(lifted)
+            T = zeros(nx, ny); T[cell] = -100.0
+            W0 = water(st)
+            r = update_frozen_mask!(sim, T)
+            @test r.n_frozen == 1
+            @test r.discarded_b > st.b[cell] + 0.0 # the uplift layer counts, not just the gap
+            @test W0 - water(st) ≈ r.discarded_b rtol = 1e-12
+            @test st.b_empty[cell] == 0 && st.b_uplift[cell] == 0 && st.w_old[cell] == 0
+            W1 = water(st)
+            T[cell] = 100.0
+            r = update_frozen_mask!(sim, T)
+            @test r.n_thawed == 1
+            @test st.b[cell] == p.b_min && st.b_empty[cell] == p.b_min && st.b_dry[cell] == 0 # dry_floor is off: b_dry zeroed
+            @test st.w_old[cell] == 0
+            @test water(st) ≈ W1 rtol = 1e-12
+            step!(sim)
+            @test all(isfinite, Array(st.h))
+        end
+
         @testset "stuck cells, filled, ConsistentGapCoupling: no overflow (the first raw iterate has N ~ -1e16)" begin
             # The gap here is flat in N (A = 1e-30), so the first linear solve pushes the moulin's water through the b_min floor
             # and returns N ~ -1e16: the exponential branch of relax_update (and the N^n creep law of the explicit scheme)
