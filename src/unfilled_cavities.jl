@@ -411,6 +411,53 @@ beyond the gap is the uplift layer instead, `b_uplift = W - b` (no upper limit),
 `b_uplift`; the head-based [`update_b_empty!`](@ref) is for the parabolic scheme only, whose storage terms the water budget above does not include. A no-op under
 [`FilledCavities`](@ref).
 """
+
+# The water a cell holds, from the gap and the fields that split it (GAP-5): the filled gap less its empty part and the dry
+# floor, plus the uplift layer. Each term is zero under the options that do not own it, so this is the water under every sheet.
+@inline composed_water(b, b_empty, b_dry, b_uplift) = max(b - b_empty - b_dry, zero(b)) + b_uplift
+
+@parallel_indices (ix, iy) function update_water_budget_kernel!(W, mask, b, b_empty, b_dry, b_uplift, q_x, q_y, mdot, ieb, dx, dy, dt, rho_w)
+    if ix <= size(W, 1) && iy <= size(W, 2)
+        if mask[ix, iy] == GROUNDED
+            div = (q_x[ix+1, iy] - q_x[ix, iy]) / dx + (q_y[ix, iy+1] - q_y[ix, iy]) / dy
+            W[ix, iy] = max(zero(dt), W[ix, iy] + dt * (mdot[ix, iy] / rho_w + ieb[ix, iy] - div))
+        else
+            W[ix, iy] = composed_water(b[ix, iy], b_empty[ix, iy], b_dry[ix, iy], b_uplift[ix, iy])
+        end
+    end
+    return
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Advances the water `s.W` by one step from the water budget on `GROUNDED` cells, `W = max(0, W + dt*(mdot/rho_w + ieb -
+div(q)))` with the step's converged fluxes, and sets it to the water the other fields hold elsewhere. The same update as
+[`update_b_empty_budget!`](@ref), but carried by `W` alone rather than split into `b_empty` and `b_uplift` (GAP-5).
+"""
+update_water_budget!(s::State, g::Grid, p::ModelParameters, dt) =
+    (@parallel update_water_budget_kernel!(s.W, s.mask, s.b, s.b_empty, s.b_dry, s.b_uplift, s.q_x, s.q_y, s.mdot, s.ieb, g.dx, g.dy, dt, p.rho_w); s)
+
+"""
+$(TYPEDSIGNATURES)
+
+Sets the water `s.W` to the water the other fields hold, `max(b - b_empty - b_dry, 0) + b_uplift`, in every cell.
+"""
+sync_water!(s::State) = (s.W .= composed_water.(s.b, s.b_empty, s.b_dry, s.b_uplift); s)
+
+"""
+$(TYPEDSIGNATURES)
+
+The largest difference between the water `s.W` and the water the other fields hold, `max(b - b_empty - b_dry, 0) +
+b_uplift`, over `GROUNDED` cells [m]. One lazy reduction, no allocation.
+"""
+function water_mismatch(s::State)
+    grounded = GROUNDED
+    d = Broadcast.instantiate(Broadcast.broadcasted((m, W, b, be, bd, bu) -> m == grounded ? abs(W - composed_water(b, be, bd, bu)) : zero(W),
+                                                    s.mask, s.W, s.b, s.b_empty, s.b_dry, s.b_uplift))
+    return mapreduce(identity, max, d; init = zero(eltype(s.W)))
+end
+
 update_b_empty_budget!(s::State, g::Grid, p::ModelParameters, dt, ::FilledCavities) = s
 update_b_empty_budget!(s::State, g::Grid, p::ModelParameters, dt, ::UnfilledCavities) =
     (@parallel update_b_empty_budget_kernel!(s.b_empty, s.mask, s.b, s.w_old, s.q_x, s.q_y, s.mdot, s.ieb, g.dx, g.dy, dt, p.rho_w, s.b_uplift, s.stor_up, s.h, s.zb, s.po, p.g); s)

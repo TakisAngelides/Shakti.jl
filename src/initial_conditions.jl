@@ -123,6 +123,7 @@ function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, sl::Abst
     mt = MeltTerms{p.mdot_includes_G, p.mdot_includes_frictional, p.mdot_includes_potential, p.mdot_includes_sensible, p.mdot_includes_qT}()
     compute_mdot!(s, p, mt) # melt rate
     compute_cell_K!(s, p) # cell-centred transmissivity (a diagnostic; the faces are compute_face_flux!'s)
+    sync_water!(s) # the water W the gap and the split fields hold
 
 end
 

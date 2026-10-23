@@ -110,6 +110,7 @@ function clear_water!(s::State, cells)
     @. s.b_uplift = ifelse(cells, z, s.b_uplift)
     @. s.b_dry = ifelse(cells, z, s.b_dry)
     @. s.w_old = ifelse(cells, z, s.w_old)
+    @. s.W = ifelse(cells, z, s.W)
     return s
 end
 
@@ -123,6 +124,7 @@ function seed_empty!(s::State, p::ModelParameters, cells)
     @. s.b_empty = ifelse(cells, p.b_min, s.b_empty)
     @. s.b_dry = ifelse(cells, p.b_min, s.b_dry)
     @. s.b_uplift = ifelse(cells, z, s.b_uplift)
+    @. s.W = ifelse(cells, z, s.W)
     return s
 end
 

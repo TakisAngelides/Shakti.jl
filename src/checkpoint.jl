@@ -78,6 +78,7 @@ function load_checkpoint!(sim::Simulation, path::String)
         # rebuild both from the loaded b and b_uplift when the checkpoint predates it
         haskey(file, "bump") || compute_beta!(state, sim.p, sim.oss)
         haskey(file, "mdot0") || copyto!(state.mdot0, state.mdot) # older checkpoints: the start-of-step melt of ImplicitUpwind is the saved melt
+        haskey(file, "W") || sync_water!(state) # older checkpoints: the water W is the water the other fields hold
         load_head_history!(sim.he, file)
         if haskey(file, "options") && file["options"] != option_signature(sim)
             @warn "Checkpoint $path was written under other options; the fields the current ones do not own (b_empty, b_uplift, b_dry, stor, stor_up) are zeroed at the next step" saved = file["options"] current = option_signature(sim)

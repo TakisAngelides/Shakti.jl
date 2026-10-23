@@ -158,7 +158,8 @@ inputs up to date and sets its initial guess (`prepare_head_solve!`), solves for
 head ([`step_h!`](@ref)), records it for the next step's extrapolation (`sim.he`), sets the uplift layer from
 the solved head ([`update_b_uplift!`](@ref), [`IceUplift`](@ref)) and, under the parabolic scheme, the empty part of
 the gap too ([`update_b_empty!`](@ref), [`UnfilledCavities`](@ref)), evolves the gap height ([`step_b!`](@ref), which
-under the elliptic scheme then takes both from the water budget) and checks it (`check_gap_height`).
+under the elliptic scheme then takes both from the water budget), advances the water `W` (`update_water!`) and checks the
+gap (`check_gap_height`).
 """
 function step!(sim::Simulation)
     compute_abs_ub!(sim.state) # a coupler may have set new ub_x/ub_y: opening by sliding, the freeze-on cap and update_dt! read |u_b|
@@ -171,8 +172,18 @@ function step!(sim::Simulation)
     sim.hs isa ParabolicHeadScheme && update_b_empty!(sim.state, sim.cf) # from the solved head, before step_b! evolves b (the elliptic scheme takes it from the water budget, step_b!)
     update_b_uplift!(sim.state, sim.p, sim.up) # IceUplift: the uplift layer from the solved head (no-op under NoUplift); under the elliptic scheme the budget overwrites it on uplifted cells only, so this also zeroes the others
     step_b!(sim)
+    update_water!(sim)
     check_gap_height(sim)
 end
+
+# The water W (GAP-5) is evolved from the budget where the elliptic scheme's head rows store the water the budget delivers:
+# under UnfilledCavities, and under ConsistentGapCoupling with any sheet (filled with the dry floor or with IceUplift, and
+# under WithDiffusion; there to the Picard tolerance, 1e-7 to 1e-6 of W on a moulin fixture). Elsewhere it is the water
+# the other fields hold: the filled sheet with ExplicitGapCoupling stores water the budget does not (2 % of W on that
+# fixture), and the parabolic scheme's storage terms are not in the budget.
+water_is_budgeted(sim::Simulation) = sim.hs isa EllipticHeadScheme && (sim.cf isa UnfilledCavities || sim.gcp isa ConsistentGapCoupling)
+update_water!(sim::Simulation) =
+    water_is_budgeted(sim) ? update_water_budget!(sim.state, sim.grid, sim.p, sim.dt[]) : sync_water!(sim.state)
 
 # A runaway gap: water above the overburden (N < 0) makes creep open the gap, and the implicit and fully implicit gap
 # schemes grow it as exp(|C| dt) at the step's N, which the explicit coupling's head rows (linear growth) never see, so N
@@ -280,6 +291,7 @@ function refresh_state!(sim::Simulation)
     sim.total_time[] == 0 && store_start_of_step_melt!(sim.kfs, sim.state) # the first step's start-of-step melt: the setup's, at the start-of-step gap
     compute_abs_ub!(sim.state)
     prepare_step_inputs!(sim)
+    sync_water!(sim.state) # the water W from the fields as this simulation's options leave them (prepare_step_inputs! zeroes those it does not own)
     refresh_from_head!(sim)
     return sim
 end
