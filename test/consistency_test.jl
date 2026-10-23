@@ -164,9 +164,6 @@
             changed = N_after .!= N_before
             changed[3, 3] = changed[4, 2] = false
             @test !any(changed)
-            scnc = SmoothCellNClamping(Dict((3, 3) => (0.0, 1.0)), 1e-3)
-            apply_cell_N_clamping!(s, scnc)
-            @test abs(s.N[3, 3] - 1.0) < 1e-2
             cgc = CellGapClamping(Dict((2, 2) => (0.0, 1e-4)))
             apply_cell_gap_clamping!(s, cgc)
             @test s.b[2, 2] <= 1e-4

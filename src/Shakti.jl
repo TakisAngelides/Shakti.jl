@@ -109,7 +109,6 @@ include("observer.jl")
 include("sliding_law.jl")
 include("melt_rate.jl")
 include("elliptic_solver.jl")
-include("newton_solver.jl")
 include("parabolic_solver.jl")
 include("gap_height.jl")
 include("unfilled_cavities.jl") # must precede simulation.jl: Simulation type-annotates its `cf` field with AbstractCavityFilling
@@ -194,8 +193,6 @@ export compute_D!
 export AbstractHeadRelaxation, NoHeadRelaxation, UnderHeadRelaxation, AndersonHeadRelaxation
 export relax_h!
 export PicardSolver
-export AbstractEllipticSolver
-export NewtonJFNKSolver, newton_status
 export elliptic_solver!, Picard_loop!, Picard_iteration!, refresh_head_dependents!, refresh_state!
 
 # parabolic_solver.jl
@@ -212,7 +209,7 @@ export AbstractHeadScheme, ParabolicHeadScheme, EllipticHeadScheme
 export AbstractGapScheme, ExplicitGapScheme, ImplicitGapScheme, FullyImplicitGapScheme
 export AbstractTimeStepScheme, FixedTimeStep, AdaptiveTimeStep, target_time
 export AbstractCellGapClamping, NoCellGapClamping, CellGapClamping, apply_cell_gap_clamping!
-export AbstractCellNClamping, NoCellNClamping, CellNClamping, SmoothCellNClamping, apply_cell_N_clamping!
+export AbstractCellNClamping, NoCellNClamping, CellNClamping, apply_cell_N_clamping!
 export Simulation
 
 # head_extrapolation.jl

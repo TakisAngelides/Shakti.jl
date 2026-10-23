@@ -154,15 +154,12 @@ NoHeadRelaxation
 UnderHeadRelaxation
 relax_h!
 AndersonHeadRelaxation
-AbstractEllipticSolver
 PicardSolver
 elliptic_solver!
 Picard_loop!
 Picard_iteration!
 refresh_head_dependents!
 refresh_state!
-NewtonJFNKSolver
-newton_status
 ```
 
 ## Parabolic solver
@@ -251,7 +248,6 @@ apply_cell_gap_clamping!
 AbstractCellNClamping
 NoCellNClamping
 CellNClamping
-SmoothCellNClamping
 apply_cell_N_clamping!
 ```
 

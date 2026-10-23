@@ -29,11 +29,9 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Head scheme used when `p.e_v == 0`: each timestep, `ps` (any [`AbstractEllipticSolver`](@ref) --
-[`PicardSolver`](@ref), Picard iteration; or [`NewtonJFNKSolver`](@ref), Jacobian-Free
-Newton-Krylov) is run to convergence.
+Head scheme used when `p.e_v == 0`: each timestep, the [`PicardSolver`](@ref) `ps` is run to convergence.
 """
-struct EllipticHeadScheme{PS <: AbstractEllipticSolver} <: AbstractHeadScheme
+struct EllipticHeadScheme{PS <: PicardSolver} <: AbstractHeadScheme
     ps::PS
 end
 
@@ -225,7 +223,7 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
 # Notes
 
 - Head scheme: [`EllipticHeadScheme`](@ref) if `p.e_v == 0` (requires `ps`, a
-  [`PicardSolver`](@ref) or [`NewtonJFNKSolver`](@ref)), else [`ParabolicHeadScheme`](@ref) (requires `pps`, a
+  [`PicardSolver`](@ref)), else [`ParabolicHeadScheme`](@ref) (requires `pps`, a
   [`ParabolicPicardSolver`](@ref)).
 - `gap_scheme_choice`: `"explicit"`, `"implicit"`, or `"fully_implicit"` (see [`AbstractGapScheme`](@ref)).
 - Melt-rate terms: [`MeltTerms`](@ref)'s five flags are read directly off `p.mdot_includes_G`/
@@ -278,10 +276,9 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
 - `gap_coupling`: [`ExplicitGapCoupling`](@ref) (legacy: the head rows assume the gap changes by `dt*rate(N, b_old)`) or
   [`ConsistentGapCoupling`](@ref) (they assume the change the gap scheme itself makes, so the head equation and the gap update
   store the same water at any `dt`; needed with the implicit and fully implicit gap schemes when `dt*A*|N|^(n-1)*N` is not
-  small, and with [`UnfilledCavities`](@ref)/[`IceUplift`](@ref) at large `dt`). Default: `ConsistentGapCoupling()`
-  wherever it is available -- the elliptic head scheme with a [`PicardSolver`](@ref), or the parabolic scheme without
-  diffusion -- and `ExplicitGapCoupling()` otherwise (a [`NewtonJFNKSolver`](@ref), or the parabolic scheme with
-  [`WithDiffusion`](@ref)). Pass `ExplicitGapCoupling()` to reproduce results from before this default. With
+  small, and with [`UnfilledCavities`](@ref)/[`IceUplift`](@ref) at large `dt`). Default: `ConsistentGapCoupling()`. The
+  parabolic scheme with [`WithDiffusion`](@ref) has no consistent coupling: there `gap_coupling = ExplicitGapCoupling()` must
+  be passed explicitly (an error otherwise, rather than a silent change of the gap bookkeeping). Pass `ExplicitGapCoupling()` to reproduce results from before this default. With
   `"implicit_upwind"` the conductance then also takes the end-of-step gap, so the head-gap step is implicit throughout.
   With [`WithDiffusion`](@ref) (SUHMO) `ConsistentGapCoupling()` solves the coupled gap system at every Picard iteration
   (`DiffusiveGapUpdate`), one extra linear solve per iteration (two with `"implicit_upwind"`), with any cavity
@@ -304,7 +301,7 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
 
     # Head scheme setup
     if iszero(p.e_v) # elliptic head scheme
-        ps === nothing && error("ps (a PicardSolver or NewtonJFNKSolver) must be provided when p.e_v == 0 (elliptic head scheme)")
+        ps === nothing && error("ps (a PicardSolver) must be provided when p.e_v == 0 (elliptic head scheme)")
         hs = EllipticHeadScheme(ps)
     else # parabolic head scheme
         pps === nothing && error("pps (a ParabolicPicardSolver) must be provided when p.e_v != 0 (parabolic head scheme)")
@@ -357,7 +354,7 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
     # metres). The harmonic mean closes every face of a dry cell, so it never wets again. Both are refused under a free
     # surface. "upwind" lags the water depth: correct, but stable only for dt < dx*W/(3|q|), minutes at 100 m (at 3 h a
     # non-finite gap in step 1 without uplift, 500 Picard iterations and b = 1.7 m with it); it is kept, with a warning,
-    # as the only free-surface face for the symmetric solvers (Cholesky, CG, matrix-free) and NewtonJFNKSolver.
+    # as the only free-surface face for the symmetric solvers (Cholesky, CG, matrix-free).
     if free_surface && (kfs isa Arithmetic || kfs isa Harmonic)
         error("k_face_choice = \"$k_face_choice\" with $(nameof(typeof(cavity_filling)))/$(nameof(typeof(uplift))) does not conserve water: " *
               (kfs isa Arithmetic ? "a dry cell discharges through half its neighbour's conductance and the water it lacks is created. " :
@@ -434,13 +431,14 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
     # steps) a gap of 1e269 m in one step, where the consistent coupling keeps it at metres (check_gap_height, run.jl); on
     # Helheim at 500 m (filled, NoDiffusion) the explicit gap reaches 1e10 m with 5-day steps, the consistent one 7 m, for
     # 1 to 2 times the Picard iterations and about the same time per step at 1-day steps.
-    gap_coupling === nothing && (gap_coupling = (hs isa EllipticHeadScheme ? hs.ps isa PicardSolver : !(diffusion_scheme isa WithDiffusion)) ?
-                                                ConsistentGapCoupling() : ExplicitGapCoupling())
-    if gap_coupling isa ConsistentGapCoupling
-        diffusion_scheme isa WithDiffusion && !(hs isa EllipticHeadScheme) &&
-            error("gap_coupling = ConsistentGapCoupling() with WithDiffusion is available only with the elliptic head scheme")
-        hs isa EllipticHeadScheme && !(hs.ps isa PicardSolver) && error("gap_coupling = ConsistentGapCoupling() needs a PicardSolver (not tested with $(nameof(typeof(hs.ps))))")
+    parabolic_diffusion = diffusion_scheme isa WithDiffusion && hs isa ParabolicHeadScheme
+    if gap_coupling === nothing
+        parabolic_diffusion && error("The parabolic head scheme with WithDiffusion has no consistent gap coupling (the default): " *
+                                     "pass gap_coupling = ExplicitGapCoupling() to run it with SHAKTI's explicit coupling")
+        gap_coupling = ConsistentGapCoupling()
     end
+    gap_coupling isa ConsistentGapCoupling && parabolic_diffusion &&
+        error("gap_coupling = ConsistentGapCoupling() with WithDiffusion is available only with the elliptic head scheme")
 
     sim = Simulation(tsteps, Ref(dt), p, hs, gs, mt, oss, cls, diffusion_scheme, observer, grid, state, mi, kfs, sl, verbose, Ref(zero(dt)), cell_gap_clamping, cell_N_clamping, timestep_scheme, he, cavity_filling, hydraulic_potential, uplift, gap_coupling)
     return refresh_state!(sim) # the derived fields with this simulation's options (set_initial_conditions! knows none of them)

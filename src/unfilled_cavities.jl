@@ -101,7 +101,7 @@ free (an unfilled or uplifted cell): a step longer than the time such a cell tak
 about `dx*W/(3|q|)` (minutes at 100 m for a thin free-surface layer), overshoots, and the solution
 oscillates from step to step or Picard cycles. Taking the depth at the head iterate in a plain Picard
 iteration does not help: the one-cell Picard map then has slope ~ -3(W + dzb)/W, and neither Anderson
-acceleration nor [`NewtonJFNKSolver`](@ref) converged on the SHW12 benchmark at dt = 6 h. What does is
+acceleration nor a Jacobian-free Newton-Krylov solver (since removed) converged on the SHW12 benchmark at dt = 6 h. What does is
 the end-of-step depth together with the Newton terms of its dependence on the head,
 [`ImplicitUpwind`](@ref) ([`compute_b_w_iterate!`](@ref)). `p` is not used (kept for the call signature).
 """

@@ -390,29 +390,6 @@
             @test maximum(abs, res[g]) < 1e-6 * scale
         end
 
-        @testset "NewtonJFNKSolver with unfilled cavities agrees with Picard" begin
-            # Newton's finite-difference Jacobian sees the empty/filled switch as a kink: it converges on this
-            # fixture (and many like it) but not on the stiffest stuck ones, where Picard still converges in a few iterations.
-            function newton_or_picard(mk)
-                p = ModelParameters(e_v = 0.0, b_min = 1e-6)
-                state = State(grid)
-                set_initial_conditions!(state, grid, p, sl, base_mask(), fill(1e-24, nx, ny), zb, zs, fill(1e-6, nx, ny), G, fill(3e-7, nx + 1, ny), zeros(nx, ny + 1), zeros(nx, ny), taub_x, taub_y)
-                sim = Simulation(grid, state, 1, floattype(dt), p, "explicit", String[], ConstantMeltInput(), sl; uplift = NoUplift(), k_face_choice = "upwind", ps = mk(), cavity_filling = UnfilledCavities())
-                b_old, e_old = copy(Array(state.b)), copy(Array(state.b_empty))
-                step!(sim)
-                return sim, b_old, e_old
-            end
-            simN, b_old, e_old = newton_or_picard(() -> NewtonJFNKSolver(grid; iters = 100, tol = 1e-10))
-            simP, _, _     = newton_or_picard(() -> PicardSolver(500, floattype(1e-12), CholeskyDirectSolver(grid), grid))
-            s = simN.state; g = grounded(s)
-            @test first(Shakti.picard_status(simN.hs))
-            @test minimum(Array(s.pw)[g]) >= 0
-            @test any(Array(s.b_empty)[g] .> 0)
-            @test Array(s.h) ≈ Array(simP.state.h) rtol = 1e-8 atol = 1e-6
-            res = budget_residual(simN, b_old, e_old)
-            scale = maximum(abs, Array(s.mdot) ./ simN.p.rho_w) + maximum(Array(s.beta) .* Array(s.abs_ub))
-            @test maximum(abs, res[g]) < 1e-3 * scale # Newton stops at a looser head tolerance than the Picard test above
-        end
     end
 
 @testset "Default sheet: GlaDS-2 (unfilled cavities, uplift, implicit_upwind, consistent coupling)" begin

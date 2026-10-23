@@ -156,7 +156,6 @@ Which to choose:
 ## 8. Solvers
 Head solve, `ps` for `e_v = 0`:
 * `PicardSolver(iters, tol, ls, grid; alpha = nothing, atol = 0)`  fixed-point iteration; `alpha < 1` under-relaxes a stalling solve, `atol > 0` [m] replaces the relative test
-* `NewtonJFNKSolver(grid; ...)`  opt-in, CPU, filled sheet only (no `implicit_upwind`, no consistent coupling)
 
 and `pps = ParabolicPicardSolver(...)` for `e_v > 0` (see the [Parabolic scheme](@ref ParabolicScheme) page).
 
