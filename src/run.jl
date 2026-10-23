@@ -542,7 +542,7 @@ the same formulas as [`compute_b!`](@ref)'s kernels above (`C = A*|N|^(n-1)*N`),
 [`ConsistentGapCoupling`](@ref) assume exactly the gap change the gap scheme then makes.
 """
 @inline gap_update(gu::SchemeGapUpdate{ExplicitGapScheme, CLS}, b, mdot, beta, abs_ub, C, rho_i) where CLS =
-    b + gu.dt * (mdot / rho_i + beta * abs_ub - C * creep_length(CLS(), b, gu.b_c))
+    b + gu.dt * (mdot / rho_i + beta * abs_ub - C * creep_length(CLS(), b, gu.b_c, C))
 @inline gap_update(gu::SchemeGapUpdate{ImplicitGapScheme, CLS}, b, mdot, beta, abs_ub, C, rho_i) where CLS =
     implicit_creep_update(CLS(), b, mdot / rho_i + beta * abs_ub, C, gu.dt, gu.b_c)
 @inline gap_update(gu::SchemeGapUpdate{FullyImplicitGapScheme, CLS}, b, mdot, beta, abs_ub, C, rho_i) where CLS =

@@ -171,9 +171,15 @@ longer linear in `b`).
 @inline creep_length_slope(::StandardCreep, b, b_c) = one(b)
 @inline creep_length_slope(::CreepCutoff, b, b_c) = b <= b_c ? 2*b/b_c : one(b)
 
-@parallel_indices (ix, iy) function compute_lc_kernel!(lc, b, b_c, cls::AbstractCreepLengthScheme)
+# With the closure rate `C = A|N|^(n-1)N` known: at `C < 0` (`N < 0`) the "closure" opens the gap, and every scheme takes
+# `l_c = b` there (the implicit updates' quadratic branch assumes `C > 0`; `C*b^2/b_c` growth would blow up in finite
+# time). One definition, so the gap ODE at `N < 0` is the same under every gap scheme. At `C = 0` either form gives zero.
+@inline creep_length(cls::AbstractCreepLengthScheme, b, b_c, C) = C < zero(C) ? b : creep_length(cls, b, b_c)
+@inline creep_length_slope(cls::AbstractCreepLengthScheme, b, b_c, C) = C < zero(C) ? one(b) : creep_length_slope(cls, b, b_c)
+
+@parallel_indices (ix, iy) function compute_lc_kernel!(lc, b, N, b_c, cls::AbstractCreepLengthScheme)
     if ix <= size(lc, 1) && iy <= size(lc, 2)
-        lc[ix, iy] = creep_length(cls, b[ix, iy], b_c)
+        lc[ix, iy] = creep_length(cls, b[ix, iy], b_c, N[ix, iy]) # sign of N is the sign of C
     end
     return
 end
@@ -184,9 +190,10 @@ $(TYPEDSIGNATURES)
 Updates `s.lc` (the ice-creep length scale read by the creep-closure term everywhere downstream,
 see [`AbstractCreepLengthScheme`](@ref)) from the current `s.b`. Called once per timestep by
 [`step_b!`](@ref), right after `s.b` is updated -- same timing as [`compute_beta!`](@ref), so `s.lc`
-stays lagged (not the *new* `b`) for exactly the same reason `s.beta` does.
+stays lagged (not the *new* `b`) for exactly the same reason `s.beta` does. Where `s.N < 0` it is `b` under
+either scheme (see the four-argument [`creep_length`](@ref)).
 """
-compute_lc!(s::State, p::ModelParameters, cls::AbstractCreepLengthScheme) = (@parallel compute_lc_kernel!(s.lc, s.b, p.b_c, cls); s)
+compute_lc!(s::State, p::ModelParameters, cls::AbstractCreepLengthScheme) = (@parallel compute_lc_kernel!(s.lc, s.b, s.N, p.b_c, cls); s)
 
 @parallel_indices (ix, iy) function compute_b_x_kernel!(b_x, b)
     nx1 = size(b_x, 1) # nx + 1
@@ -298,9 +305,9 @@ end
 
 @parallel_indices (ix, iy) function compute_b_explicit_kernel!(b, mask, mdot, beta, abs_ub, A_visc, N, rho_i, n_minus_1, dt, b_min, b_max, cls::AbstractCreepLengthScheme, b_c)
     if ix <= size(b, 1) && iy <= size(b, 2) && mask[ix, iy] == GROUNDED
+        C = A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy]
         b[ix, iy] = clamp(
-            b[ix, iy] + dt * (mdot[ix, iy] / rho_i + beta[ix, iy] * abs_ub[ix, iy] -
-                A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy] * creep_length(cls, b[ix, iy], b_c)),
+            b[ix, iy] + dt * (mdot[ix, iy] / rho_i + beta[ix, iy] * abs_ub[ix, iy] - C * creep_length(cls, b[ix, iy], b_c, C)),
             b_min, b_max)
     end
     return
@@ -357,11 +364,6 @@ docstring).
     b_below = relax_update(b0, m + gamma * br, gamma + C, dt)
     return b_below < br ? b_below : max(relax_update(b0, m, C, dt), br)
 end
-
-# Original (opening0, ...) form, kept for existing callers: identical to the above whenever the
-# rates are non-negative (backward Euler only ever sees b0 + dt*m).
-@inline fully_implicit_creep_update(cls::AbstractCreepLengthScheme, opening0, gamma, C, dt, br, b_c) =
-    fully_implicit_creep_update(cls, opening0, zero(opening0), gamma, C, dt, br, b_c)
 
 @inline function fully_implicit_creep_update(::CreepCutoff, b0, m, gamma, C, dt, br, b_c)
     opening0 = b0 + dt * m
@@ -422,7 +424,8 @@ no-op there) to keep the rate/timescale estimate correct.
 @parallel_indices (ix, iy) function compute_dt_rate_kernel!(rate, mask, b, abs_ub, A_visc, N, n_minus_1, bump, lr, cls::AbstractCreepLengthScheme, b_c)
     if ix <= size(rate, 1) && iy <= size(rate, 2)
         if mask[ix, iy] == GROUNDED
-            C = A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy] * creep_length_slope(cls, b[ix, iy], b_c)
+            Cn = A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy]
+            C = Cn * creep_length_slope(cls, b[ix, iy], b_c, Cn)
             br = bump[ix, iy] # bump height under the ice base (compute_beta!)
             gamma = (br > 0 && b[ix, iy] < br) ? abs_ub[ix, iy] / lr : zero(C)
             rate[ix, iy] = C + gamma
@@ -450,7 +453,7 @@ the update relaxes exponentially instead and this is the first-order estimate.
 """
 @inline function freeze_on_capacity_cell(b, abs_ub, Cn, dt, b_min, br, lr, cls::AbstractCreepLengthScheme, b_c, b_beta, b_creep)
     beta = br > 0 ? max(zero(b), (br - b_beta) / lr) : zero(b)
-    return max(zero(b), (b - b_min) / dt + beta * abs_ub - Cn * creep_length(cls, b_creep, b_c))
+    return max(zero(b), (b - b_min) / dt + beta * abs_ub - Cn * creep_length(cls, b_creep, b_c, Cn))
 end
 
 """
@@ -500,7 +503,8 @@ end
     if ix <= size(Cap, 1) && iy <= size(Cap, 2)
         if mask[ix, iy] == GROUNDED
             W = b[ix, iy] - b_dry[ix, iy]
-            creep = explicit_creep ? A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy] * creep_length(cls, W, b_c) : zero(W)
+            Cn = A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy]
+            creep = explicit_creep ? Cn * creep_length(cls, W, b_c, Cn) : zero(W)
             Cap[ix, iy] = max(zero(W), min(W / dt + beta[ix, iy] * abs_ub[ix, iy] - creep, W * water_ratio / dt))
         else
             Cap[ix, iy] = zero(eltype(Cap))

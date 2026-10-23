@@ -83,7 +83,7 @@
             ]
 
             for c in branch_cases
-                b_new = Shakti.fully_implicit_creep_update(CreepCutoff(), c.opening0, c.gamma, c.C, dt, c.br, c.b_c)
+                b_new = Shakti.fully_implicit_creep_update(CreepCutoff(), c.opening0, 0.0, c.gamma, c.C, dt, c.br, c.b_c)
                 @test isfinite(b_new)
                 @test b_new >= 0
                 @test abs(residual(CreepCutoff(), c.opening0, c.gamma, c.C, dt, c.br, c.b_c, b_new)) < 1e-8
@@ -91,13 +91,13 @@
 
             # Explicit branch-membership check, confirming genuine coverage of all four branches
             # (not just that the residual happens to be small everywhere).
-            b1 = Shakti.fully_implicit_creep_update(CreepCutoff(), 0.1, 1e-6, 1e-6, dt, 1.0, 0.3)
+            b1 = Shakti.fully_implicit_creep_update(CreepCutoff(), 0.1, 0.0, 1e-6, 1e-6, dt, 1.0, 0.3)
             @test b1 < 1.0 && b1 <= 0.3   # branch (i)
-            b2 = Shakti.fully_implicit_creep_update(CreepCutoff(), 0.3, 1e-6, 1e-6, dt, 1.0, 0.01)
+            b2 = Shakti.fully_implicit_creep_update(CreepCutoff(), 0.3, 0.0, 1e-6, 1e-6, dt, 1.0, 0.01)
             @test b2 < 1.0 && b2 > 0.01   # branch (ii)
-            b3 = Shakti.fully_implicit_creep_update(CreepCutoff(), 0.2, 1e-6, 1e-6, dt, 0.01, 0.5)
+            b3 = Shakti.fully_implicit_creep_update(CreepCutoff(), 0.2, 0.0, 1e-6, 1e-6, dt, 0.01, 0.5)
             @test b3 >= 0.01 && b3 <= 0.5 # branch (iii) -- only reachable when br <= b_c
-            b4 = Shakti.fully_implicit_creep_update(CreepCutoff(), 0.2, 1e-6, 1e-6, dt, 0.01, 0.05)
+            b4 = Shakti.fully_implicit_creep_update(CreepCutoff(), 0.2, 0.0, 1e-6, 1e-6, dt, 0.01, 0.05)
             @test b4 >= 0.01 && b4 > 0.05 # branch (iv)
 
             # Broader residual-only sweep (no branch prediction needed) across both br/b_c
@@ -110,7 +110,7 @@
                 (opening0 = 0.05, gamma = 0.0,  C = 1e-4, br = 0.1,  b_c = 0.1),  # br == b_c, gamma == 0
             ]
             for c in sweep_cases, cls in (StandardCreep(), CreepCutoff())
-                b_new = Shakti.fully_implicit_creep_update(cls, c.opening0, c.gamma, c.C, dt, c.br, c.b_c)
+                b_new = Shakti.fully_implicit_creep_update(cls, c.opening0, 0.0, c.gamma, c.C, dt, c.br, c.b_c)
                 @test isfinite(b_new)
                 @test b_new >= 0
                 @test abs(residual(cls, c.opening0, c.gamma, c.C, dt, c.br, c.b_c, b_new)) < 1e-8
@@ -237,6 +237,23 @@ end
         @test Shakti.fully_implicit_creep_update(Shakti.StandardCreep(), b0, 0.0, gamma, C, dt, br, b_c) ==
               (b_below < br ? b_below : Shakti.relax_update(b0, 0.0, C, dt))
     end
+end
+
+@testset "CreepCutoff at N < 0: l_c = b under every gap scheme" begin
+    cls, b_c = Shakti.CreepCutoff(), 0.05
+    @test Shakti.creep_length(cls, 0.02, b_c, -1.0) == 0.02
+    @test Shakti.creep_length_slope(cls, 0.02, b_c, -1.0) == 1.0
+    @test Shakti.creep_length(cls, 0.02, b_c, 1.0) ≈ 0.02^2 / b_c
+    # explicit (many small steps) and fully implicit (one step) agree on the growth of a gap below b_c at N < 0
+    b0, m, C, T = 0.01, 1e-8, -1e-6, 1e4
+    nsub = 10_000
+    b = b0
+    for _ in 1:nsub
+        b += (T / nsub) * (m - C * Shakti.creep_length(cls, b, b_c, C))
+    end
+    b_impl = Shakti.fully_implicit_creep_update(cls, b0, m, 0.0, C, T, 1.0, b_c)
+    @test b_impl ≈ b rtol = 1e-4
+    @test b_impl > b0 * exp(-C * T) * 0.999 # linear (l_c = b) growth, not the quadratic one
 end
 
 @testset "row helpers keep Float32 (GPU, Metal has no Float64)" begin
