@@ -388,9 +388,15 @@ end
 
 # The time step for the water test of the Picard loop (water_converged, elliptic_solver.jl), 0 where it does not apply: the
 # head rows conserve exactly the conductance's water depth b_w only under ImplicitUpwind with ConsistentGapCoupling, and
-# the water at the start of the step (w_old) is kept only under UnfilledCavities; CellNClamping's held rows conserve nothing.
+# the water at the start of the step (w_old) is kept only under UnfilledCavities; a binding N clamp's held rows conserve
+# nothing. Under IceUplift with UnfilledCavities N is in [0, po] already, so a floor at or below 0 and no cap never binds.
 water_check_dt(sim::Simulation) = sim.kfs isa ImplicitUpwind && sim.gcp isa ConsistentGapCoupling && sim.cf isa UnfilledCavities &&
-                                  sim.cnc isa NoCellNClamping ? sim.dt[] : zero(sim.dt[])
+                                  N_clamps_inactive(sim) ? sim.dt[] : zero(sim.dt[])
+function N_clamps_inactive(sim::Simulation)
+    lo, hi = N_clamp_range(sim.cnc)
+    lo, hi = max(lo, sim.p.N_min), min(hi, sim.p.N_max)
+    return hi == Inf && (sim.up isa IceUplift ? lo <= 0 : lo == -Inf)
+end
 
 """
 $(TYPEDSIGNATURES)

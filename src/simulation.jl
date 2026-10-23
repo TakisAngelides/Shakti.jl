@@ -431,6 +431,16 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
     # steps) a gap of 1e269 m in one step, where the consistent coupling keeps it at metres (check_gap_height, run.jl); on
     # Helheim at 500 m (filled, NoDiffusion) the explicit gap reaches 1e10 m with 5-day steps, the consistent one 7 m, for
     # 1 to 2 times the Picard iterations and about the same time per step at 1-day steps.
+    # N clamps tighter than [0, Inf) contradict the free-surface rows: the uplifted row assumes N = 0 and the unfilled row
+    # N = po while the gap closes at the clamped N, the difference goes into b_uplift/b_empty or is lost, and the N handed to
+    # an ice model is no longer po - pw. Under those sheets N is in [0, po] (IceUplift and UnfilledCavities) by construction.
+    if free_surface
+        lo, hi = N_clamp_range(cell_N_clamping)
+        (max(lo, p.N_min) > 0 || min(hi, p.N_max) < Inf) &&
+            error("N_min > 0, N_max < Inf or a CellNClamping bound tighter than [0, Inf) with $(nameof(typeof(cavity_filling)))/$(nameof(typeof(uplift))) " *
+                  "contradicts the unfilled (N = po) and uplifted (N = 0) head rows. These sheets bound N by po - pw already; for a floor " *
+                  "on N use IceUplift (water above the overburden lifts the ice), or use the filled sheet (FilledCavities(), NoUplift()).")
+    end
     parabolic_diffusion = diffusion_scheme isa WithDiffusion && hs isa ParabolicHeadScheme
     if gap_coupling === nothing
         parabolic_diffusion && error("The parabolic head scheme with WithDiffusion has no consistent gap coupling (the default): " *

@@ -152,6 +152,23 @@
             @test Array(st.b) == Array(ref.b)
         end
 
+        @testset "N clamps under the free-surface sheets: refused when they bind, ignored by the water test when they cannot" begin
+            p0 = ModelParameters(e_v = 0.0, b_min = 1e-6)
+            st = State(grid)
+            set_initial_conditions!(st, grid, p0, sl, base_mask(), fill(5e-25, nx, ny), zb, zs, fill(1e-3, nx, ny), G, fill(1e-6, nx + 1, ny), zeros(nx, ny + 1), ieb, taub_x, taub_y)
+            glads(p; kw...) = Simulation(grid, st, 1, floattype(dt), p, "fully_implicit", String[], ConstantMeltInput(), sl;
+                                         ps = PicardSolver(500, floattype(1e-12), LUDirectSolver(grid), grid), kw...)
+            @test_throws r"contradicts the unfilled" glads(ModelParameters(e_v = 0.0, N_min = 1e3))
+            @test_throws r"contradicts the unfilled" glads(p0; cell_N_clamping = CellNClamping(Dict((3, 3) => (0.0, 1e6))))
+            sim = glads(p0; cell_N_clamping = CellNClamping(Dict((3, 3) => (0.0, Inf)))) # N >= 0 already: cannot bind
+            @test Shakti.water_check_dt(sim) == sim.dt[]
+            @test Shakti.water_check_dt(glads(ModelParameters(e_v = 0.0, N_min = 0.0))) > 0
+            @test Shakti.water_check_dt(glads(p0; uplift = NoUplift(), cell_N_clamping = CellNClamping(Dict((3, 3) => (0.0, Inf))))) == 0 # N < 0 possible: binds
+            @test_logs make_sim(FilledCavities(); kface = "arithmetic") # the filled sheet takes any clamp
+            @test Simulation(grid, State(grid), 1, floattype(dt), ModelParameters(e_v = 0.0, N_min = 1e3), "explicit", String[], ConstantMeltInput(), sl;
+                             cavity_filling = FilledCavities(), uplift = NoUplift(), ps = PicardSolver(5, floattype(1e-6), CholeskyDirectSolver(grid), grid)) isa Simulation
+        end
+
         @testset "freezing and thawing a lifted cell: the water is reported and none is created" begin
             A_visc = fill(1e-30, nx, ny); b0 = fill(1e-6, nx, ny); ub_x = fill(3e-7, nx + 1, ny); ub_y = zeros(nx, ny + 1)
             p = ModelParameters(e_v = 0.0, b_min = 1e-6)

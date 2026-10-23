@@ -42,6 +42,10 @@ end
 
 CellNClamping(bounds::Dict{Tuple{Int, Int}, Tuple{F, F}}) where F <: AbstractFloat = CellNClamping(bounds, clamp_cells(bounds)...)
 
+# The (lowest floor, highest cap) a clamp imposes anywhere, read from the host-side bounds: (-Inf, Inf) for none.
+N_clamp_range(::NoCellNClamping) = (-Inf, Inf)
+N_clamp_range(c::CellNClamping) = isempty(c.bounds) ? (-Inf, Inf) : (maximum(first, values(c.bounds)), minimum(last, values(c.bounds)))
+
 # Backend-resident copy of a small host vector (the per-cell clamp lists): kept on the same device
 # as the State fields they index, so clamping is one in-place broadcast through a view -- no
 # host round-trip of the whole field, and no scalar indexing of a GPU array.
