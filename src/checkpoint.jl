@@ -28,7 +28,8 @@ together, and `observer.jl`'s `resume!`/`reopenfile!` for resuming the tracked-o
 alongside the physics state.
 """
 # The options that own State fields (cavity filling, uplift, gap coupling, face scheme, dry floor), saved with a checkpoint
-# so a restart under other options says so: the next step zeroes the fields the new options do not own (prepare_step_inputs!).
+# so a restart under other options says so: the next step zeroes the fields the new options do not own and brings the
+# water W within the new sheet (prepare_step_inputs!).
 option_signature(sim::Simulation) = join((nameof(typeof(sim.cf)), nameof(typeof(sim.up)), nameof(typeof(sim.gcp)),
                                           nameof(typeof(sim.kfs)), "dry_floor=$(dry_floor(sim))"), ", ")
 
@@ -57,8 +58,18 @@ written by [`save_checkpoint`](@ref), and returns the timestep it was saved at, 
 where to resume the loop. A checkpoint written before `dt` was added to it (no `"dt"` key) leaves
 `sim.dt[]` untouched, at whatever the `Simulation` constructor set it to; one without the history clears it
 (`load_head_history!`). A checkpoint written under other options (cavity filling, uplift, gap coupling, face scheme, dry
-floor) loads with a warning; the next step zeroes the fields the current options do not own.
+floor) loads with a warning; the next step zeroes the fields the current options do not own and brings the water `W`
+within the current sheet. One written before `W` (GAP-5) takes it from the fields that then split the water,
+`max(b - b_empty - b_dry, 0) + b_uplift`.
 """
+# The water of a checkpoint written before State.W (GAP-5): the gap less its empty part and the dry floor, plus the
+# uplift layer, each missing field zero.
+function checkpoint_water(file)
+    b = file["b"]
+    split(name) = haskey(file, name) ? file[name] : zero(b)
+    return max.(b .- split("b_empty") .- split("b_dry"), zero(eltype(b))) .+ split("b_uplift")
+end
+
 function load_checkpoint!(sim::Simulation, path::String)
     state = sim.state
     t, total_time, dt = JLD2.jldopen(path, "r") do file
@@ -74,14 +85,14 @@ function load_checkpoint!(sim::Simulation, path::String)
             # field is derived, and is rebuilt from b/h by the refresh at the start of the next step.
             haskey(file, String(name)) && copyto!(getfield(state, name), file[String(name)])
         end
-        haskey(file, "W") || sync_water!(state) # older checkpoints: the water W is the water the other fields hold
+        haskey(file, "W") || copyto!(state.W, checkpoint_water(file)) # older checkpoints: the water the split fields held
         # bump (the bump height under the ice base) is lagged with beta, not refreshed by the next step's head refresh:
         # rebuild both from the loaded b, h and W when the checkpoint predates it
         haskey(file, "bump") || compute_beta!(state, sim.p, sim.oss)
         haskey(file, "mdot0") || copyto!(state.mdot0, state.mdot) # older checkpoints: the start-of-step melt of ImplicitUpwind is the saved melt
         load_head_history!(sim.he, file)
         if haskey(file, "options") && file["options"] != option_signature(sim)
-            @warn "Checkpoint $path was written under other options; the fields the current ones do not own (b_empty, b_uplift, b_dry, stor, stor_up) are zeroed at the next step" saved = file["options"] current = option_signature(sim)
+            @warn "Checkpoint $path was written under other options; the next step zeroes the fields the current ones do not own (stor, stor_up) and brings the water W within the current sheet" saved = file["options"] current = option_signature(sim)
         end
         return file["t"], file["total_time"], (haskey(file, "dt") ? file["dt"] : nothing)
     end

@@ -374,6 +374,19 @@
             # a checkpoint written under other options loads with a warning
             c = ramp(; cavity_filling = FilledCavities(), uplift = NoUplift(), k_face_choice = "arithmetic", gap_coupling = ExplicitGapCoupling())
             @test_logs (:warn, r"other options") match_mode = :any Shakti.load_checkpoint!(c, ck)
+            # a checkpoint written before the water W (GAP-5) takes it from the fields that then split the water
+            old = joinpath(dir, "old.jld2")
+            b_ck = JLD2.jldopen(f -> f["b"], ck, "r")
+            be, bd, bu = 0.3 .* b_ck, 0.2 .* b_ck, fill(1e-4, size(b_ck))
+            JLD2.jldopen(ck, "r") do f
+                JLD2.jldopen(old, "w") do g
+                    for k in keys(f); k == "W" || (g[k] = f[k]); end
+                    g["b_empty"] = be; g["b_dry"] = bd; g["b_uplift"] = bu
+                end
+            end
+            d = ramp()
+            Shakti.load_checkpoint!(d, old)
+            @test Array(d.state.W) ≈ max.(b_ck .- be .- bd, 0) .+ bu
         end
         # a coupler's new sliding speed reaches |u_b| at the next step (opening by sliding, freeze-on cap, adaptive dt)
         sim = ramp()

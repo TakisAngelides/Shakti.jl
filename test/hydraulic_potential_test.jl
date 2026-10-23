@@ -74,7 +74,7 @@
             for cf in (FilledCavities(), UnfilledCavities())
                 sim = make_sim(; hp = SheetTopPotential(), cf = cf)
                 s = sim.state
-                b_old, e_old = copy(Array(s.b)), copy(Array(s.b_empty))
+                W_old = copy(Array(s.W))
                 Shakti.prepare_head_solve!(sim); Shakti.step_h!(sim.hs, sim)
                 @test first(Shakti.picard_status(sim.hs))
                 h, b, m = Array(s.h), Array(s.b), Array(s.mask)
@@ -86,10 +86,10 @@
                 end
                 # the converged head satisfies the cell budgets with that same flux (gap update still to come):
                 # div(q) = mdot/rho_w + ieb - rate, rate = db/dt the head row assumed (explicit gap: exactly what step_b! applies)
-                step_b!(sim) # the elliptic scheme: b_empty from the water budget
+                step_b!(sim) # the elliptic scheme: W from the water budget (filled: the gap)
                 qx, qy = Array(s.q_x), Array(s.q_y)
                 div = [(qx[i+1, j] - qx[i, j]) / grid.dx + (qy[i, j+1] - qy[i, j]) / grid.dy for i in 1:nx, j in 1:ny]
-                dW = ((Array(s.b) .- Array(s.b_empty)) .- (b_old .- e_old)) ./ dt
+                dW = (Array(s.W) .- W_old) ./ dt
                 res = dW .+ div .- (Array(s.mdot) ./ sim.p.rho_w .+ Array(s.ieb))
                 g = grounded(s)
                 scale = maximum(abs, Array(s.mdot) ./ sim.p.rho_w .+ Array(s.ieb)) + maximum(Array(s.beta) .* Array(s.abs_ub))

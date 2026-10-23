@@ -137,9 +137,9 @@ export Grid
 export State
 
 # unfilled_cavities.jl
-export AbstractCavityFilling, FilledCavities, UnfilledCavities, update_b_empty!, update_b_empty_budget!, clamp_b_empty!, set_cavity_storage!, compute_b_w!, compute_b_w_iterate!
+export AbstractCavityFilling, FilledCavities, UnfilledCavities, update_water_budget!, water_from_head!, empty_gap, water_above_gap, set_cavity_storage!, compute_b_w!, compute_b_w_iterate!
 export AbstractHydraulicPotential, BedPotential, SheetTopPotential, update_gap_jumps!
-export AbstractIceUplift, NoUplift, IceUplift, set_uplift_storage!, update_b_uplift!
+export AbstractIceUplift, NoUplift, IceUplift, set_uplift_storage!
 
 # mask.jl
 export GROUNDED, OCEAN, LAND, OTHER_BASIN, FROZEN_BED

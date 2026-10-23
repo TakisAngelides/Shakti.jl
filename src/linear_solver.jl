@@ -439,7 +439,7 @@ The original equations (the default before [`ConsistentGapCoupling`](@ref) becam
 pressure and the old gap, with its creep term Newton-linearised in the head (`gap_budget_terms`). That is the
 explicit gap update; the implicit and fully implicit gap schemes move the gap by less when creep is fast,
 `dt*A*|N|^(n-1)*N > 1`, so the head equation and the gap disagree on the water stored: water is created or lost (under
-[`UnfilledCavities`](@ref) the difference goes into `b_empty`, and where it exceeds its limits it is lost), and the
+[`UnfilledCavities`](@ref) the difference stays in the water `W`, and the floor `W >= 0` creates water), and the
 explicit closure in the head row overshoots (the gap would close by more than its height). At `N < 0` (water above the
 overburden) creep opens the gap, which these schemes grow as `exp(dt*|C|)` while the head rows assume linear growth, so `N`
 does not recover; with `b_max = Inf` the gap can run away (`check_gap_height` reports it).
@@ -521,7 +521,7 @@ $(TYPEDSIGNATURES)
 
 The water in a filled gap at the end of the step, as the head rows of [`ConsistentGapCoupling`](@ref) store it. With the
 dry floor (`gu.dry_floor`, [`FilledCavities`](@ref)) the gap update moves the water `W` (`State.W`) with no lower clamp:
-`compute_b!` still holds the gap at `b_min`, but the volume it keeps there holds no water (`State.b_dry`). Held full of
+`compute_b!` still holds the gap at `b_min`, but the volume it keeps there holds no water (`b - W`). Held full of
 water, that volume made the clamped update flat in `N` wherever creep closes the gap within a step (thick ice): the row
 then kept only the conductance of the floor, and a cell needing water there (freezing, opening) had no bounded head;
 the explicit coupling instead counted the closure the clamp blocked as water expelled (water created). Without the dry

@@ -17,18 +17,15 @@ struct State{A <: AbstractArray}
     pw::A         # water pressure
     po::A         # ice overburden pressure
     b::A          # water depth
-    b_w::A        # water depth the face conductances are built from [m] (b - empty part + uplift layer, floored; unfilled_cavities.jl): at the start of the step, or at the end of it from the head iterate under ImplicitUpwind. Equals b exactly under FilledCavities and NoUplift
+    b_w::A        # water depth the face conductances are built from [m] (the water W, floored; unfilled_cavities.jl): at the start of the step, or at the end of it from the head iterate under ImplicitUpwind. Equals b exactly under FilledCavities and NoUplift
     dbw_dh::A     # dW/dh of b_w under ImplicitUpwind (1 where the water depth is free, unfilled or uplifted, 0 elsewhere); zero otherwise
-    W::A          # water per bed area [m] (GAP-5), read by the head rows, conductances, bump, freeze-on cap and wall diffusion: evolved from the water budget under the elliptic scheme with UnfilledCavities (water_is_budgeted, run.jl; b_empty and b_uplift follow it to round-off), the water the gap and head leave, b - b_dry + b_uplift, otherwise
+    W::A          # water per bed area [m] (GAP-5), read by the head rows, conductances, bump, freeze-on cap and wall diffusion: evolved from the water budget under the elliptic scheme with UnfilledCavities (water_is_budgeted, run.jl), the water the gap and head leave otherwise. The empty part of the gap is max(0, b - W) (empty_gap: an unfilled cavity, or the dry floor), the water above it max(0, W - b) (water_above_gap: the uplift layer)
     stor::A       # water storage coefficient of an unfilled cavity [1/s]: 1/dt on GROUNDED cells under UnfilledCavities, 0 otherwise (0 = legacy, always-filled gap)
-    b_empty::A    # empty (water-free) part of the gap per unit bed area [m], >= 0; only used under UnfilledCavities (unfilled_cavities.jl), zero otherwise. Water actually present is b - b_empty
     stor_up::A    # storage coefficient of the uplift layer [1/s]: 1/dt on GROUNDED cells under IceUplift, 0 otherwise (0 = legacy, no cap on pw)
-    b_uplift::A   # water stored where the ice is lifted off the bed, above the gap [m], >= 0; only used under IceUplift (ice_uplift.jl). Water present is b - b_empty + b_uplift
     b_next::A     # gap at the end of the step from SUHMO's coupled gap solve at the current head iterate [m] (ConsistentGapCoupling under WithDiffusion, solve_gap_iterate!); zero otherwise
     db_next::A    # its slope in the cell's own head, rho_w g |dG/dN| with the neighbours' new gaps held [m/m] (gap_iterate_slope_kernel!); zero otherwise
-    b_dry::A      # dry part of the b_min floor [m], 0 <= b_dry <= b: the gap held at b_min above water drained below it (the dry floor, dry_floor in run.jl: ConsistentGapCoupling under FilledCavities); zero otherwise. Water present is b - b_dry
     beta::A       # parameter for opening by sliding over bedrock bumps, max(0, (bump - b)/lr)
-    bump::A       # bump height still under the ice base [m], max(0, br - b_uplift): bumps the ice floats above (IceUplift) open no cavity. br without uplift. Lagged with beta (compute_beta!)
+    bump::A       # bump height still under the ice base [m], max(0, br - uplift layer): bumps the ice floats above (IceUplift) open no cavity. br without uplift. Lagged with beta (compute_beta!)
     lc::A         # ice-creep length scale (see AbstractCreepLengthScheme, gap_height.jl); equals b under StandardCreep
     abs_ub::A     # absolute value of the sliding velocity
     mdot::A       # melt rate
@@ -120,10 +117,7 @@ function State(g::Grid)
     pw        = initialize_center_field(g)
     po        = initialize_center_field(g)
     b         = initialize_center_field(g)
-    b_empty   = initialize_center_field(g)
     stor_up   = initialize_center_field(g)
-    b_uplift  = initialize_center_field(g)
-    b_dry     = initialize_center_field(g)
     b_next    = initialize_center_field(g)
     db_next   = initialize_center_field(g)
     b_w       = initialize_center_field(g)
@@ -187,7 +181,7 @@ function State(g::Grid)
     valid_y = @fill(1.0, g.nx, g.ny+1) # float 1.0 = valid; recomputed in compute_face_masks!
 
     return State(
-        h, pw, po, b, b_w, dbw_dh, W, stor, b_empty, stor_up, b_uplift, b_next, db_next, b_dry, beta, bump, lc, abs_ub, mdot, mdot0, dh_it, mdot_min, Q_b, Q_diss, Q_sens, Re, K, G, q_T, zb, zs, H, ieb, ieb_own, ieb_external, lambda, A_visc, N, mask,
+        h, pw, po, b, b_w, dbw_dh, W, stor, stor_up, b_next, db_next, beta, bump, lc, abs_ub, mdot, mdot0, dh_it, mdot_min, Q_b, Q_diss, Q_sens, Re, K, G, q_T, zb, zs, H, ieb, ieb_own, ieb_external, lambda, A_visc, N, mask,
         dhdx, db_x, q_x, Re_x, b_x, ub_x, taub_x, dpwdx, D_x, K_x, Jw_x, don_x, valid_x,
         dhdy, db_y, q_y, Re_y, b_y, ub_y, taub_y, dpwdy, D_y, K_y, Jw_y, don_y, valid_y,
     )

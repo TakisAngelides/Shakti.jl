@@ -295,7 +295,7 @@ function Simulation(grid, state, tsteps, dt, p, tracked_obs::Vector{String}, mi:
 
     # Check that all tracked observables are valid State fields
     for name in tracked_obs
-        hasfield(typeof(state), Symbol(name)) || error("Unknown tracked observable: \"$name\" is not a field of State")
+        hasfield(typeof(state), Symbol(name)) || name in DERIVED_OBSERVABLES || error("Unknown tracked observable: \"$name\" is not a field of State")
     end
 
     # Head scheme setup
@@ -341,7 +341,7 @@ function Simulation(grid, state, tsteps, dt, p, tracked_obs::Vector{String}, mi:
         error("Unknown k_face_choice: \"$k_face_choice\" (expected \"arithmetic\", \"harmonic\", \"upwind\" or \"implicit_upwind\")")
     end
     # An averaged face lets an unfilled cell's outflow outgrow its water: the arithmetic mean gives a dry cell half its
-    # neighbour's conductance, and the water it then delivers is created by the W >= 0 floor of update_b_empty_budget!
+    # neighbour's conductance, and the water it then delivers is created by the W >= 0 floor of update_water_budget!
     # (Thwaites 2 km, uplift, dt = 1 h: 1.7e7 m^3/s after 12 h against 500 m^3/s of melt, lifting the ice by hundreds of
     # metres). The harmonic mean closes every face of a dry cell, so it never wets again. Both are refused under a free
     # surface. "upwind" lags the water depth: correct, but stable only for dt < dx*W/(3|q|), minutes at 100 m (at 3 h a
@@ -424,7 +424,7 @@ function Simulation(grid, state, tsteps, dt, p, tracked_obs::Vector{String}, mi:
     # Helheim at 500 m (filled, NoDiffusion) the explicit gap reaches 1e10 m with 5-day steps, the consistent one 7 m, for
     # 1 to 2 times the Picard iterations and about the same time per step at 1-day steps.
     # N clamps tighter than [0, Inf) contradict the free-surface rows: the uplifted row assumes N = 0 and the unfilled row
-    # N = po while the gap closes at the clamped N, the difference goes into b_uplift/b_empty or is lost, and the N handed to
+    # N = po while the gap closes at the clamped N, the difference stays in the water W (or is created by its floor W >= 0), and the N handed to
     # an ice model is no longer po - pw. Under those sheets N is in [0, po] (IceUplift and UnfilledCavities) by construction.
     if free_surface
         lo, hi = N_clamp_range(cell_N_clamping)

@@ -11,22 +11,22 @@
 # This is the mirror of the unfilled cavities (unfilled_cavities.jl) at the other bound. With the
 # overburden head h_o = zb + p_o/(rho_w g), a GROUNDED cell whose head rises above h_o has
 #     p_w = p_o, N = 0 (no creep closure; the gap opens only by sliding and melt),
-#     uplift layer b_uplift = h - h_o [m of water], stored with coefficient 1/dt,
-# so its water balance (W_new - W_old)/dt + div(q) = mdot/rho_w + ieb, with W = b - b_empty + b_uplift the
-# water per bed area, gives the head row
-#     div(q) + h/dt = mdot/rho_w + ieb - rate_up - b_empty_old/dt + b_uplift_old/dt + h_o/dt,
+#     uplift layer W - b = h - h_o [m of water], stored with coefficient 1/dt,
+# so its water balance (W_new - W_old)/dt + div(q) = mdot/rho_w + ieb, with W (State.W) the water per bed area,
+# gives the head row
+#     div(q) + h/dt = mdot/rho_w + ieb - rate_up - (b_old - W_old)/dt + h_o/dt,
 #     rate_up = mdot/rho_i + beta*|u_b| (db/dt at N = 0).
 # At h = h_o it equals the filled row (which then has N = 0 too), so the cell lifts off continuously.
-# The filled and unfilled rows get the source + b_uplift_old/dt: water lifted last step is released first.
+# The filled and unfilled rows get the source (W_old - b_old)/dt: water lifted last step is released first.
 # The row is chosen from the previous Picard iterate (h > h_o), as for the unfilled row; its diagonal 1/dt
 # replaces the creep derivative, which vanishes at N = 0. The flux through an uplifted cell uses the water
-# layer b + b_uplift for its conductance, and its head h = h_o + b_uplift already contains the thickness of
+# layer W for its conductance, and its head h = h_o + (W - b) already contains the thickness of
 # the lifted water (with SheetTopPotential the potential is h + b, GlaDS-2 Eq. 7 exactly).
 #
 # State.stor_up = 1/dt marks cells where uplift is allowed (GROUNDED under IceUplift, 0 otherwise: the
-# legacy rows, bit for bit); State.b_uplift is the uplift layer, set from the head after the solve
-# (update_b_uplift!) and, with unfilled cavities on the elliptic scheme, from the water budget
-# (update_b_empty_budget!, unfilled_cavities.jl).
+# legacy rows, bit for bit). The uplift layer is the water above the gap, W - b, in a cell whose head is above h_o
+# (uplift_layer, gap_height.jl): W is set from the head after the solve (water_from_head!) and, with unfilled
+# cavities on the elliptic scheme, from the water budget (update_water_budget!, unfilled_cavities.jl).
 
 """
 $(TYPEDSIGNATURES)
@@ -63,24 +63,8 @@ end
 $(TYPEDSIGNATURES)
 
 Marks, via `s.stor_up = 1/dt` on `GROUNDED` cells, where the ice may be lifted this step. Under [`NoUplift`](@ref) it
-zeroes `s.stor_up` and `s.b_uplift`, selecting the legacy rows (the kernels read these fields whatever the option, see
+zeroes `s.stor_up`, selecting the legacy rows (the kernels read it whatever the option, see
 [`set_cavity_storage!`](@ref)).
 """
-set_uplift_storage!(s::State, dt, ::NoUplift) = (fill!(s.stor_up, zero(eltype(s.stor_up))); fill!(s.b_uplift, zero(eltype(s.b_uplift))); s)
+set_uplift_storage!(s::State, dt, ::NoUplift) = (fill!(s.stor_up, zero(eltype(s.stor_up))); s)
 set_uplift_storage!(s::State, dt, ::IceUplift) = (@parallel set_uplift_storage_kernel!(s.stor_up, s.mask, inv(dt)); s)
-
-@parallel_indices (ix, iy) function update_b_uplift_kernel!(b_uplift, mask, h, zb, po, rho_w, ggrav)
-    if ix <= size(b_uplift, 1) && iy <= size(b_uplift, 2)
-        b_uplift[ix, iy] = (mask[ix, iy] == GROUNDED) * max(zero(eltype(b_uplift)), h[ix, iy] - (zb[ix, iy] + po[ix, iy] / (rho_w * ggrav)))
-    end
-    return
-end
-
-"""
-$(TYPEDSIGNATURES)
-
-Sets `s.b_uplift` from the solved head: `max(0, h - h_o)`, `h_o = zb + po/(rho_w g)`, on `GROUNDED` cells.
-A no-op under [`NoUplift`](@ref).
-"""
-update_b_uplift!(s::State, p::ModelParameters, ::NoUplift) = s
-update_b_uplift!(s::State, p::ModelParameters, ::IceUplift) = (@parallel update_b_uplift_kernel!(s.b_uplift, s.mask, s.h, s.zb, s.po, p.rho_w, p.g); s)

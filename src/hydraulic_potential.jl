@@ -5,7 +5,7 @@
 # that drives the flux, phi = rho_w g h, omits the thickness of the water layer. GlaDS-2 (Wells et al.
 # 2026, Eq. 7) keeps it: phi = rho_w g (zb + h_w) + pw, with pw the pressure at the top of the flowing
 # water and h_w its thickness. In Shakti's variables h_w = b in a filled cell, and in an unfilled cell
-# (unfilled_cavities.jl) Shakti's head is already h = zb - b_empty = zb + W - b, W = b - b_empty the
+# (unfilled_cavities.jl) Shakti's head is already h = zb - (b - W) = zb + W - b, W the
 # water depth. So in every regime
 #     phi / (rho_w g) = h + b,
 # and the only term missing from the flux is -K grad(b). [`SheetTopPotential`](@ref) adds it: the flux

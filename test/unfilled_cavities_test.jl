@@ -1,40 +1,60 @@
-    @testset "Unfilled cavities (step 1: b_empty bookkeeping)" begin
+    @testset "Unfilled cavities (step 1: the water W)" begin
 
         nx, ny = 4, 3
         grid = Grid(nx, ny, 1e3, 1e3)
 
-        @testset "State starts with b_empty = 0" begin
+        @testset "State starts with W = 0" begin
             state = State(grid)
-            @test all(iszero, state.b_empty)
+            @test all(iszero, state.W)
         end
 
-        @testset "update_b_empty!" begin
+        @testset "water_from_head!" begin
             mask = fill(GROUNDED, nx, ny)
             mask[1, 1] = OCEAN
             mask[2, 2] = FROZEN_BED
+            p = ModelParameters()
 
             make() = begin
                 s = State(grid)
                 copyto!(s.mask, mask)
                 s.zb .= 100.0
+                s.b .= 0.003
                 s.h .= 150.0  # pw > 0 everywhere ...
                 s.h[3, 1] = 100.0 - 0.002 # ... except: GROUNDED, head 2 mm below the bed
-                s.h[1, 1] = 50.0          # OCEAN below the bed: must stay 0
-                s.h[2, 2] = 50.0          # FROZEN_BED below the bed: must stay 0
+                s.h[1, 1] = 50.0          # OCEAN below the bed: the gap
+                s.h[2, 2] = 50.0          # FROZEN_BED below the bed: the gap
                 s
             end
 
             s = make()
-            update_b_empty!(s, FilledCavities())
-            @test all(iszero, s.b_empty) # legacy: untouched
+            water_from_head!(s, p, FilledCavities(), NoUplift())
+            @test s.W == s.b # legacy: the gap is full
 
             s = make()
-            update_b_empty!(s, UnfilledCavities())
-            @test s.b_empty[3, 1] ≈ 0.002
-            @test s.b_empty[1, 1] == 0.0
-            @test s.b_empty[2, 2] == 0.0
-            @test count(!iszero, s.b_empty) == 1 # filled cells have nothing empty
-            @test all(>=(0), s.b_empty)
+            water_from_head!(s, p, UnfilledCavities(), NoUplift())
+            @test s.W[3, 1] ≈ 0.001
+            @test s.W[1, 1] == 0.003
+            @test s.W[2, 2] == 0.003
+            @test count(s.W .!= s.b) == 1 # filled cells have nothing empty
+            @test empty_gap(s)[3, 1] ≈ 0.002 && count(!iszero, empty_gap(s)) == 1
+            @test all(iszero, water_above_gap(s))
+
+            s = make() # po = 0: every GROUNDED cell above the bed is above the overburden head, lifted by h - zb
+            water_from_head!(s, p, FilledCavities(), IceUplift())
+            @test s.W[3, 3] ≈ 0.003 + 50.0 && s.W[3, 1] == 0.003 && s.W[1, 1] == 0.003
+            @test water_above_gap(s)[3, 3] ≈ 50.0
+        end
+
+        @testset "constrain_water!" begin
+            p = ModelParameters(b_min = 1e-3)
+            s = State(grid)
+            s.b .= [0.001 0.002 0.003; 0.001 0.002 0.003; 0.001 0.002 0.003; 0.001 0.002 0.003]
+            W0 = [-1.0 0.001 0.005; 0.0005 0.002 0.001; 0.001 0.004 0.0; 0.002 0.0 0.003]
+            run(cf, up, dry) = (copyto!(s.W, W0); Shakti.constrain_water!(s, p, cf, up, dry); copy(s.W))
+            @test run(UnfilledCavities(), IceUplift(), false) == max.(W0, 0)
+            @test run(FilledCavities(), NoUplift(), false) == s.b
+            @test run(FilledCavities(), IceUplift(), false) == max.(W0, s.b)
+            @test run(FilledCavities(), NoUplift(), true) == ifelse.(s.b .> p.b_min, s.b, clamp.(W0, 0, s.b))
         end
 
     end
@@ -78,12 +98,12 @@
 
         grounded(s) = Array(s.mask) .== GROUNDED
 
-        # per-cell residual of (W_new - W_old)/dt + div(q) = mdot/rho_w + ieb, W = b - b_empty
-        function budget_residual(sim, b_old, e_old)
+        # per-cell residual of (W_new - W_old)/dt + div(q) = mdot/rho_w + ieb
+        function budget_residual(sim, W_old)
             s, p = sim.state, sim.p
             qx, qy = Array(s.q_x), Array(s.q_y)
             div = [(qx[i+1, j] - qx[i, j]) / grid.dx + (qy[i, j+1] - qy[i, j]) / grid.dy for i in 1:nx, j in 1:ny]
-            dW = ((Array(s.b) .- Array(s.b_empty)) .- (b_old .- e_old)) ./ dt
+            dW = (Array(s.W) .- W_old) ./ dt
             return dW .+ div .- (Array(s.mdot) ./ p.rho_w .+ Array(s.ieb))
         end
 
@@ -95,7 +115,6 @@
             g = grounded(sims[1].state)
             @test all(Array(sims[1].state.pw)[g] .> 0) # fixture sanity: nothing is unfilled
             @test Array(sims[2].state.h) ≈ Array(sims[1].state.h) rtol = 1e-12 atol = 1e-9
-            @test all(iszero, sims[2].state.b_empty .* 0) # b_empty not touched by the solve itself
         end
 
         @testset "averaged faces with unfilled cavities are refused, upwind warns" begin
@@ -113,26 +132,26 @@
 
             un = make_sim(UnfilledCavities())
             s = un.state
-            b_old, e_old = copy(Array(s.b)), copy(Array(s.b_empty))
+            W_old = copy(Array(s.W))
             step!(un)
             g = grounded(s)
             @test first(Shakti.picard_status(un.hs)) # converged
             @test all(isfinite, Array(s.h))
             @test minimum(Array(s.pw)[g]) >= 0
             @test maximum(Array(s.N)[g] .- Array(s.po)[g]) <= 1e-6 * maximum(Array(s.po)) # N <= po
-            @test all(Array(s.b_empty) .>= -Array(s.b) .- 1e-12) # at most b of water stored above the gap
-            @test any(Array(s.b_empty)[g] .> 0) # some gap really is empty
+            @test all(Array(s.W) .>= 0)
+            @test any(Array(empty_gap(s))[g] .> 0) # some gap really is empty
             @test all(Array(s.b)[g] .>= un.p.b_min)
 
             # exact water budget, every grounded cell (explicit gap update: b_new is the row's own b_old + dt*rate)
-            res = budget_residual(un, b_old, e_old)
+            res = budget_residual(un, W_old)
             scale = maximum(abs, Array(s.mdot) ./ un.p.rho_w .+ Array(s.ieb)) + maximum(Array(s.beta) .* Array(s.abs_ub))
             @test maximum(abs, res[g]) < 1e-6 * scale
         end
 
         @testset "a GlaDS-2 State rewrapped as the filled sheet keeps no unfilled/uplift fields" begin
-            # The kernels read stor, stor_up, b_empty, b_uplift and b_dry whatever the option: the 'off' options must zero them
-            # (spin-up then switch, or a checkpoint written under other options), not leave a hybrid sheet.
+            # The kernels read stor, stor_up and W whatever the option: the 'off' options must zero the first two and fill the
+            # gap with W (spin-up then switch, or a checkpoint written under other options), not leave a hybrid sheet.
             A_visc = fill(1e-30, nx, ny); b0 = fill(1e-6, nx, ny); ub_x = fill(3e-7, nx + 1, ny); ub_y = zeros(nx, ny + 1)
             p = ModelParameters(e_v = 0.0, b_min = 1e-6)
             st = State(grid)
@@ -141,12 +160,14 @@
                                           ps = PicardSolver(500, floattype(1e-12), LUDirectSolver(grid), grid), kw...)
             glads = mk(st)
             for _ in 1:3; step!(glads); end
-            @test maximum(Array(st.b_uplift)) > 0 && maximum(Array(st.stor)) > 0 # the fixture really lifts the ice
+            @test maximum(Array(water_above_gap(st))) > 0 && maximum(Array(empty_gap(st))) > 0 && maximum(Array(st.stor)) > 0 # the fixture really lifts the ice
             filled_kw = (cavity_filling = FilledCavities(), uplift = NoUplift(), k_face_choice = "arithmetic", gap_coupling = ExplicitGapCoupling())
             ref = deepcopy(st)
-            for f in (ref.stor, ref.stor_up, ref.b_empty, ref.b_uplift, ref.b_dry); fill!(f, 0); end
+            for f in (ref.stor, ref.stor_up); fill!(f, 0); end
+            copyto!(ref.W, ref.b)
             wrapped, clean = mk(st; filled_kw...), mk(ref; filled_kw...)
-            for f in (:stor, :stor_up, :b_empty, :b_uplift, :b_dry); @test all(iszero, Array(getfield(st, f))); end
+            for f in (:stor, :stor_up); @test all(iszero, Array(getfield(st, f))); end
+            @test Array(st.W) == Array(st.b)
             step!(wrapped); step!(clean)
             @test Array(st.h) == Array(ref.h)
             @test Array(st.b) == Array(ref.b)
@@ -178,7 +199,7 @@
                              ps = PicardSolver(500, floattype(1e-12), LUDirectSolver(grid), grid))
             for _ in 1:3; step!(sim); end
             water(s) = sum(Array(s.W .* (s.mask .== GROUNDED)))
-            lifted = Array(st.b_uplift) .> 0
+            lifted = Array(water_above_gap(st)) .> 0
             @test any(lifted)
             cell = findfirst(lifted)
             T = zeros(nx, ny); T[cell] = -100.0
@@ -187,13 +208,12 @@
             @test r.n_frozen == 1
             @test r.discarded_b > st.b[cell] + 0.0 # the uplift layer counts, not just the gap
             @test W0 - water(st) ≈ r.discarded_b rtol = 1e-12
-            @test st.b_empty[cell] == 0 && st.b_uplift[cell] == 0 && st.W[cell] == 0
+            @test st.b[cell] == 0 && st.W[cell] == 0
             W1 = water(st)
             T[cell] = 100.0
             r = update_frozen_mask!(sim, T)
             @test r.n_thawed == 1
-            @test st.b[cell] == p.b_min && st.b_empty[cell] == p.b_min && st.b_dry[cell] == 0 # dry_floor is off: b_dry zeroed
-            @test st.W[cell] == 0
+            @test st.b[cell] == p.b_min && st.W[cell] == 0 # an empty cavity
             @test water(st) ≈ W1 rtol = 1e-12
             step!(sim)
             @test all(isfinite, Array(st.h))
@@ -231,34 +251,35 @@
             sim = Simulation(grid, state, 1, floattype(dt), p, "explicit", String[], ConstantMeltInput(), sl; uplift = NoUplift(), k_face_choice = "upwind", ps = ps, cavity_filling = UnfilledCavities())
             s = state
             for k in 1:6
-                b_old, e_old = copy(Array(s.b)), copy(Array(s.b_empty))
+                W_old = copy(Array(s.W))
                 step!(sim)
                 g = grounded(s)
                 @test minimum(Array(s.pw)[g]) >= 0
-                @test all(Array(s.b_empty)[g] .<= Array(s.b)[g] .+ 1e-9) # never more empty than the gap itself
+                @test all(Array(s.W)[g] .>= 0) # never more empty than the gap itself
                 if k == 6
                     @test any(Array(s.b)[g] .>= p.b_max * (1 - 1e-9)) # some gap really is held
-                    res = budget_residual(sim, b_old, e_old)
+                    res = budget_residual(sim, W_old)
                     scale = maximum(abs, Array(s.mdot) ./ p.rho_w .+ Array(s.ieb)) + maximum(Array(s.beta) .* Array(s.abs_ub))
                     @test maximum(abs, res[g]) < 1e-6 * scale
                 end
             end
         end
 
-        @testset "water budget closes for every gap scheme (b_empty from the water actually delivered)" begin
+        @testset "water budget closes for every gap scheme (W from the water actually delivered)" begin
             for gap in ("explicit", "implicit", "fully_implicit"), stuck in (false, true)
               @testset "gap $gap, stuck=$stuck" begin
                 sim = make_sim(UnfilledCavities(); stuck = stuck, gap = gap, ieb_scale = 1e-4) # a 3 m^3/s moulin into ice this stiff is a numerical stress test of its own
-                s = sim.state; b_old, e_old = copy(Array(s.b)), copy(Array(s.b_empty))
+                s = sim.state
+                W_old = copy(Array(s.W))
                 for k in 1:3
-                    b_old, e_old = copy(Array(s.b)), copy(Array(s.b_empty))
+                    W_old = copy(Array(s.W))
                     step!(sim)
                 end
                 g = grounded(s)
-                res = budget_residual(sim, b_old, e_old)
+                res = budget_residual(sim, W_old)
                 scale = maximum(abs, Array(s.mdot) ./ sim.p.rho_w .+ Array(s.ieb)) + maximum(Array(s.beta) .* Array(s.abs_ub))
                 @test maximum(abs, res[g]) < 1e-6 * scale
-                @test all(Array(s.b_empty)[g] .<= Array(s.b)[g] .+ 1e-12) && all(Array(s.b_empty)[g] .>= -Array(s.b)[g] .- 1e-12)
+                @test all(Array(s.W)[g] .>= 0)
                 @test minimum(Array(s.pw)[g]) >= 0
               end
             end
@@ -272,11 +293,11 @@
             end
             un = make_sim(UnfilledCavities(); mask = mask)
             s, p = un.state, un.p
-            b_old, e_old = copy(Array(s.b)), copy(Array(s.b_empty))
+            W_old = copy(Array(s.W))
             step!(un)
             @test s.pw[4, 4] == 0
-            @test s.b_empty[4, 4] > 0
-            res = budget_residual(un, b_old, e_old)
+            @test empty_gap(s)[4, 4] > 0
+            res = budget_residual(un, W_old)
             scale = abs(Array(s.mdot)[4, 4] / p.rho_w + Array(s.ieb)[4, 4]) + Array(s.beta)[4, 4] * Array(s.abs_ub)[4, 4]
             @test abs(res[4, 4]) < 1e-9 * scale
         end
@@ -285,10 +306,9 @@
             un = make_sim(UnfilledCavities())
             s = un.state
             s.b .= 1e-3
-            s.b_empty .= 0.0
-            s.b_empty[3, 3] = 9e-4  # nearly dry
-            s.b_empty[4, 3] = 1e-3  # dry: no water, no conductance (no floor at b_min)
-            Shakti.sync_water!(s)   # the conductance reads the water W
+            s.W .= 1e-3             # the conductance reads the water W
+            s.W[3, 3] = 1e-4        # nearly dry
+            s.W[4, 3] = 0.0         # dry: no water, no conductance (no floor at b_min)
             Shakti.compute_b_w!(s, un.p)
             s.dhdx .= 0.0; s.dhdy .= 0.0 # no gradient: the upwind face takes the smaller cell
             @test s.b_w[3, 3] ≈ 1e-4
@@ -311,9 +331,8 @@
             sim = make_sim(UnfilledCavities())
             s, p = sim.state, sim.p
             @test sim.kfs isa Upwind
-            s.b .= 0.05; s.b_empty .= 0.0
-            s.b_empty[3, 3] = 0.05 - 1e-4 # (3,3) holds 0.1 mm of water, its neighbours 5 cm
-            Shakti.sync_water!(s)
+            s.b .= 0.05; s.W .= 0.05
+            s.W[3, 3] = 1e-4 # (3,3) holds 0.1 mm of water, its neighbours 5 cm
             Shakti.compute_b_w!(s, p)
             c0 = p.g / (12 * p.nu)
             K0(w) = c0 * w^3
@@ -339,9 +358,8 @@
             for cf in (FilledCavities(), UnfilledCavities())
                 sim = make_sim(cf, stuck = false)
                 s, p = sim.state, sim.p
-                s.b .= 0.01; s.b_empty .= 0.0
-                s.b_empty[3, 3] = 0.01 - 1e-5   # holds 10 micrometres of water, gap room 9.99 mm
-                Shakti.sync_water!(s)
+                s.b .= 0.01; s.W .= 0.01
+                s.W[3, 3] = 1e-5   # holds 10 micrometres of water, gap room 9.99 mm
                 hostdt = 86400.0
                 C = Array(freeze_on_capacity!(zeros(nx, ny), sim; dt = hostdt, water_limited = true))
                 limit = 1e-5 * p.rho_w / p.rho_i / hostdt
@@ -349,7 +367,7 @@
                     @test C[3, 3] <= limit * (1 + 1e-12)       # water-limited
                     @test C[3, 3] > 0
                 else
-                    @test C[3, 3] > limit                       # legacy: the gap room is the limit, b_empty is ignored
+                    @test C[3, 3] > limit                       # legacy: the gap room is the limit, W is ignored
                 end
             end
             su = Array(freeze_on_capacity!(zeros(nx, ny), make_sim(UnfilledCavities(), stuck = false); dt = 86400.0, water_limited = true))
@@ -401,7 +419,7 @@
             g = grounded(s)
             @test first(Shakti.picard_status(sim.hs))
             @test minimum(Array(s.pw)[g]) >= 0
-            @test any(Array(s.b_empty)[g] .> 0)
+            @test any(Array(empty_gap(s))[g] .> 0)
             xo, xn = h_old .- Array(s.zb), Array(s.h) .- Array(s.zb)
             qx, qy = Array(s.q_x), Array(s.q_y)
             div = [(qx[i+1, j] - qx[i, j]) / grid.dx + (qy[i, j+1] - qy[i, j]) / grid.dy for i in 1:nx, j in 1:ny]
@@ -466,8 +484,8 @@ end
         r = Array(s.W) .- (W_old .+ dt .* (Array(s.mdot) ./ ModelParameters().rho_w .+ Array(s.ieb) .- dv))
         return maximum(abs, r[Array(s.mask) .== GROUNDED])
     end
-    # (sheet, budgeted, relative tolerance of the budget): W from the budget under unfilled cavities (b_empty and b_uplift
-    # then follow from it, to round-off), else the water the gap and the head leave (b - b_dry + b_uplift), which closes the
+    # (sheet, budgeted, relative tolerance of the budget): W from the budget under unfilled cavities, else the water the gap
+    # and the head leave (the dry floor's water, or b plus the uplift layer), which closes the
     # budget to the Picard tolerance under the consistent coupling and not under the explicit one (2 % here)
     for (name, mk, budgeted, rtol) in (("GlaDS-2", () -> water_sim(LUDirectSolver(grid)), true, 1e-12),
                                        ("filled, uplift, consistent", () -> water_sim(LUDirectSolver(grid); cavity_filling = FilledCavities()), false, 1e-5),
@@ -477,12 +495,13 @@ end
         @testset "$name" begin
             sim = mk()
             @test Shakti.water_is_budgeted(sim) == budgeted
-            @test Shakti.water_mismatch(sim.state) == 0 # set at construction
             for _ in 1:4
                 W_old = Array(sim.state.W)
                 step!(sim)
                 @test first(Shakti.picard_status(sim.hs))
-                @test Shakti.water_mismatch(sim.state) <= (budgeted ? 1e-12 : 0.0) * maximum(Array(sim.state.W))
+                W = Array(sim.state.W)
+                Shakti.constrain_water!(sim.state, sim.p, sim.cf, sim.up, Shakti.dry_floor(sim)) # the sheet's own water is within its bounds
+                @test Array(sim.state.W) == W
                 @test budget_gap(sim.state, W_old, sim.dt[]) <= rtol * maximum(Array(sim.state.W))
             end
             name == "filled, explicit coupling" && @test Array(sim.state.W) == Array(sim.state.b) # the legacy sheet's water is its gap

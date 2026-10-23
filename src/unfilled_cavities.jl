@@ -8,8 +8,8 @@
 # always full of water, which forces N above the overburden (p_w < 0) wherever sliding opens the
 # gap faster than inflow, conductance and creep closure can follow.
 #
-# `State.b_empty` holds the empty part of the gap per unit bed area [m] (>= 0), so the water
-# present is `b - b_empty`. Under FilledCavities (SHAKTI's original sheet) nothing changes and `b_empty` stays 0.
+# `State.W` holds the water per unit bed area [m], so the empty part of the gap is `b - W` (`empty_gap`). Under
+# FilledCavities (SHAKTI's original sheet) nothing changes and the gap is full, `W = b`.
 
 """
 $(TYPEDSIGNATURES)
@@ -24,7 +24,7 @@ abstract type AbstractCavityFilling end
 """
 $(TYPEDSIGNATURES)
 
-SHAKTI's original sheet: the gap is always completely full of water. `State.b_empty` stays zero.
+SHAKTI's original sheet: the gap is always completely full of water, `State.W = b` (less the dry floor, `dry_floor`).
 """
 struct FilledCavities <: AbstractCavityFilling end
 
@@ -33,29 +33,12 @@ $(TYPEDSIGNATURES)
 
 The gap may be partly empty (free-surface regime, `p_w = 0`), see this file's header. A `GROUNDED`
 cell whose head falls below the bed takes the unfilled head row (`cavity_head_terms`,
-`linear_solver.jl`): `N = po`, and the empty depth `zb - h` is the cell's storage. `State.b_empty`
-records the empty depth (from the water budget after the gap update, [`update_b_empty_budget!`](@ref)),
-the face conductances use the water depth `b - b_empty` ([`compute_b_w!`](@ref)), and `p_w` is
+`linear_solver.jl`): `N = po`, and the empty depth `zb - h` is the cell's storage. The water `State.W` comes
+from the water budget after the gap update ([`update_water_budget!`](@ref)), the empty part of the gap is `b - W`,
+the face conductances use the water depth `W` ([`compute_b_w!`](@ref)), and `p_w` is
 floored at 0. The default of [`Simulation`](@ref) (with [`IceUplift`](@ref): the GlaDS-2 sheet).
 """
 struct UnfilledCavities <: AbstractCavityFilling end
-
-@parallel_indices (ix, iy) function update_b_empty_kernel!(b_empty, mask, h, zb)
-    if ix <= size(b_empty, 1) && iy <= size(b_empty, 2)
-        b_empty[ix, iy] = (mask[ix, iy] == GROUNDED) * max(zero(eltype(b_empty)), zb[ix, iy] - h[ix, iy])
-    end
-    return
-end
-
-"""
-$(TYPEDSIGNATURES)
-
-Sets `s.b_empty` from the solved head: `max(0, zb - h)` on `GROUNDED` cells, `0` elsewhere. A head
-below the bed (`p_w < 0` in the legacy equations) is read as the empty depth of the gap, in metres
-of water. A no-op under [`FilledCavities`](@ref).
-"""
-update_b_empty!(s::State, ::FilledCavities) = s
-update_b_empty!(s::State, ::UnfilledCavities) = (@parallel update_b_empty_kernel!(s.b_empty, s.mask, s.h, s.zb); s)
 
 @parallel_indices (ix, iy) function set_cavity_storage_kernel!(stor, mask, inv_dt)
     if ix <= size(stor, 1) && iy <= size(stor, 2)
@@ -68,11 +51,11 @@ end
 $(TYPEDSIGNATURES)
 
 Marks, via `s.stor = 1/dt` on `GROUNDED` cells, where the gap may be partly empty this step. Under
-[`FilledCavities`](@ref) it zeroes `s.stor` and `s.b_empty`, selecting the legacy equations everywhere: the kernels read
-these fields whatever the option, so a `State` that ran with unfilled cavities (a spin-up, a checkpoint) would otherwise
+[`FilledCavities`](@ref) it zeroes `s.stor`, selecting the legacy equations everywhere: the kernels read
+it whatever the option, so a `State` that ran with unfilled cavities (a spin-up, a checkpoint) would otherwise
 keep their rows.
 """
-set_cavity_storage!(s::State, dt, ::FilledCavities) = (fill!(s.stor, zero(eltype(s.stor))); fill!(s.b_empty, zero(eltype(s.b_empty))); s)
+set_cavity_storage!(s::State, dt, ::FilledCavities) = (fill!(s.stor, zero(eltype(s.stor))); s)
 set_cavity_storage!(s::State, dt, ::UnfilledCavities) = (@parallel set_cavity_storage_kernel!(s.stor, s.mask, inv(dt)); s)
 
 @parallel_indices (ix, iy) function compute_b_w_kernel!(b_w, W)
@@ -85,12 +68,12 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Water depth `s.b_w = W` as the step starts (`s.W`, the water present: the gap less its empty part, `b_empty` under
+Water depth `s.b_w = W` as the step starts (`s.W`, the water present: the gap less its empty part under
 [`UnfilledCavities`](@ref) or the dry volume the `b_min` clamp keeps under the filled dry floor, plus the lifted layer
 under [`IceUplift`](@ref)), never below 0; exactly `b` under SHAKTI's original sheet. The face conductances ([`compute_face_flux!`](@ref)) are built from it, so
 an empty cavity neither carries nor draws water. No floor at `min(b, p.b_min)`: a dry cell (`W = 0`)
 that kept that conductance drained water it did not have wherever its head stayed above a neighbour's
-(a margin cell on a slope next to `LAND`), and [`update_b_empty_budget!`](@ref)'s floor `W >= 0` then
+(a margin cell on a slope next to `LAND`), and [`update_water_budget!`](@ref)'s floor `W >= 0` then
 created it: 1.4 m^3/s on Drang Drung at 25 m, 21 times the melt input. Without the floor a dry cell's
 outflow vanishes with its water; its row stays regular through the unfilled storage `1/dt`
 (`cavity_head_terms`), or is a closed cell's once all its faces carry no water. It is the water present at the start of the step,
@@ -200,7 +183,7 @@ cannot follow at large `dt` (seen on a 3 m^3/s moulin at dt = 3 h). The head row
 balance and its consistency with the gap update are unaffected; only the conductance lags the melt by one step, as the
 original scheme lags the whole gap. Where the melt falls within the step the conductance takes the head row's own water,
 which is then the smaller ([`compute_b_w_iterate!`](@ref)): with the start-of-step melt a nearly empty cell kept a
-conductance for water its row had already drained below zero, and the floor of [`update_b_empty_budget!`](@ref) made up
+conductance for water its row had already drained below zero, and the floor of [`update_water_budget!`](@ref) made up
 the difference (Helheim at 500 m, dt = 1 day, cold start: the dissipation melt halved within the step, a gap 1.7 mm
 larger, 9e-4 of the melt created, and the step never passed [`water_converged`](@ref)).
 """
@@ -337,25 +320,8 @@ limit_filled_step!(::ImplicitUpwind, ::SchemeGapUpdate, s::State, h_prev, p::Mod
 limit_filled_step!(::AbstractKFaceScheme, gu::SchemeGapUpdate, s::State, h_prev, p::ModelParameters) =
     gu.dry_floor ? (@parallel limit_filled_step_kernel!(s.h, h_prev, s.dh_it, s.mask, s.zb, s.po, p.rho_w, p.g); s) : s
 
-@parallel_indices (ix, iy) function clamp_b_empty_kernel!(b_empty, b)
-    if ix <= size(b_empty, 1) && iy <= size(b_empty, 2)
-        b_empty[ix, iy] = min(b_empty[ix, iy], b[ix, iy])
-    end
-    return
-end
-
-"""
-$(TYPEDSIGNATURES)
-
-Caps `s.b_empty` at the gap height `s.b` (the water present, `b - b_empty`, cannot be negative); called
-after the gap update under the parabolic scheme (the elliptic one takes `b_empty` from [`update_b_empty_budget!`](@ref)). A safety only: it acts when the head solve left a cell more than empty, e.g.
-after a Picard loop that did not converge. A no-op under [`FilledCavities`](@ref).
-"""
-clamp_b_empty!(s::State, ::FilledCavities) = s
-clamp_b_empty!(s::State, ::UnfilledCavities) = (@parallel clamp_b_empty_kernel!(s.b_empty, s.b); s)
-
 # Per GROUNDED cell: the head row's end-of-step water minus the water the fluxes and sources leave, W + dt (mdot/rho_w
-# + ieb - div q), as update_b_empty_budget! takes it (water_converged, elliptic_solver.jl). The row's water is that of
+# + ieb - div q), as update_water_budget! takes it (water_converged, elliptic_solver.jl). The row's water is that of
 # compute_b_w_iterate! but with the current melt rate: s.b_w takes the gap's melt opening from the start of the step (mdot0).
 # With `relative`, divided by the sum of the magnitudes of the cell's terms, the scale of its round-off.
 @parallel_indices (ix, iy) function water_budget_residual_kernel!(r, relative, mask, Wo, q_x, q_y, mdot, ieb, dx, dy, dt, rho_w, b, h, zb, po, N, stor, stor_up, b_min, b_max, ggrav, gc, beta, abs_ub, A_visc, rho_i, n_minus_1, bump, b_next)
@@ -374,54 +340,13 @@ clamp_b_empty!(s::State, ::UnfilledCavities) = (@parallel clamp_b_empty_kernel!(
     return
 end
 
-@parallel_indices (ix, iy) function update_b_empty_budget_kernel!(b_empty, mask, b, Wo, q_x, q_y, mdot, ieb, dx, dy, dt, rho_w, b_uplift, stor_up, h, zb, po, ggrav)
-    if ix <= size(b_empty, 1) && iy <= size(b_empty, 2)
-        if mask[ix, iy] == GROUNDED
-            div = (q_x[ix+1, iy] - q_x[ix, iy]) / dx + (q_y[ix, iy+1] - q_y[ix, iy]) / dy
-            W = max(zero(dt), Wo[ix, iy] + dt * (mdot[ix, iy] / rho_w + ieb[ix, iy] - div)) # water now, from the water budget
-            bb = b[ix, iy]
-            if stor_up[ix, iy] > 0 && h[ix, iy] > zb[ix, iy] + po[ix, iy] / (rho_w * ggrav)
-                # uplifted cell (ice_uplift.jl): the water beyond the gap is the uplift layer
-                b_uplift[ix, iy] = max(zero(dt), W - bb)
-                b_empty[ix, iy] = clamp(bb - W, zero(dt), bb)
-            else
-                b_empty[ix, iy] = clamp(bb - W, -bb, bb)
-            end
-        else
-            b_empty[ix, iy] = zero(dt)
-        end
-    end
-    return
-end
-
-"""
-$(TYPEDSIGNATURES)
-
-Sets `s.b_empty` from the water budget instead of from the head: the water now is `W = W_old + dt*(mdot/rho_w
-+ ieb - div(q))` (what the solve's fluxes and sources actually delivered, so the budget closes for every
-cell and every gap scheme), and `b_empty = b - W` with the gap `b` as just updated. Where the gap update
-and the head equation disagree (the implicit gap schemes change the gap by a different amount than the
-head equation assumed, a held `b_max`/`b_min`, ...) the difference is kept in `b_empty` instead of being
-lost: positive when the gap is larger than the water (partly empty), negative when there is more water
-than gap (stored above the gap volume, released as a source the next step). `W` is floored at 0, and
-`b_empty` limited to `[-b, b]`; water beyond these limits is the only water the bookkeeping can still
-create or lose. Under [`IceUplift`](@ref), in a cell whose head is above the overburden head the water
-beyond the gap is the uplift layer instead, `b_uplift = W - b` (no upper limit), and `b_empty >= 0`. Called by [`step_b!`](@ref) under the elliptic scheme, right after the gap update and before `compute_beta!` reads
-`b_uplift`; the head-based [`update_b_empty!`](@ref) is for the parabolic scheme only, whose storage terms the water budget above does not include. A no-op under
-[`FilledCavities`](@ref).
-"""
-
-# The water a cell holds, from the gap and the fields that split it (GAP-5): the filled gap less its empty part and the dry
-# floor, plus the uplift layer. Each term is zero under the options that do not own it, so this is the water under every sheet.
-@inline composed_water(b, b_empty, b_dry, b_uplift) = max(b - b_empty - b_dry, zero(b)) + b_uplift
-
-@parallel_indices (ix, iy) function update_water_budget_kernel!(W, mask, b, b_empty, b_dry, b_uplift, q_x, q_y, mdot, ieb, dx, dy, dt, rho_w)
+@parallel_indices (ix, iy) function update_water_budget_kernel!(W, mask, b, q_x, q_y, mdot, ieb, dx, dy, dt, rho_w)
     if ix <= size(W, 1) && iy <= size(W, 2)
         if mask[ix, iy] == GROUNDED
             div = (q_x[ix+1, iy] - q_x[ix, iy]) / dx + (q_y[ix, iy+1] - q_y[ix, iy]) / dy
             W[ix, iy] = max(zero(dt), W[ix, iy] + dt * (mdot[ix, iy] / rho_w + ieb[ix, iy] - div))
         else
-            W[ix, iy] = composed_water(b[ix, iy], b_empty[ix, iy], b_dry[ix, iy], b_uplift[ix, iy])
+            W[ix, iy] = b[ix, iy]
         end
     end
     return
@@ -431,32 +356,85 @@ end
 $(TYPEDSIGNATURES)
 
 Advances the water `s.W` by one step from the water budget on `GROUNDED` cells, `W = max(0, W + dt*(mdot/rho_w + ieb -
-div(q)))` with the step's converged fluxes, and sets it to the water the other fields hold elsewhere. The same update as
-[`update_b_empty_budget!`](@ref), but carried by `W` alone rather than split into `b_empty` and `b_uplift` (GAP-5).
+div(q)))` with the step's converged fluxes (what the solve actually delivered, so the budget closes for every cell and
+every gap scheme), and sets it to the gap `b` elsewhere. Where the gap update and the head equation disagree (the
+implicit gap schemes change the gap by a different amount than the head equation assumed, a held `b_max`/`b_min`, ...)
+the difference stays in `W - b`: an empty part of the gap where `W < b`, water above the gap where `W > b` (the uplift
+layer where the ice is lifted, see [`IceUplift`](@ref); otherwise released as a source the next step). The floor
+`W >= 0` is the only water it can still create. Called by [`step_b!`](@ref) under the elliptic scheme with
+[`UnfilledCavities`](@ref) (`water_is_budgeted`), right after the gap update and before `compute_beta!` reads the
+uplift layer.
 """
 update_water_budget!(s::State, g::Grid, p::ModelParameters, dt) =
-    (@parallel update_water_budget_kernel!(s.W, s.mask, s.b, s.b_empty, s.b_dry, s.b_uplift, s.q_x, s.q_y, s.mdot, s.ieb, g.dx, g.dy, dt, p.rho_w); s)
+    (@parallel update_water_budget_kernel!(s.W, s.mask, s.b, s.q_x, s.q_y, s.mdot, s.ieb, g.dx, g.dy, dt, p.rho_w); s)
 
-"""
-$(TYPEDSIGNATURES)
-
-Sets the water `s.W` to the water the other fields hold, `max(b - b_empty - b_dry, 0) + b_uplift`, in every cell.
-"""
-sync_water!(s::State) = (s.W .= composed_water.(s.b, s.b_empty, s.b_dry, s.b_uplift); s)
-
-"""
-$(TYPEDSIGNATURES)
-
-The largest difference between the water `s.W` and the water the other fields hold, `max(b - b_empty - b_dry, 0) +
-b_uplift`, over `GROUNDED` cells [m]. One lazy reduction, no allocation.
-"""
-function water_mismatch(s::State)
-    grounded = GROUNDED
-    d = Broadcast.instantiate(Broadcast.broadcasted((m, W, b, be, bd, bu) -> m == grounded ? abs(W - composed_water(b, be, bd, bu)) : zero(W),
-                                                    s.mask, s.W, s.b, s.b_empty, s.b_dry, s.b_uplift))
-    return mapreduce(identity, max, d; init = zero(eltype(s.W)))
+# The water a GROUNDED cell's head row stored under the sheets whose water is not budgeted (water_is_budgeted, run.jl):
+# the new gap less the empty depth below the bed (UnfilledCavities on the parabolic scheme), plus the uplift layer above
+# the overburden head (IceUplift). Off GROUNDED the gap.
+@parallel_indices (ix, iy) function water_from_head_kernel!(W, mask, b, h, zb, po, rho_wg, unfilled, uplift)
+    if ix <= size(W, 1) && iy <= size(W, 2)
+        if mask[ix, iy] == GROUNDED
+            z = zero(eltype(W))
+            empty = unfilled ? max(z, zb[ix, iy] - h[ix, iy]) : z
+            lifted = uplift ? max(z, h[ix, iy] - (zb[ix, iy] + po[ix, iy] / rho_wg)) : z
+            W[ix, iy] = max(b[ix, iy] - empty, z) + lifted
+        else
+            W[ix, iy] = b[ix, iy]
+        end
+    end
+    return
 end
 
-update_b_empty_budget!(s::State, g::Grid, p::ModelParameters, dt, ::FilledCavities) = s
-update_b_empty_budget!(s::State, g::Grid, p::ModelParameters, dt, ::UnfilledCavities) =
-    (@parallel update_b_empty_budget_kernel!(s.b_empty, s.mask, s.b, s.W, s.q_x, s.q_y, s.mdot, s.ieb, g.dx, g.dy, dt, p.rho_w, s.b_uplift, s.stor_up, s.h, s.zb, s.po, p.g); s)
+"""
+$(TYPEDSIGNATURES)
+
+Sets the water `s.W` from the new gap and the solved head, for the sheets whose water is not budgeted: `W = max(b -
+max(0, zb - h), 0) + max(0, h - h_o)` on `GROUNDED` cells, the first term under [`UnfilledCavities`](@ref) (the
+parabolic scheme, whose storage terms are not in the water budget) and the second under [`IceUplift`](@ref), `h_o = zb +
+po/(rho_w g)`; `W = b` elsewhere and under SHAKTI's original sheet. Under ConsistentGapCoupling this is the water the
+head row stores, which closes the budget to the Picard tolerance once the step converges.
+"""
+water_from_head!(s::State, p::ModelParameters, cf::AbstractCavityFilling, up) =
+    (@parallel water_from_head_kernel!(s.W, s.mask, s.b, s.h, s.zb, s.po, p.rho_w * p.g, cf isa UnfilledCavities, up isa IceUplift); s) # up: the AbstractIceUplift (ice_uplift.jl, included later)
+
+@parallel_indices (ix, iy) function constrain_water_kernel!(W, b, unfilled, full, dry_floor, b_min)
+    if ix <= size(W, 1) && iy <= size(W, 2)
+        z = zero(eltype(W))
+        w = max(W[ix, iy], z)
+        bb = b[ix, iy]
+        W[ix, iy] = unfilled  ? w :
+                    dry_floor ? (bb > b_min ? bb : min(w, bb)) :
+                    full      ? bb : max(w, bb)
+    end
+    return
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Brings the water `s.W` within what the simulation's sheet allows, before a step and after a setup or mask change:
+`W >= 0` everywhere; under [`FilledCavities`](@ref) the gap is full, `W >= b`, and `W = b` without
+[`IceUplift`](@ref); under the dry floor (`dry_floor`) `W = b` above `b_min` and `0 <= W <= b` at it. Idempotent on the
+water the sheet's own steps leave; it acts on a `State` that ran under other options (a spin-up, a checkpoint) and on
+cells a mask change reseeded empty ([`thaw_cells!`](@ref)), which hold `b_min` of water under the filled sheet without
+the dry floor.
+"""
+constrain_water!(s::State, p::ModelParameters, cf::AbstractCavityFilling, up, dry_floor::Bool) =
+    (@parallel constrain_water_kernel!(s.W, s.b, cf isa UnfilledCavities, up isa NoUplift, dry_floor, p.b_min); s)
+
+"""
+$(TYPEDSIGNATURES)
+
+The empty part of the gap [m], `max(0, b - W)` per cell: an unfilled cavity's empty volume, or the dry volume of the
+dry floor (`dry_floor`). A derived diagnostic, also reachable as the observable `"b_empty"` ([`get_observable`](@ref)).
+"""
+empty_gap(s::State) = max.(s.b .- s.W, zero(eltype(s.W)))
+
+"""
+$(TYPEDSIGNATURES)
+
+The water above the gap [m], `max(0, W - b)` per cell: the uplift layer under [`IceUplift`](@ref) where the ice is
+lifted (see `uplift_layer`, `gap_height.jl`), otherwise water the budget keeps above the gap. A derived diagnostic, also
+reachable as the observable `"b_uplift"` ([`get_observable`](@ref)).
+"""
+water_above_gap(s::State) = max.(s.W .- s.b, zero(eltype(s.W)))

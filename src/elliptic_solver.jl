@@ -342,7 +342,7 @@ $(TYPEDSIGNATURES)
 
 Second convergence test of [`Picard_loop!`](@ref), on the water instead of the head: every `GROUNDED` cell's end-of-step
 water depth from its head row ([`compute_b_w_iterate!`](@ref)'s, with the current melt rate) must match the water its fluxes and sources
-leave it, `W + dt (mdot/rho_w + ieb - div q)` (`W` the water at the start of the step) ([`update_b_empty_budget!`](@ref)), to `tol` times the sum of the
+leave it, `W + dt (mdot/rho_w + ieb - div q)` (`W` the water at the start of the step) ([`update_water_budget!`](@ref)), to `tol` times the sum of the
 magnitudes of the cell's terms (its water then and before, and `dt` times its sources and face fluxes: the scale of the
 balance's round-off) but no less than `WATER_TOL_FLOOR` = 1e-2, or to `atol` metres of water when `atol > 0`. `wdt` is the time step, 0 to skip the test: it applies
 where the head rows conserve exactly `b_w` ([`ImplicitUpwind`](@ref), [`ConsistentGapCoupling`](@ref),
@@ -353,7 +353,7 @@ The test also does not depend on the elevation of the bed, as the relative head 
 """
 # The water test asks for no less than this (relative to the cell's terms): the iterates it must reject are off by 0.1 to 1
 # (a stop of limit_regime_crossing!), while a solved step levels off at 1e-9 on a thin-ice slab and, on Helheim (500 m,
-# dt = 1 day), at up to 1e-3 in a cell next to an uplift blister whose face donor flips (the budget keeps that in b_empty).
+# dt = 1 day), at up to 1e-3 in a cell next to an uplift blister whose face donor flips (the budget keeps that in W).
 const WATER_TOL_FLOOR = 1e-2
 function water_converged(ps::PicardSolver, s::State, g::Grid, p::ModelParameters, gc::AbstractGapCoupling, wdt)
     wdt > 0 || return true

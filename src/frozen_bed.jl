@@ -32,7 +32,7 @@ Freezes every cell where `freeze_mask` is `true` and currently `GROUNDED` to
 `LAND`/`OTHER_BASIN`/already `FROZEN_BED` -- are left untouched, so passing an overly broad mask
 is harmless, not an error).
 
-Sets `b:=0` and `pw:=0` on those cells, and zeroes the water fields (`W`, `b_empty`, `b_uplift`, `b_dry`), then refreshes everything that depends on `s.mask`/`s.b`/
+Sets `b:=0` and `pw:=0` on those cells, and zeroes the water `W`, then refreshes everything that depends on `s.mask`/`s.b`/
 `s.pw`: `s.h = zb` on those cells (`pw = 0`; the other cells keep their head), the cell-centred `s.K`
 (`b=0` gives `K=0` exactly; the face transmissivities are rebuilt by the next refresh), `s.valid_x`/`s.valid_y` via
 [`compute_face_masks!`](@ref), and
@@ -79,10 +79,9 @@ Thaws every cell where `thaw_mask` is `true` and currently [`FROZEN_BED`](@ref) 
 
 Reseeds `b:=p.b_min` (a cell can't re-enter the dynamic assembly at literal `b=0` -- see
 `FROZEN_BED`'s own docstring for why -- `compute_b!`'s usual kernels take over evolving it
-normally from here on), marked empty: `b_empty = b_min` for [`UnfilledCavities`](@ref) and `b_dry = b_min`
-for the dry floor (`dry_floor`); the option that does not own a field zeroes it at the next step. So the
-cell starts with no water, except under the filled sheet without the dry floor, whose water is `b` itself
-(`b_min` per thawed cell). `pw`/`h` are deliberately left untouched: a thawing cell starts from
+normally from here on), with no water (`W = 0`): an empty cavity under [`UnfilledCavities`](@ref), a dry floor
+under `dry_floor`. The `Simulation` method's refresh brings `W` within its sheet (`constrain_water!`), so only the
+filled sheet without the dry floor, whose water is `b` itself, starts these cells with `b_min` of water. `pw`/`h` are deliberately left untouched: a thawing cell starts from
 whatever it was while frozen (`pw=0`/dry/high-`N` if it was actually frozen via
 [`freeze_cells!`](@ref)) and the head equation evolves it from there on the next solve. Refreshes `s.K`/`s.valid_x`/`s.valid_y`/`s.N` the same
 way [`freeze_cells!`](@ref) does.
@@ -105,23 +104,16 @@ held_water(s::State, cells) = sum(s.W .* cells)
 function clear_water!(s::State, cells)
     z = zero(eltype(s.b))
     @. s.b = ifelse(cells, z, s.b)
-    @. s.b_empty = ifelse(cells, z, s.b_empty)
-    @. s.b_uplift = ifelse(cells, z, s.b_uplift)
-    @. s.b_dry = ifelse(cells, z, s.b_dry)
     @. s.W = ifelse(cells, z, s.W)
     return s
 end
 
-# A cell entering the dynamic sheet gets the gap b_min but no water: the gap is marked empty both as an unfilled
-# cavity (b_empty) and as the dry floor (b_dry). The option that does not own a field zeroes it at the next step
-# (prepare_step_inputs!), and the one that does keeps the cell dry. Only the filled sheet without the dry floor,
-# whose water is b itself, still starts these cells with b_min of water.
+# A cell entering the dynamic sheet gets the gap b_min but no water: an empty cavity, or a dry floor. Only the filled
+# sheet without the dry floor, whose water is b itself, still starts these cells with b_min of water (constrain_water!,
+# at the next refresh).
 function seed_empty!(s::State, p::ModelParameters, cells)
     z = zero(eltype(s.b))
     @. s.b = ifelse(cells, p.b_min, s.b)
-    @. s.b_empty = ifelse(cells, p.b_min, s.b_empty)
-    @. s.b_dry = ifelse(cells, p.b_min, s.b_dry)
-    @. s.b_uplift = ifelse(cells, z, s.b_uplift)
     @. s.W = ifelse(cells, z, s.W)
     return s
 end

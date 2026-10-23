@@ -28,7 +28,7 @@
         end
         grounded(sim) = Array(sim.state.mask) .== GROUNDED
         unfilled(sim) = grounded(sim) .& (Array(sim.state.h) .< Array(sim.state.zb))
-        water(s) = Array(s.b) .- Array(s.b_empty) .+ Array(s.b_uplift)
+        water(s) = Array(s.W)
         function budget_residual(sim, W_old)
             s, p, g = sim.state, sim.p, sim.grid
             qx, qy = Array(s.q_x), Array(s.q_y)
@@ -127,13 +127,12 @@
         end
 
         @testset "dry cells next to the LAND margin drain no water they do not have ($kface)" for kface in ("upwind", "implicit_upwind")
-            # Cells with no water (b_empty = b) whose head stays above the LAND neighbour's: with a conductance floor at
-            # min(b, b_min) they kept draining, and update_b_empty_budget!'s W >= 0 floor created that water (Drang Drung at 25 m:
+            # Cells with no water (W = 0) whose head stays above the LAND neighbour's: with a conductance floor at
+            # min(b, b_min) they kept draining, and update_water_budget!'s W >= 0 floor created that water (Drang Drung at 25 m:
             # 1.4 m^3/s, 21 times the melt input; here ~6 % of the input under Upwind). The water depth now has no floor.
             sim = ramp(kface = kface, b_min = 1e-3)
             s, nx = sim.state, sim.grid.nx
-            s.b_empty[nx-4:nx-1, :] .= s.b[nx-4:nx-1, :]
-            Shakti.sync_water!(s) # the water W the rows and conductances read
+            s.W[nx-4:nx-1, :] .= 0 # the water the rows and conductances read
             W_old = water(s)
             step!(sim)
             @test first(Shakti.picard_status(sim.hs))
@@ -193,7 +192,7 @@
                     g = Array(s.mask) .== GROUNDED
                     @test first(Shakti.picard_status(sim.hs))
                     @test maximum((Array(s.pw) .- Array(s.po))[g]) <= 1e-9 * maximum(Array(s.po))
-                    k == 1 && dt < 86400 && @test Array(s.b_uplift)[3, 3] > 0 # the moulin cell lifts the ice (at dt = 1 day the gap has opened enough within the step)
+                    k == 1 && dt < 86400 && @test Array(water_above_gap(s))[3, 3] > 0 # the moulin cell lifts the ice (at dt = 1 day the gap has opened enough within the step)
                     res = budget_residual(sim, W_old)
                     @test maximum(abs, res[g]) < 1e-9 * maximum(abs, Array(s.mdot) ./ p.rho_w .+ Array(s.ieb))
                 end

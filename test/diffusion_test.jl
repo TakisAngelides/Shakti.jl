@@ -5,7 +5,7 @@
         p = ModelParameters(e_v = 0.0)
 
         # Seed the fields compute_D! reads directly with simple, known values -- bypassing
-        # the full elliptic solve entirely, since compute_D! only ever reads mask/b/b_empty (cell-centred)
+        # the full elliptic solve entirely, since compute_D! only ever reads mask/b/W (cell-centred)
         # and q_x/q_y/dhdx/dhdy/dpwdx/dpwdy (face-centred, summed onto cells as mdot does), so this is a
         # faithful, self-contained test of its own formula in isolation. Deliberately set uniformly
         # nonzero even at the domain-boundary faces (unlike the real pipeline, where dhdx/dpwdx are
@@ -32,7 +32,7 @@
             s = State(grid)
             s.b .= state.b; s.q_x .= state.q_x; s.dhdx .= state.dhdx; s.dpwdx .= state.dpwdx
             s.q_y .= state.q_y; s.dhdy .= state.dhdy; s.dpwdy .= state.dpwdy
-            Shakti.sync_water!(s); compute_D!(s, p, mt_full, NoDiffusion())
+            copyto!(s.W, s.b); compute_D!(s, p, mt_full, NoDiffusion())
             @test all(iszero, Array(s.D_x))
             @test all(iszero, Array(s.D_y))
         end
@@ -41,7 +41,7 @@
             s = State(grid)
             s.b .= state.b; s.q_x .= state.q_x; s.dhdx .= state.dhdx; s.dpwdx .= state.dpwdx
             s.q_y .= state.q_y; s.dhdy .= state.dhdy; s.dpwdy .= state.dpwdy
-            Shakti.sync_water!(s); compute_D!(s, p, mt_full, WithDiffusion(CholeskyDirectSolver(grid)))
+            copyto!(s.W, s.b); compute_D!(s, p, mt_full, WithDiffusion(CholeskyDirectSolver(grid)))
 
             expected = D_eq10(0.02, heat_pot + heat_sens)
             @test expected > 0
@@ -63,7 +63,7 @@
             s1.b .= state.b; s1.q_x .= state.q_x; s1.dhdx .= state.dhdx; s1.dpwdx .= state.dpwdx
             mt_pot_only = MeltTerms{true, true, true, false, true}()
             s1.q_y .= state.q_y; s1.dhdy .= state.dhdy; s1.dpwdy .= state.dpwdy
-            Shakti.sync_water!(s1); compute_D!(s1, p, mt_pot_only, WithDiffusion(CholeskyDirectSolver(grid)))
+            copyto!(s1.W, s1.b); compute_D!(s1, p, mt_pot_only, WithDiffusion(CholeskyDirectSolver(grid)))
             expected_pot_only = D_eq10(0.02, heat_pot)
             @test s1.D_x[2, 1] ≈ expected_pot_only
 
@@ -72,7 +72,7 @@
             s2.b .= state.b; s2.q_x .= state.q_x; s2.dhdx .= state.dhdx; s2.dpwdx .= state.dpwdx
             s2.q_y .= state.q_y; s2.dhdy .= state.dhdy; s2.dpwdy .= state.dpwdy
             mt_sens_only = MeltTerms{true, true, false, true, true}()
-            Shakti.sync_water!(s2); compute_D!(s2, p, mt_sens_only, WithDiffusion(CholeskyDirectSolver(grid)))
+            copyto!(s2.W, s2.b); compute_D!(s2, p, mt_sens_only, WithDiffusion(CholeskyDirectSolver(grid)))
             expected_sens_only = D_eq10(0.02, heat_sens) # D is floored at 0 (a net heat deficit is freeze-on, handled by mdot, not backward diffusion)
             @test s2.D_x[2, 1] ≈ expected_sens_only
             @test all(>=(0), Array(s2.D_x)) && all(>=(0), Array(s2.D_y))
@@ -84,22 +84,22 @@
             @test s1.D_x[2, 1] ≈ expected_pot_only # unchanged from above: no sensible leakage
         end
 
-        @testset "the filled part of the gap sets D: b - b_empty, within [0, b]" begin
+        @testset "the filled part of the gap sets D: the water W, within [0, b]" begin
             s = State(grid)
             s.q_x .= state.q_x; s.dhdx .= state.dhdx; s.q_y .= state.q_y; s.dhdy .= state.dhdy
             s.b .= [0.01 * (i + j) for i in 1:nx, j in 1:ny]
             mt_pot_only = MeltTerms{true, true, true, false, true}()
             wd = WithDiffusion(CholeskyDirectSolver(grid))
-            Shakti.sync_water!(s); compute_D!(s, p, mt_pot_only, wd) # b_empty = 0 (FilledCavities): the face mean of b
+            copyto!(s.W, s.b); compute_D!(s, p, mt_pot_only, wd) # W = b (FilledCavities): the face mean of b
             D_full = copy(Array(s.D_x)); Dy_full = copy(Array(s.D_y))
             b = Array(s.b)
             @test D_full[2, 1] ≈ (D_eq10(b[2, 1], heat_pot) + D_eq10(b[1, 1], heat_pot)) / 2
 
-            # unfilled cell (2, 1): only b - b_empty of its gap holds water; an "over-full" cell (3, 1)
-            # (b_empty < 0, from the water-budget bookkeeping) touches at most its gap b
+            # unfilled cell (2, 1): only W of its gap holds water; an "over-full" cell (3, 1)
+            # (W > b, from the water budget) touches at most its gap b
             be = zeros(nx, ny); be[2, 1] = 0.75 * b[2, 1]; be[3, 1] = -0.5 * b[3, 1]
-            s.b_empty .= be
-            Shakti.sync_water!(s); compute_D!(s, p, mt_pot_only, wd)
+            s.W .= b .- be
+            compute_D!(s, p, mt_pot_only, wd)
             @test s.D_x[2, 1] ≈ D_full[2, 1] * (0.25 * b[2, 1] + b[1, 1]) / (b[2, 1] + b[1, 1])
             @test s.D_x[3, 1] ≈ D_full[3, 1] * (0.25 * b[2, 1] + b[3, 1]) / (b[2, 1] + b[3, 1])
             @test s.D_x[4, 1] == D_full[4, 1] # (3, 1) is clamped to its gap b
@@ -116,19 +116,19 @@
             s = State(grid)
             s.b .= [0.01 + 0.002 * i + 0.001 * j for i in 1:nx, j in 1:ny]
             s.q_x .= -1e-5; s.dhdx .= 0.1
-            Shakti.sync_water!(s); compute_D!(s, p, mt_pot_only, wd)
+            copyto!(s.W, s.b); compute_D!(s, p, mt_pot_only, wd)
             @test all(>(0), Array(s.D_y)[:, 2:end-1])
             s_uni = State(grid); s_uni.b .= 0.02; s_uni.q_x .= -1e-5; s_uni.dhdx .= 0.1
-            Shakti.sync_water!(s_uni); compute_D!(s_uni, p, mt_pot_only, wd)
+            copyto!(s_uni.W, s_uni.b); compute_D!(s_uni, p, mt_pot_only, wd)
             @test Array(s_uni.D_y)[2:3, 2:3] ≈ Array(s_uni.D_x)[2:3, 2:3]
             r = State(grid)
             r.b .= permutedims(Array(s.b)); r.q_y .= permutedims(Array(s.q_x)); r.dhdy .= permutedims(Array(s.dhdx))
-            Shakti.sync_water!(r); compute_D!(r, p, mt_pot_only, wd)
+            copyto!(r.W, r.b); compute_D!(r, p, mt_pot_only, wd)
             @test Array(r.D_y) ≈ permutedims(Array(s.D_x))
             @test Array(r.D_x) ≈ permutedims(Array(s.D_y))
             # only faces between two GROUNDED cells carry D
             s.mask[2, 2] = OTHER_BASIN
-            Shakti.sync_water!(s); compute_D!(s, p, mt_pot_only, wd)
+            copyto!(s.W, s.b); compute_D!(s, p, mt_pot_only, wd)
             @test s.D_x[2, 2] == 0 && s.D_x[3, 2] == 0 && s.D_y[2, 2] == 0 && s.D_y[2, 3] == 0
         end
 
@@ -493,8 +493,8 @@
         step!(chol); step!(lu_)
         @test Shakti.picard_status(lu_.hs)[1]
         @test maximum(abs, Array(lu_.state.b) .- Array(chol.state.b)) <= 1e-8 * maximum(Array(chol.state.b))
-        # Unfilled cavities and uplift: the budget keeps the mismatch in b_empty, but where it would leave a cell less than
-        # no water the floor W >= 0 of update_b_empty_budget! creates it (the explicit coupling: 1.2 % of the melt in step 2)
+        # Unfilled cavities and uplift: the budget keeps the mismatch in W, but where it would leave a cell less than
+        # no water the floor W >= 0 of update_water_budget! creates it (the explicit coupling: 1.2 % of the melt in step 2)
         function worst_created(sim)
             worst = 0.0
             for _ in 1:3

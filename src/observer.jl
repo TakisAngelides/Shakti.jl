@@ -121,9 +121,14 @@ $(TYPEDSIGNATURES)
 Resolves a tracked observable's name (as given by the user in `tracked_obs`) to the actual
 `State` field, e.g. `get_observable(state, "h") -> state.h`. Validity of `name` (i.e. that it's
 really a `State` field) is checked once, at `Simulation`-construction time (see `simulation.jl`),
-not on every call here.
+not on every call here. Besides the fields, the derived `"b_empty"` (the empty part of the gap, [`empty_gap`](@ref))
+and `"b_uplift"` (the water above it, [`water_above_gap`](@ref)), computed from `b` and `W` on each call.
 """
-get_observable(state::State, name::String) = getfield(state, Symbol(name))
+get_observable(state::State, name::String) = name == "b_empty" ? empty_gap(state) :
+                                             name == "b_uplift" ? water_above_gap(state) : getfield(state, Symbol(name))
+
+# Names get_observable accepts that are not State fields.
+const DERIVED_OBSERVABLES = ("b_empty", "b_uplift")
 
 # =============================================================================
 # Observer setup, called once before the time loop

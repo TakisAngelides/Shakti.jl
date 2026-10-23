@@ -250,28 +250,28 @@
             @test all(mdot[gr] .>= mmin[gr] .- 1e-18)
             @test any(isapprox.(mdot[gr], mmin[gr]; rtol = 1e-10))      # the limit binds somewhere
             @test any(isapprox.(b[gr], sim.p.b_min; rtol = 1e-8))       # and those cells sit at the floor
-            @test all(iszero, Array(s.b_dry))                             # the floor stays full under ExplicitGapCoupling
+            @test Array(s.W) == Array(s.b)                               # the floor stays full under ExplicitGapCoupling
         end
 
         @testset "dry floor: ConsistentGapCoupling under FilledCavities stores the same water as the gap update" begin
             # The freezing patch above with ConsistentGapCoupling: the gap reaches b_min and the water below it drains
-            # (b_dry > 0). With the floor held full of water the head rows were flat there, and Picard failed from step 14.
+            # (W < b). With the floor held full of water the head rows were flat there, and Picard failed from step 14.
             sim = fresh_sim(; tsteps = 30, gap_coupling = ConsistentGapCoupling())
             @test Shakti.dry_floor(sim)
             s, p = sim.state, sim.p
             s.q_T .= 50.0
             gr = Array(s.mask) .== GROUNDED
             for _ in 1:30
-                W_old = Array(s.b) .- Array(s.b_dry)
+                W_old = Array(s.W)
                 step!(sim)
                 @test first(Shakti.picard_status(sim.hs))
                 qx, qy = Array(s.q_x), Array(s.q_y)
                 div = [(qx[i+1, j] - qx[i, j]) / grid.dx + (qy[i, j+1] - qy[i, j]) / grid.dy for i in 1:nx, j in 1:ny]
-                res = ((Array(s.b) .- Array(s.b_dry)) .- W_old) ./ sim.dt[] .+ div .- Array(s.mdot) ./ p.rho_w .- Array(s.ieb)
+                res = (Array(s.W) .- W_old) ./ sim.dt[] .+ div .- Array(s.mdot) ./ p.rho_w .- Array(s.ieb)
                 scale = maximum(abs, Array(s.mdot)[gr] ./ p.rho_w .+ Array(s.ieb)[gr]) + maximum(Array(s.beta)[gr] .* Array(s.abs_ub)[gr])
-                @test maximum(abs, res[gr]) < 1e-5 * scale # per-cell water budget, W = b - b_dry
+                @test maximum(abs, res[gr]) < 1e-5 * scale # per-cell water budget
             end
-            b, bd, md, mm = Array(s.b), Array(s.b_dry), Array(s.mdot), Array(s.mdot_min)
+            b, bd, md, mm = Array(s.b), Array(empty_gap(s)), Array(s.mdot), Array(s.mdot_min)
             @test all(b[gr] .>= p.b_min * (1 - 1e-12))
             @test all(0 .<= bd .<= b)
             @test any(bd[gr] .> 0)                                        # some floor really is dry

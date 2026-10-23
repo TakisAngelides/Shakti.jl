@@ -122,6 +122,16 @@
             end
         end
 
+        @testset "derived observables b_empty and b_uplift" begin
+            s = State(grid)
+            s.b .= 0.01; s.W .= 0.01; s.W[1, 1] = 0.004; s.W[2, 1] = 0.015
+            @test get_observable(s, "b_empty")[1, 1] ≈ 0.006 && count(!iszero, get_observable(s, "b_empty")) == 1
+            @test get_observable(s, "b_uplift")[2, 1] ≈ 0.005 && count(!iszero, get_observable(s, "b_uplift")) == 1
+            observer = LiveObserver(["b_empty", "W"], [0])
+            prepare!(observer, s); observe!(observer, s, 0, 0.0)
+            @test observer.history["b_empty"][:, :, 1] == Array(empty_gap(s))
+        end
+
         @testset "NoObserver" begin
             observer = NoObserver()
             @test prepare!(observer, state) === nothing

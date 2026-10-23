@@ -16,7 +16,7 @@
         G      = fill(0.06, nx, ny)
         taub_x = zeros(nx + 1, ny)
         taub_y = zeros(nx, ny + 1)
-        # The face conductances use the water depth at the start of the step (b + b_uplift), so dt must resolve
+        # The face conductances use the water depth at the start of the step (the water W), so dt must resolve
         # how fast an uplift layer drains: at dt = 3 h the moulin cell's 0.7 m layer (K up 1e8-fold) empties
         # within the step and Picard cycles; at 30 min it converges and the budget closes to round-off.
         dt     = 1800.0
@@ -41,10 +41,10 @@
             s, p = sim.state, sim.p
             qx, qy = Array(s.q_x), Array(s.q_y)
             div = [(qx[i+1, j] - qx[i, j]) / grid.dx + (qy[i, j+1] - qy[i, j]) / grid.dy for i in 1:nx, j in 1:ny]
-            dW = ((Array(s.b) .- Array(s.b_empty) .+ Array(s.b_uplift)) .- W_old) ./ dt
+            dW = (Array(s.W) .- W_old) ./ dt
             return dW .+ div .- (Array(s.mdot) ./ p.rho_w .+ Array(s.ieb))
         end
-        water(s) = Array(s.b) .- Array(s.b_empty) .+ Array(s.b_uplift)
+        water(s) = Array(s.W)
 
         @testset "legacy: the moulin drives pw above the overburden" begin
             sim = make_sim()
@@ -53,7 +53,7 @@
             @test maximum((Array(sim.state.pw) .- Array(sim.state.po))[g]) > 0
             @test sim.up isa NoUplift
             @test sim.hp isa SheetTopPotential && make_sim(; up = IceUplift()).hp isa SheetTopPotential # the default potential
-            @test all(iszero, Array(sim.state.b_uplift)) && all(iszero, Array(sim.state.stor_up))
+            @test all(iszero, Array(water_above_gap(sim.state))) && all(iszero, Array(sim.state.stor_up))
         end
 
         @testset "opening by sliding stops where the ice floats above the bumps" begin
@@ -70,7 +70,7 @@
             compute_beta!(s, p, Shakti.WithOpenBySliding())
             bump, beta = Array(s.bump), Array(s.beta)
             @test bump[3, 3] ≈ 0.5 * p.br && bump[4, 3] == 0 && bump[2, 2] == p.br
-            @test beta[3, 3] ≈ max(0, (0.5 * p.br - b[3, 3]) / p.lr) # the ice base is at b + b_uplift
+            @test beta[3, 3] ≈ max(0, (0.5 * p.br - b[3, 3]) / p.lr) # the ice base is at the uplift layer W - b
             @test beta[4, 3] == 0                                     # floating above every bump: no opening
             @test beta[2, 2] ≈ (p.br - b[2, 2]) / p.lr
             # the fully implicit gap the head rows assume (cell_gap) has no sliding opening either: at N = 0 with no melt
@@ -96,15 +96,15 @@
                     @test minimum(Array(s.N)[g]) >= -1e-9 * maximum(Array(s.po))
                     up = g .& (Array(s.h) .> h_o(s, p))
                     @test any(up) # the moulin cell really lifts the ice
-                    @test all(Array(s.b_uplift)[up] .> 0)
-                    @test all(iszero, Array(s.b_uplift)[g .& .!up])
+                    @test all(Array(water_above_gap(s))[up] .> 0)
+                    @test all(Array(water_above_gap(s))[g .& .!up] .<= 1e-9 * maximum(Array(s.W))) # round-off of the budget only
                     res = budget_residual(sim, W_old)
                     scale = maximum(abs, Array(s.mdot) ./ p.rho_w .+ Array(s.ieb))
                     @test maximum(abs, res[g]) < 1e-6 * scale
                 end
-                # head-based layer: b_uplift = h - h_o where lifted (Filled; Unfilled takes it from the budget, equal at convergence)
+                # head-based layer: W - b = h - h_o where lifted (Filled; Unfilled takes it from the budget, equal at convergence)
                 g = grounded(s); up = g .& (Array(s.h) .> h_o(s, p))
-                @test Array(s.b_uplift)[up] ≈ (Array(s.h) .- h_o(s, p))[up] rtol = 1e-6
+                @test Array(water_above_gap(s))[up] ≈ (Array(s.h) .- h_o(s, p))[up] rtol = 1e-6
             end
         end
 
@@ -131,7 +131,7 @@
             step!(sim)
             @test s.pw[3, 3] ≈ s.po[3, 3]
             @test s.N[3, 3] ≈ 0 atol = 1e-6
-            @test s.b_uplift[3, 3] > 0
+            @test water_above_gap(s)[3, 3] > 0
             res = budget_residual(sim, W_old)
             @test abs(res[3, 3]) < 1e-9 * abs(Array(s.ieb)[3, 3])
         end
@@ -146,7 +146,7 @@
             g = grounded(s)
             @test first(Shakti.picard_status(sim.hs))
             @test maximum((Array(s.pw) .- Array(s.po))[g]) <= 1e-9 * maximum(Array(s.po))
-            @test any(Array(s.b_uplift)[g] .> 0)
+            @test any(Array(water_above_gap(s))[g] .> 0)
         end
 
     end

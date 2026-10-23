@@ -169,7 +169,7 @@ end
 # the diffusion (diffusion_source, linear_solver.jl). Each cell's D is recomputed by both faces that read it,
 # which is cheaper than a cell-sized scratch field for a stencil this small.
 # Filled part of the gap, the water W kept within [0, b]: a filled cell may hold more water than its gap (the uplift
-# layer, or the water the budget keeps above the gap, update_b_empty_budget!), and the wall the water touches is at most b.
+# layer, or the water the budget keeps above the gap, update_water_budget!), and the wall the water touches is at most b.
 @inline wet_gap(b, W) = clamp(W, zero(b), b)
 
 @inline function cell_D(mask, b, W, q_x, q_y, dhdx, dhdy, dpwdx, dpwdy, scale, rho_w, ggrav, ct, cw, ix, iy,

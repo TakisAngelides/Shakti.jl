@@ -155,10 +155,8 @@ $(TYPEDSIGNATURES)
 Advances `sim` by one timestep: recomputes `sim.dt[]` if `sim.ts` is adaptive
 (`update_dt!`), refreshes the melt input ([`update_ieb!`](@ref)), brings the head solve's
 inputs up to date and sets its initial guess (`prepare_head_solve!`), solves for the new
-head ([`step_h!`](@ref)), records it for the next step's extrapolation (`sim.he`), sets the uplift layer from
-the solved head ([`update_b_uplift!`](@ref), [`IceUplift`](@ref)) and, under the parabolic scheme, the empty part of
-the gap too ([`update_b_empty!`](@ref), [`UnfilledCavities`](@ref)), evolves the gap height and the water `W` ([`step_b!`](@ref),
-which under the elliptic scheme then takes both from the water budget) and checks the gap (`check_gap_height`).
+head ([`step_h!`](@ref)), records it for the next step's extrapolation (`sim.he`), evolves the gap height and the
+water `W` ([`step_b!`](@ref)) and checks the gap (`check_gap_height`).
 """
 function step!(sim::Simulation)
     compute_abs_ub!(sim.state) # a coupler may have set new ub_x/ub_y: opening by sliding, the freeze-on cap and update_dt! read |u_b|
@@ -168,21 +166,23 @@ function step!(sim::Simulation)
     step_h!(sim.hs, sim)
     store_start_of_step_melt!(sim.kfs, sim.state) # ImplicitUpwind: the converged melt, the next step's start-of-step melt (unfilled_cavities.jl); taken here so that a refresh_state! between steps cannot replace it
     record_head!(sim.he, sim.state, sim.dt[], first(picard_status(sim.hs)))
-    sim.hs isa ParabolicHeadScheme && update_b_empty!(sim.state, sim.cf) # from the solved head, before step_b! evolves b (the elliptic scheme takes it from the water budget, step_b!)
-    update_b_uplift!(sim.state, sim.p, sim.up) # IceUplift: the uplift layer from the solved head (no-op under NoUplift); under the elliptic scheme the budget overwrites it on uplifted cells only, so this also zeroes the others
     step_b!(sim)
     check_gap_height(sim)
 end
 
-# The water W (GAP-5) is evolved from the budget under the elliptic scheme with UnfilledCavities, whose b_empty and b_uplift
-# come from the same budget (update_b_empty_budget!). Elsewhere it is the water the head row stores, the gap less the dry
-# floor plus the head's uplift layer: under ConsistentGapCoupling that closes the budget to the Picard tolerance (1e-7 to
+# The water W (GAP-5) is evolved from the budget under the elliptic scheme with UnfilledCavities (update_water_budget!).
+# Elsewhere it is the water the head row stores: the gap scheme's water under the dry floor (compute_b_dry_floor!, set
+# with the gap), otherwise the gap less the empty depth below the bed plus the uplift layer above the overburden head
+# (water_from_head!). Under ConsistentGapCoupling that closes the budget to the Picard tolerance (1e-7 to
 # 1e-6 of W on a moulin fixture) once the step converges, and stays bounded where it does not (the budget's W then holds
 # the water the unconverged fluxes create: 0.8 m from a 0.03 m moulin input in one step of a stuck filled sheet); under
 # ExplicitGapCoupling it does not close (2 % of W on that fixture); the parabolic scheme's storage terms are not in the budget.
 water_is_budgeted(sim::Simulation) = sim.hs isa EllipticHeadScheme && sim.cf isa UnfilledCavities
-update_water!(sim::Simulation) =
-    water_is_budgeted(sim) ? update_water_budget!(sim.state, sim.grid, sim.p, sim.dt[]) : sync_water!(sim.state)
+function update_water!(sim::Simulation)
+    water_is_budgeted(sim) && return update_water_budget!(sim.state, sim.grid, sim.p, sim.dt[])
+    dry_floor(sim) && return sim.state # compute_b! set it
+    return water_from_head!(sim.state, sim.p, sim.cf, sim.up)
+end
 
 # A runaway gap: water above the overburden (N < 0) makes creep open the gap, and the implicit and fully implicit gap
 # schemes grow it as exp(|C| dt) at the step's N, which the explicit coupling's head rows (linear growth) never see, so N
@@ -250,11 +250,12 @@ function prepare_step_inputs!(sim::Simulation)
     s = sim.state
     compute_H!(s)
     compute_po!(s, sim.p)
-    # The option-owned fields (stor, b_empty, stor_up, b_uplift, b_dry) are read by the kernels whatever the option, so each
-    # 'off' option writes its neutral value: a State that ran under another sheet (spin-up, checkpoint) keeps no hybrid rows.
-    set_uplift_storage!(s, sim.dt[], sim.up) # 1/dt marks cells where the ice may be lifted (zero under NoUplift); before set_cavity_storage!, which reads b_uplift
+    # The option-owned fields (stor, stor_up) are read by the kernels whatever the option, so each 'off' option writes its
+    # neutral value, and the water W is brought within the sheet: a State that ran under another sheet (spin-up,
+    # checkpoint) keeps no hybrid rows.
+    set_uplift_storage!(s, sim.dt[], sim.up) # 1/dt marks cells where the ice may be lifted (zero under NoUplift)
     set_cavity_storage!(s, sim.dt[], sim.cf) # 1/dt marks cells that may be partly empty, read by the head rows and compute_pw!
-    dry_floor(sim) || fill!(s.b_dry, zero(eltype(s.b_dry)))
+    constrain_water!(s, sim.p, sim.cf, sim.up, dry_floor(sim)) # a no-op on the water the sheet's own steps leave
     update_gap_jumps!(s, sim.hp) # SheetTopPotential: gap jumps across faces from the start-of-step b, added to the driving gradient (no-op under BedPotential)
     if sim.p.limit_freeze_on   # freeze-on floor for this step, from the start-of-step gap
         freeze_on_capacity!(s.mdot_min, sim)
@@ -289,8 +290,7 @@ dt = 1 day run to 500 iterations instead of 38.
 function refresh_state!(sim::Simulation)
     sim.total_time[] == 0 && store_start_of_step_melt!(sim.kfs, sim.state) # the first step's start-of-step melt: the setup's, at the start-of-step gap
     compute_abs_ub!(sim.state)
-    prepare_step_inputs!(sim)
-    sync_water!(sim.state) # the water W from the fields as this simulation's options leave them (prepare_step_inputs! zeroes those it does not own)
+    prepare_step_inputs!(sim) # also brings the water W within this simulation's sheet (a setup, a mask change)
     refresh_from_head!(sim)
     return sim
 end
@@ -576,24 +576,27 @@ gap_coupling_terms(sim::Simulation, ::ConsistentGapCoupling, ::WithDiffusion) = 
 $(TYPEDSIGNATURES)
 
 Whether the `b_min` floor is dry: [`ConsistentGapCoupling`](@ref) under [`FilledCavities`](@ref) and [`NoUplift`](@ref).
-The head rows then store the water `W = b - b_dry`, moved by the gap scheme's update with no lower clamp
+The head rows then store the water `W` (`State.W`), moved by the gap scheme's update with no lower clamp
 ([`scheme_water`](@ref)), and [`compute_b!`](@ref) holds the gap at `b_min` with the volume below the water dry
-(`State.b_dry`), so the head equation and the gap update store the same water also where creep closes the gap within a
+(`b - W`), so the head equation and the gap update store the same water also where creep closes the gap within a
 step. The conductances take the water too ([`compute_b_w!`](@ref), `end_of_step_gap`): a dry floor does not conduct.
 Conducting at `K(b_min)` it relayed its neighbours' water at an almost flat head while its row had lost its storage
 slope, which pinned Drang Drung at `b_min` with `p_w ~ -3 po` (b_min = 1e-3); with the conductance from the water, the
 results there do not depend on `b_min`. Under [`UnfilledCavities`](@ref) the floor's volume
-is part of the empty volume `b_empty` instead, and with [`IceUplift`](@ref) the floor stays full. Not under [`WithDiffusion`](@ref),
+is part of the cavity's empty volume instead, and with [`IceUplift`](@ref) the floor stays full. Not under [`WithDiffusion`](@ref),
 whose gap solve clamps at `b_min` ([`solve_b_diffusion!`](@ref)).
 """
 dry_floor(sim::Simulation) = sim.gcp isa ConsistentGapCoupling && sim.cf isa FilledCavities && sim.up isa NoUplift && sim.ds isa NoDiffusion
 
-@parallel_indices (ix, iy) function compute_b_dry_floor_kernel!(b, b_dry, Wo, mask, mdot, beta, abs_ub, A_visc, N, rho_i, n_minus_1, b_min, b_max, gu, bump)
-    if ix <= size(b, 1) && iy <= size(b, 2) && mask[ix, iy] == GROUNDED
-        W = scheme_water(cell_gap(gu, bump[ix, iy]), b[ix, iy], Wo[ix, iy], b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], N[ix, iy], rho_i, n_minus_1)
-        bn = max(W, b_min)
-        b[ix, iy] = bn
-        b_dry[ix, iy] = bn - W
+@parallel_indices (ix, iy) function compute_b_dry_floor_kernel!(b, W, mask, mdot, beta, abs_ub, A_visc, N, rho_i, n_minus_1, b_min, b_max, gu, bump)
+    if ix <= size(b, 1) && iy <= size(b, 2)
+        if mask[ix, iy] == GROUNDED
+            Wn = scheme_water(cell_gap(gu, bump[ix, iy]), b[ix, iy], W[ix, iy], b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], N[ix, iy], rho_i, n_minus_1)
+            b[ix, iy] = max(Wn, b_min)
+            W[ix, iy] = Wn
+        else
+            W[ix, iy] = b[ix, iy]
+        end
     end
     return
 end
@@ -602,28 +605,20 @@ end
 $(TYPEDSIGNATURES)
 
 [`compute_b!`](@ref) under the dry floor (`dry_floor`), for every gap scheme: the water moves by the scheme's own
-update with no lower clamp ([`scheme_water`](@ref) of the water `s.W`, the same function the head rows use), the gap is
-that water held at `b_min`, and `b_dry` the volume below the water.
+update with no lower clamp ([`scheme_water`](@ref) of the water `s.W`, the same function the head rows use) and is
+written to `s.W`, and the gap is that water held at `b_min`, dry below the water. Off `GROUNDED` the water is the gap.
 """
 function compute_b_dry_floor!(sim::Simulation)
     s, p = sim.state, sim.p
-    @parallel compute_b_dry_floor_kernel!(s.b, s.b_dry, s.W, s.mask, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, p.b_min, p.b_max, gap_coupling_terms(sim), s.bump)
+    @parallel compute_b_dry_floor_kernel!(s.b, s.W, s.mask, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, p.b_min, p.b_max, gap_coupling_terms(sim), s.bump)
     return sim
 end
-
-# The empty part of the gap and the uplift layer once the gap is final. Elliptic scheme: from the water budget
-# (update_b_empty_budget!, which also limits b_empty to [-b, b]), so the bump compute_beta! takes next is that of the
-# stored b_uplift. Parabolic scheme: b_empty from the solved head (update_b_empty!, step!), capped at the new gap; its
-# storage terms are not in that budget.
-settle_cavity_water!(sim::Simulation, ::EllipticHeadScheme) = update_b_empty_budget!(sim.state, sim.grid, sim.p, sim.dt[], sim.cf)
-settle_cavity_water!(sim::Simulation, ::ParabolicHeadScheme) = clamp_b_empty!(sim.state, sim.cf)
 
 """
 $(TYPEDSIGNATURES)
 
 Evolves the gap height `sim.state.b` for one timestep ([`compute_b!`](@ref), dispatching
-internally on `sim.ds`/`sim.gs`), sets the empty part of the gap and the uplift layer for it (`settle_cavity_water!`) and
-the water `W` (`update_water!`), then refreshes everything that depends on it (`beta`, `lc`) so it is ready for the
+internally on `sim.ds`/`sim.gs`), sets the water `W` for it (`update_water!`), then refreshes everything that depends on it (`beta`, `lc`) so it is ready for the
 *next* timestep's Picard loop, and the face diagnostics `b_x`/`b_y` (no longer read by the solve; the face conductances
 take the water depth `b_w`, [`compute_face_flux!`](@ref)).
 """
@@ -632,7 +627,6 @@ function step_b!(sim::Simulation)
     s, p = sim.state, sim.p
 
     compute_b!(sim)          # updates b based on the new state variables (GROUNDED cells only)
-    settle_cavity_water!(sim, sim.hs) # b_empty and b_uplift for the new gap (from the water at the start of the step)
     update_water!(sim)       # the water W for the new gap, before compute_beta! reads it
 
     compute_beta!(s, p, sim.oss) # opening-by-sliding parameter depends on the new b
