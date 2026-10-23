@@ -343,3 +343,42 @@
             @test_throws ErrorException run!(sim; restart_path = joinpath(dir, "a.jld2"), extend_path = joinpath(dir, "b.jld2"))
         end
     end
+
+    @testset "Restart at target_time, option signature, new sliding speed" begin
+        sl = RegularizedCoulombSlidingLaw(0.25)
+        function ramp(; target = 2 * 86400.0, kw...)
+            nx, ny = 40, 3
+            grid = Grid(nx, ny, 3.9e3, 200.0)
+            x = Array(grid.x)
+            zb = repeat(80.0 .* (1 .- x ./ x[end]), 1, ny)
+            H  = repeat([400.0 * sqrt(max(0.0, 1 - xi / x[end])) for xi in x], 1, ny)
+            mask = fill(GROUNDED, nx, ny); mask[end, :] .= LAND
+            p = ModelParameters(; br = 0.1, lr = 2.0, b_min = 1e-6, e_v = 0.0, limit_freeze_on = false)
+            state = State(grid)
+            set_initial_conditions!(state, grid, p, sl, mask, fill(5e-25, nx, ny), zb, zb .+ H, fill(0.005, nx, ny), zeros(nx, ny),
+                                    fill(30.0 / (365 * 86400), nx + 1, ny), zeros(nx, ny + 1), fill(5.0 / 1000 / 86400, nx, ny), zeros(nx + 1, ny), zeros(nx, ny + 1))
+            ts = AdaptiveTimeStep(grid, state; safety_factor = 0.3, dt_min = 3600.0, dt_max = 6 * 3600.0, target_time = target)
+            return Simulation(grid, state, ceil(Int, target / 3600.0), floattype(3600.0), p, "fully_implicit", String[], ConstantMeltInput(), sl;
+                              ps = PicardSolver(300, floattype(1e-9), LUDirectSolver(grid), grid), timestep_scheme = ts, kw...)
+        end
+        mktempdir() do dir
+            ck = joinpath(dir, "ck.jld2")
+            a = ramp()
+            run!(a; checkpoint_every = 5, checkpoint_path = ck)
+            @test a.total_time[] >= a.ts.target_time
+            # a requeued job restarting from a checkpoint already at the target: no step with dt = 0 (was a SingularException)
+            b = ramp()
+            run!(b; restart_path = ck, checkpoint_every = 5, checkpoint_path = ck)
+            @test b.total_time[] == a.total_time[]
+            @test Array(b.state.h) == Array(a.state.h)
+            # a checkpoint written under other options loads with a warning
+            c = ramp(; cavity_filling = FilledCavities(), uplift = NoUplift(), k_face_choice = "arithmetic", gap_coupling = ExplicitGapCoupling())
+            @test_logs (:warn, r"other options") match_mode = :any Shakti.load_checkpoint!(c, ck)
+        end
+        # a coupler's new sliding speed reaches |u_b| at the next step (opening by sliding, freeze-on cap, adaptive dt)
+        sim = ramp()
+        step!(sim)
+        sim.state.ub_x .*= 2
+        step!(sim)
+        @test Array(sim.state.abs_ub)[5, 2] ≈ 2 * 30.0 / (365 * 86400)
+    end

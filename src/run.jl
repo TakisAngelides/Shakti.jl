@@ -78,6 +78,13 @@ function run!(sim::Simulation; checkpoint_every::Union{Nothing, Int} = nothing, 
 
     for t in (start_t + 1):sim.tsteps
 
+        # AdaptiveTimeStep's target_time-based stop: sim.tsteps is still a real, finite upper
+        # bound (sized from dt_min, see AdaptiveTimeStep's docstring), this is just the ordinary
+        # "reached the target early" exit. target_time(::FixedTimeStep) is `nothing`, so this is a
+        # no-op under the default scheme. Checked before the step, so a restart from a checkpoint
+        # already at the target (a requeued job) takes no step with dt = 0 (a singular head matrix).
+        (tt = target_time(sim.ts)) !== nothing && sim.total_time[] >= tt && break
+
         step_time = @elapsed step!(sim)
 
         sim.total_time[] += sim.dt[]
@@ -114,12 +121,6 @@ function run!(sim::Simulation; checkpoint_every::Union{Nothing, Int} = nothing, 
             end
             flush(stdout) # println alone doesn't reach the log file promptly under sbatch: stdout is fully block-buffered (not line-buffered) once it's redirected to a file rather than a terminal
         end
-
-        # AdaptiveTimeStep's target_time-based stop: sim.tsteps is still a real, finite upper
-        # bound (sized from dt_min, see AdaptiveTimeStep's docstring), this is just the ordinary
-        # "reached the target early" exit. target_time(::FixedTimeStep) is `nothing`, so this is a
-        # no-op under the default scheme.
-        (tt = target_time(sim.ts)) !== nothing && sim.total_time[] >= tt && break
 
     end
 
@@ -161,6 +162,7 @@ head ([`step_h!`](@ref)), records it for the next step's extrapolation (`sim.he`
 ([`update_b_empty_budget!`](@ref)).
 """
 function step!(sim::Simulation)
+    compute_abs_ub!(sim.state) # a coupler may have set new ub_x/ub_y: opening by sliding, the freeze-on cap and update_dt! read |u_b|
     update_dt!(sim) # no-op under FixedTimeStep; must run before step_h!/step_b! since both read sim.dt[]
     update_ieb!(sim.mi, sim.state, sim.total_time[]) # writes Shakti's own input (state.ieb_own) for e.g. SeasonalMeltInput, then state.ieb = ieb_own + ieb_external -- done once per timestep, before step_h!, since ieb only feeds the head equation (step_b! never reads it)
     prepare_head_solve!(sim)
@@ -229,6 +231,7 @@ function prepare_head_solve!(sim::Simulation)
     s = sim.state
     prepare_step_inputs!(sim)
     extrapolate_head!(sim.he, s, sim.dt[])
+    fill!(s.dh_it, 0) # the oscillation damping of the guess limiter must not see the previous step's last head step (14 % fewer iterations at 6 h steps)
     limit_head_guess!(sim.kfs, sim.he, s, sim.p) # ImplicitUpwind: the extrapolated head obeys the regime and step limits of the iteration
     refresh_from_head!(sim)
     return sim
@@ -277,6 +280,7 @@ dt = 1 day run to 500 iterations instead of 38.
 """
 function refresh_state!(sim::Simulation)
     sim.total_time[] == 0 && store_start_of_step_melt!(sim.kfs, sim.state) # the first step's start-of-step melt: the setup's, at the start-of-step gap
+    compute_abs_ub!(sim.state)
     prepare_step_inputs!(sim)
     refresh_from_head!(sim)
     return sim
