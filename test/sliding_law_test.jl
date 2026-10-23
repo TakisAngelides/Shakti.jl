@@ -79,4 +79,25 @@
             @test all(isfinite, Array(state.N))
         end
 
+        @testset "N < 0: no shear, no frictional heat" begin
+            # A face with water above overburden carries no basal shear under any law; before, the stress pointed along
+            # the sliding direction with size C|N| and the frictional heat (abs) counted it as melt.
+            ux = fill(1e-6, nx + 1, ny); uy = fill(5e-7, nx, ny + 1)
+            laws = (RegularizedCoulombSlidingLaw(0.25), RegularizedCoulombFieldSlidingLaw(grid, 0.25),
+                    RegularizedCoulombV0SlidingLaw(grid, 0.25, 1e-5), LinearSlidingLaw(grid, 0.25))
+            for sl in laws
+                s = State(grid)
+                set_initial_conditions!(s, grid, p, sl, mask, A_visc, zb, zs, b, G, ux, uy, ieb, taub_x, taub_y)
+                N0 = Array(s.N)
+                @test all(>(0), N0[mask .== GROUNDED])
+                s.N[2:4, 2:4] .= -1e5                   # a patch above overburden
+                compute_taub_xy!(s, p, sl)
+                @test s.taub_x[3, 3] == 0 && s.taub_x[4, 3] == 0 && s.taub_y[3, 3] == 0 && s.taub_y[3, 4] == 0
+                compute_shear!(s)
+                @test s.Q_b[3, 3] == 0
+                @test s.Q_b[5, 5] > 0                   # outside the patch: unchanged
+                @test all(>=(0), Array(s.taub_x) .* Array(s.ub_x)) && all(>=(0), Array(s.taub_y) .* Array(s.ub_y))
+            end
+        end
+
     end

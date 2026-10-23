@@ -160,6 +160,12 @@ end
     return ga == gb ? (F[ix, iy] + F[ix, iy-1]) / 2 : (ga ? F[ix, iy] : F[ix, iy-1])
 end
 
+# The bed carries shear only while the ice presses on it: every law here is linear in the face N, so a face with
+# N < 0 (water above overburden, routine around moulins in the filled sheet) would get a stress along the sliding
+# direction of size C|N|, which the frictional heat then counted as melt. The laws take max(N, 0), as ISSM's Budd and
+# Schoof laws do.
+@inline bed_N(N) = max(N, zero(N))
+
 # taub_x/taub_y regularize on the *joint* sliding speed abs_ub = ‖v_b‖ (not
 # the signed component ub_x/ub_y), then restore direction by projecting onto
 # ub_x/abs_v (ub_y/abs_v) -- see Kazmierczak et al. 2024 Eq. 1 (Joughin et
@@ -186,15 +192,15 @@ end
     nx1 = size(taub_x, 1) # nx + 1
     if ix <= nx1 && iy <= size(taub_x, 2)
         if ix == 1
-            Nf = N[1, iy]
+            Nf = bed_N(N[1, iy])
             abs_v = abs_ub[1, iy]
             taub_x[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[1, iy]), inv_n) * (ub_x[1, iy] / abs_v) : zero(Nf)
         elseif ix == nx1
-            Nf = N[nx1-1, iy]
+            Nf = bed_N(N[nx1-1, iy])
             abs_v = abs_ub[nx1-1, iy]
             taub_x[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[nx1-1, iy]), inv_n) * (ub_x[nx1, iy] / abs_v) : zero(Nf)
         else
-            Nf = face_x(N, mask, ix, iy)
+            Nf = bed_N(face_x(N, mask, ix, iy))
             lf = face_x(lambda, mask, ix, iy)
             abs_v = face_x(abs_ub, mask, ix, iy)
             taub_x[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lf), inv_n) * (ub_x[ix, iy] / abs_v) : zero(Nf)
@@ -213,15 +219,15 @@ compute_taub_x!(s::State, p::ModelParameters, sl::RegularizedCoulombSlidingLaw) 
     ny1 = size(taub_y, 2) # ny + 1
     if ix <= size(taub_y, 1) && iy <= ny1
         if iy == 1
-            Nf = N[ix, 1]
+            Nf = bed_N(N[ix, 1])
             abs_v = abs_ub[ix, 1]
             taub_y[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[ix, 1]), inv_n) * (ub_y[ix, 1] / abs_v) : zero(Nf)
         elseif iy == ny1
-            Nf = N[ix, ny1-1]
+            Nf = bed_N(N[ix, ny1-1])
             abs_v = abs_ub[ix, ny1-1]
             taub_y[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[ix, ny1-1]), inv_n) * (ub_y[ix, ny1] / abs_v) : zero(Nf)
         else
-            Nf = face_y(N, mask, ix, iy)
+            Nf = bed_N(face_y(N, mask, ix, iy))
             lf = face_y(lambda, mask, ix, iy)
             abs_v = face_y(abs_ub, mask, ix, iy)
             taub_y[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lf), inv_n) * (ub_y[ix, iy] / abs_v) : zero(Nf)
@@ -244,15 +250,15 @@ compute_taub_y!(s::State, p::ModelParameters, sl::RegularizedCoulombSlidingLaw) 
     nx1 = size(taub_x, 1) # nx + 1
     if ix <= nx1 && iy <= size(taub_x, 2)
         if ix == 1
-            Nf = N[1, iy]
+            Nf = bed_N(N[1, iy])
             abs_v = abs_ub[1, iy]
             taub_x[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[1, iy]), inv_n) * (ub_x[1, iy] / abs_v) : zero(Nf)
         elseif ix == nx1
-            Nf = N[nx1-1, iy]
+            Nf = bed_N(N[nx1-1, iy])
             abs_v = abs_ub[nx1-1, iy]
             taub_x[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[nx1-1, iy]), inv_n) * (ub_x[nx1, iy] / abs_v) : zero(Nf)
         else
-            Nf = face_x(N, mask, ix, iy)
+            Nf = bed_N(face_x(N, mask, ix, iy))
             lf = face_x(lambda, mask, ix, iy)
             abs_v = face_x(abs_ub, mask, ix, iy)
             taub_x[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lf), inv_n) * (ub_x[ix, iy] / abs_v) : zero(Nf)
@@ -261,15 +267,15 @@ compute_taub_y!(s::State, p::ModelParameters, sl::RegularizedCoulombSlidingLaw) 
     ny1 = size(taub_y, 2) # ny + 1
     if ix <= size(taub_y, 1) && iy <= ny1
         if iy == 1
-            Nf = N[ix, 1]
+            Nf = bed_N(N[ix, 1])
             abs_v = abs_ub[ix, 1]
             taub_y[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[ix, 1]), inv_n) * (ub_y[ix, 1] / abs_v) : zero(Nf)
         elseif iy == ny1
-            Nf = N[ix, ny1-1]
+            Nf = bed_N(N[ix, ny1-1])
             abs_v = abs_ub[ix, ny1-1]
             taub_y[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[ix, ny1-1]), inv_n) * (ub_y[ix, ny1] / abs_v) : zero(Nf)
         else
-            Nf = face_y(N, mask, ix, iy)
+            Nf = bed_N(face_y(N, mask, ix, iy))
             lf = face_y(lambda, mask, ix, iy)
             abs_v = face_y(abs_ub, mask, ix, iy)
             taub_y[ix, iy] = abs_v > 0 ? Nf * C * pow(abs_v / (abs_v + pow(abs(Nf), n) * lf), inv_n) * (ub_y[ix, iy] / abs_v) : zero(Nf)
@@ -322,15 +328,15 @@ initialize_taub!(::RegularizedCoulombFieldSlidingLaw, state::State, taub_x::Abst
     nx1 = size(taub_x, 1) # nx + 1
     if ix <= nx1 && iy <= size(taub_x, 2)
         if ix == 1
-            Nf = N[1, iy]
+            Nf = bed_N(N[1, iy])
             abs_v = abs_ub[1, iy]
             taub_x[ix, iy] = abs_v > 0 ? Nf * Cx[ix, iy] * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[1, iy]), inv_n) * (ub_x[1, iy] / abs_v) : zero(Nf)
         elseif ix == nx1
-            Nf = N[nx1-1, iy]
+            Nf = bed_N(N[nx1-1, iy])
             abs_v = abs_ub[nx1-1, iy]
             taub_x[ix, iy] = abs_v > 0 ? Nf * Cx[ix, iy] * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[nx1-1, iy]), inv_n) * (ub_x[nx1, iy] / abs_v) : zero(Nf)
         else
-            Nf = face_x(N, mask, ix, iy)
+            Nf = bed_N(face_x(N, mask, ix, iy))
             lf = face_x(lambda, mask, ix, iy)
             abs_v = face_x(abs_ub, mask, ix, iy)
             taub_x[ix, iy] = abs_v > 0 ? Nf * Cx[ix, iy] * pow(abs_v / (abs_v + pow(abs(Nf), n) * lf), inv_n) * (ub_x[ix, iy] / abs_v) : zero(Nf)
@@ -349,15 +355,15 @@ compute_taub_x!(s::State, p::ModelParameters, sl::RegularizedCoulombFieldSliding
     ny1 = size(taub_y, 2) # ny + 1
     if ix <= size(taub_y, 1) && iy <= ny1
         if iy == 1
-            Nf = N[ix, 1]
+            Nf = bed_N(N[ix, 1])
             abs_v = abs_ub[ix, 1]
             taub_y[ix, iy] = abs_v > 0 ? Nf * Cy[ix, iy] * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[ix, 1]), inv_n) * (ub_y[ix, 1] / abs_v) : zero(Nf)
         elseif iy == ny1
-            Nf = N[ix, ny1-1]
+            Nf = bed_N(N[ix, ny1-1])
             abs_v = abs_ub[ix, ny1-1]
             taub_y[ix, iy] = abs_v > 0 ? Nf * Cy[ix, iy] * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[ix, ny1-1]), inv_n) * (ub_y[ix, ny1] / abs_v) : zero(Nf)
         else
-            Nf = face_y(N, mask, ix, iy)
+            Nf = bed_N(face_y(N, mask, ix, iy))
             lf = face_y(lambda, mask, ix, iy)
             abs_v = face_y(abs_ub, mask, ix, iy)
             taub_y[ix, iy] = abs_v > 0 ? Nf * Cy[ix, iy] * pow(abs_v / (abs_v + pow(abs(Nf), n) * lf), inv_n) * (ub_y[ix, iy] / abs_v) : zero(Nf)
@@ -377,15 +383,15 @@ compute_taub_y!(s::State, p::ModelParameters, sl::RegularizedCoulombFieldSliding
     nx1 = size(taub_x, 1) # nx + 1
     if ix <= nx1 && iy <= size(taub_x, 2)
         if ix == 1
-            Nf = N[1, iy]
+            Nf = bed_N(N[1, iy])
             abs_v = abs_ub[1, iy]
             taub_x[ix, iy] = abs_v > 0 ? Nf * Cx[ix, iy] * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[1, iy]), inv_n) * (ub_x[1, iy] / abs_v) : zero(Nf)
         elseif ix == nx1
-            Nf = N[nx1-1, iy]
+            Nf = bed_N(N[nx1-1, iy])
             abs_v = abs_ub[nx1-1, iy]
             taub_x[ix, iy] = abs_v > 0 ? Nf * Cx[ix, iy] * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[nx1-1, iy]), inv_n) * (ub_x[nx1, iy] / abs_v) : zero(Nf)
         else
-            Nf = face_x(N, mask, ix, iy)
+            Nf = bed_N(face_x(N, mask, ix, iy))
             lf = face_x(lambda, mask, ix, iy)
             abs_v = face_x(abs_ub, mask, ix, iy)
             taub_x[ix, iy] = abs_v > 0 ? Nf * Cx[ix, iy] * pow(abs_v / (abs_v + pow(abs(Nf), n) * lf), inv_n) * (ub_x[ix, iy] / abs_v) : zero(Nf)
@@ -394,15 +400,15 @@ compute_taub_y!(s::State, p::ModelParameters, sl::RegularizedCoulombFieldSliding
     ny1 = size(taub_y, 2) # ny + 1
     if ix <= size(taub_y, 1) && iy <= ny1
         if iy == 1
-            Nf = N[ix, 1]
+            Nf = bed_N(N[ix, 1])
             abs_v = abs_ub[ix, 1]
             taub_y[ix, iy] = abs_v > 0 ? Nf * Cy[ix, iy] * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[ix, 1]), inv_n) * (ub_y[ix, 1] / abs_v) : zero(Nf)
         elseif iy == ny1
-            Nf = N[ix, ny1-1]
+            Nf = bed_N(N[ix, ny1-1])
             abs_v = abs_ub[ix, ny1-1]
             taub_y[ix, iy] = abs_v > 0 ? Nf * Cy[ix, iy] * pow(abs_v / (abs_v + pow(abs(Nf), n) * lambda[ix, ny1-1]), inv_n) * (ub_y[ix, ny1] / abs_v) : zero(Nf)
         else
-            Nf = face_y(N, mask, ix, iy)
+            Nf = bed_N(face_y(N, mask, ix, iy))
             lf = face_y(lambda, mask, ix, iy)
             abs_v = face_y(abs_ub, mask, ix, iy)
             taub_y[ix, iy] = abs_v > 0 ? Nf * Cy[ix, iy] * pow(abs_v / (abs_v + pow(abs(Nf), n) * lf), inv_n) * (ub_y[ix, iy] / abs_v) : zero(Nf)
@@ -461,15 +467,15 @@ initialize_taub!(::RegularizedCoulombV0SlidingLaw, state::State, taub_x::Abstrac
     nx1 = size(taub_x, 1) # nx + 1
     if ix <= nx1 && iy <= size(taub_x, 2)
         if ix == 1
-            Nf = N[1, iy]
+            Nf = bed_N(N[1, iy])
             abs_v = abs_ub[1, iy]
             taub_x[ix, iy] = abs_v > 0 ? Nf * Cx[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_x[1, iy] / abs_v) : zero(Nf)
         elseif ix == nx1
-            Nf = N[nx1-1, iy]
+            Nf = bed_N(N[nx1-1, iy])
             abs_v = abs_ub[nx1-1, iy]
             taub_x[ix, iy] = abs_v > 0 ? Nf * Cx[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_x[nx1, iy] / abs_v) : zero(Nf)
         else
-            Nf = face_x(N, mask, ix, iy)
+            Nf = bed_N(face_x(N, mask, ix, iy))
             abs_v = face_x(abs_ub, mask, ix, iy)
             taub_x[ix, iy] = abs_v > 0 ? Nf * Cx[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_x[ix, iy] / abs_v) : zero(Nf)
         end
@@ -487,15 +493,15 @@ compute_taub_x!(s::State, p::ModelParameters, sl::RegularizedCoulombV0SlidingLaw
     ny1 = size(taub_y, 2) # ny + 1
     if ix <= size(taub_y, 1) && iy <= ny1
         if iy == 1
-            Nf = N[ix, 1]
+            Nf = bed_N(N[ix, 1])
             abs_v = abs_ub[ix, 1]
             taub_y[ix, iy] = abs_v > 0 ? Nf * Cy[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_y[ix, 1] / abs_v) : zero(Nf)
         elseif iy == ny1
-            Nf = N[ix, ny1-1]
+            Nf = bed_N(N[ix, ny1-1])
             abs_v = abs_ub[ix, ny1-1]
             taub_y[ix, iy] = abs_v > 0 ? Nf * Cy[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_y[ix, ny1] / abs_v) : zero(Nf)
         else
-            Nf = face_y(N, mask, ix, iy)
+            Nf = bed_N(face_y(N, mask, ix, iy))
             abs_v = face_y(abs_ub, mask, ix, iy)
             taub_y[ix, iy] = abs_v > 0 ? Nf * Cy[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_y[ix, iy] / abs_v) : zero(Nf)
         end
@@ -514,15 +520,15 @@ compute_taub_y!(s::State, p::ModelParameters, sl::RegularizedCoulombV0SlidingLaw
     nx1 = size(taub_x, 1) # nx + 1
     if ix <= nx1 && iy <= size(taub_x, 2)
         if ix == 1
-            Nf = N[1, iy]
+            Nf = bed_N(N[1, iy])
             abs_v = abs_ub[1, iy]
             taub_x[ix, iy] = abs_v > 0 ? Nf * Cx[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_x[1, iy] / abs_v) : zero(Nf)
         elseif ix == nx1
-            Nf = N[nx1-1, iy]
+            Nf = bed_N(N[nx1-1, iy])
             abs_v = abs_ub[nx1-1, iy]
             taub_x[ix, iy] = abs_v > 0 ? Nf * Cx[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_x[nx1, iy] / abs_v) : zero(Nf)
         else
-            Nf = face_x(N, mask, ix, iy)
+            Nf = bed_N(face_x(N, mask, ix, iy))
             abs_v = face_x(abs_ub, mask, ix, iy)
             taub_x[ix, iy] = abs_v > 0 ? Nf * Cx[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_x[ix, iy] / abs_v) : zero(Nf)
         end
@@ -530,15 +536,15 @@ compute_taub_y!(s::State, p::ModelParameters, sl::RegularizedCoulombV0SlidingLaw
     ny1 = size(taub_y, 2) # ny + 1
     if ix <= size(taub_y, 1) && iy <= ny1
         if iy == 1
-            Nf = N[ix, 1]
+            Nf = bed_N(N[ix, 1])
             abs_v = abs_ub[ix, 1]
             taub_y[ix, iy] = abs_v > 0 ? Nf * Cy[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_y[ix, 1] / abs_v) : zero(Nf)
         elseif iy == ny1
-            Nf = N[ix, ny1-1]
+            Nf = bed_N(N[ix, ny1-1])
             abs_v = abs_ub[ix, ny1-1]
             taub_y[ix, iy] = abs_v > 0 ? Nf * Cy[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_y[ix, ny1] / abs_v) : zero(Nf)
         else
-            Nf = face_y(N, mask, ix, iy)
+            Nf = bed_N(face_y(N, mask, ix, iy))
             abs_v = face_y(abs_ub, mask, ix, iy)
             taub_y[ix, iy] = abs_v > 0 ? Nf * Cy[ix, iy] * pow(abs_v / (abs_v + v0), inv_n) * (ub_y[ix, iy] / abs_v) : zero(Nf)
         end
@@ -563,7 +569,7 @@ compute_taub_xy!(s::State, p::ModelParameters, sl::RegularizedCoulombV0SlidingLa
 @parallel_indices (ix, iy) function compute_taub_x_linear_kernel!(taub_x, mask, N, ub_x, Cx2)
     nx1 = size(taub_x, 1) # nx + 1
     if ix <= nx1 && iy <= size(taub_x, 2)
-        Nf = ix == 1 ? N[1, iy] : ix == nx1 ? N[nx1-1, iy] : face_x(N, mask, ix, iy)
+        Nf = bed_N(ix == 1 ? N[1, iy] : ix == nx1 ? N[nx1-1, iy] : face_x(N, mask, ix, iy))
         taub_x[ix, iy] = Cx2[ix, iy] * Nf * ub_x[ix, iy]
     end
     return
@@ -578,7 +584,7 @@ compute_taub_x!(s::State, p::ModelParameters, sl::LinearSlidingLaw) = (@parallel
 @parallel_indices (ix, iy) function compute_taub_y_linear_kernel!(taub_y, mask, N, ub_y, Cy2)
     ny1 = size(taub_y, 2) # ny + 1
     if ix <= size(taub_y, 1) && iy <= ny1
-        Nf = iy == 1 ? N[ix, 1] : iy == ny1 ? N[ix, ny1-1] : face_y(N, mask, ix, iy)
+        Nf = bed_N(iy == 1 ? N[ix, 1] : iy == ny1 ? N[ix, ny1-1] : face_y(N, mask, ix, iy))
         taub_y[ix, iy] = Cy2[ix, iy] * Nf * ub_y[ix, iy]
     end
     return
@@ -595,12 +601,12 @@ compute_taub_y!(s::State, p::ModelParameters, sl::LinearSlidingLaw) = (@parallel
 @parallel_indices (ix, iy) function compute_taub_xy_linear_kernel!(taub_x, taub_y, mask, N, ub_x, ub_y, Cx2, Cy2)
     nx1 = size(taub_x, 1) # nx + 1
     if ix <= nx1 && iy <= size(taub_x, 2)
-        Nf = ix == 1 ? N[1, iy] : ix == nx1 ? N[nx1-1, iy] : face_x(N, mask, ix, iy)
+        Nf = bed_N(ix == 1 ? N[1, iy] : ix == nx1 ? N[nx1-1, iy] : face_x(N, mask, ix, iy))
         taub_x[ix, iy] = Cx2[ix, iy] * Nf * ub_x[ix, iy]
     end
     ny1 = size(taub_y, 2) # ny + 1
     if ix <= size(taub_y, 1) && iy <= ny1
-        Nf = iy == 1 ? N[ix, 1] : iy == ny1 ? N[ix, ny1-1] : face_y(N, mask, ix, iy)
+        Nf = bed_N(iy == 1 ? N[ix, 1] : iy == ny1 ? N[ix, ny1-1] : face_y(N, mask, ix, iy))
         taub_y[ix, iy] = Cy2[ix, iy] * Nf * ub_y[ix, iy]
     end
     return

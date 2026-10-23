@@ -47,6 +47,8 @@ struct MeltTerms{Geothermal,Frictional,Potential,Sensible,Conductive} end
 # path between two cell centres. Its stress at that face is already the grounded cell's (face_x/face_y, sliding_law.jl),
 # so the mean holds the grounded value up to the face, and beyond it (floating ice, land) there is no friction to credit.
 # With uniform sliding the mean gives u_b.taub exactly; the full share of face_heat_share would give 1.5 times it.
+# Each computed law gives a stress along u_b with N floored at 0 (bed_N, sliding_law.jl), so u_b.taub >= 0 and abs() is
+# a no-op for them; it is kept for PrescribedSlidingLaw, whose taub comes from the host with its own sign convention.
 @parallel_indices (ix, iy) function compute_shear_kernel!(Q_b, ub_x, taub_x, ub_y, taub_y)
     if ix <= size(Q_b, 1) && iy <= size(Q_b, 2)
         Q_b[ix, iy] = abs((ub_x[ix+1, iy]*taub_x[ix+1, iy] + ub_x[ix, iy]*taub_x[ix, iy]) / 2 +
