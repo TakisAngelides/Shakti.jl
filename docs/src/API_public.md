@@ -241,10 +241,6 @@ AbstractCreepLengthScheme
 StandardCreep
 CreepCutoff
 compute_lc!
-AbstractCellGapClamping
-NoCellGapClamping
-CellGapClamping
-apply_cell_gap_clamping!
 AbstractCellNClamping
 NoCellNClamping
 CellNClamping

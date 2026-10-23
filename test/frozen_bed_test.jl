@@ -274,21 +274,12 @@
             @test A_visc[3, 3] * abs(N3)^(p.n - 1) * N3 * state.lc[3, 3] ≈ R3
         end
 
-        @testset "gap_budget_terms: the budget where b is clamped" begin
+        @testset "gap_budget_terms: the unclamped gap terms and their creep diagonal" begin
             q = ModelParameters(b_max = 1.0, b_min = 1e-6)
             A, h = 5e-25, 100.0
-            args(b, mdot, N) = (b, q.b_min, q.b_max, mdot, 0.0, 0.0, A, N, b, h, q.rho_w, q.rho_i, q.g, q.n, q.n_minus_1_exp)
-            legacy(b, mdot, N) = Shakti.gap_budget_terms(0, args(b, mdot, N)...)
-            # at b_max with opening winning: held under 1 and 2, the melt enters as water
-            src0, gd0 = legacy(1.0, 1e-3, 1e5)
-            @test gd0 > 0 && src0 ≈ 1e-3 * (1 / q.rho_w - 1 / q.rho_i) + A * 1e5^3 * 1.0 + gd0 * h
-            @test Shakti.gap_budget_terms(1, args(1.0, 1e-3, 1e5)...) == (1e-3 / q.rho_w, 0.0)
-            @test Shakti.gap_budget_terms(2, args(1.0, 1e-3, 1e5)...) == (1e-3 / q.rho_w, 0.0)
-            # below the cap nothing changes
-            @test Shakti.gap_budget_terms(1, args(0.5, 1e-3, 1e5)...) == legacy(0.5, 1e-3, 1e5)
-            # at b_min with closure winning: held only under 2
-            @test Shakti.gap_budget_terms(1, args(1e-6, 0.0, 1e6)...) == legacy(1e-6, 0.0, 1e6)
-            @test Shakti.gap_budget_terms(2, args(1e-6, 0.0, 1e6)...) == (0.0, 0.0)
+            src, gd = Shakti.gap_budget_terms(1.0, q.b_min, q.b_max, 1e-3, 0.0, 0.0, A, 1e5, 1.0, h, q.rho_w, q.rho_i, q.g, q.n, q.n_minus_1_exp)
+            @test gd ≈ q.n * q.rho_w * q.g * A * 1e5^2
+            @test src ≈ 1e-3 * (1 / q.rho_w - 1 / q.rho_i) + A * 1e5^3 * 1.0 + gd * h
         end
 
         @testset "outflow_only_land/ocean: boundary faces do not feed the ice" begin

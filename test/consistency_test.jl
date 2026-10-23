@@ -164,9 +164,6 @@
             changed = N_after .!= N_before
             changed[3, 3] = changed[4, 2] = false
             @test !any(changed)
-            cgc = CellGapClamping(Dict((2, 2) => (0.0, 1e-4)))
-            apply_cell_gap_clamping!(s, cgc)
-            @test s.b[2, 2] <= 1e-4
         end
 
         @testset "the simulation's options apply from construction and after a mask change (refresh_state!)" begin

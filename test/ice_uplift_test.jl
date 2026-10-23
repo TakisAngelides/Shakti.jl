@@ -108,7 +108,7 @@
             q = ModelParameters()
             b, mdot, beta, ub, A, lc, zb0, po0 = 1e-3, 0.0, 0.05, 1e-6, 5e-25, 1e-3, 10.0, 4e6
             ho = zb0 + po0 / (q.rho_w * q.g)
-            terms(h, N) = Shakti.cavity_head_terms(0, b, q.b_min, q.b_max, mdot, beta, ub, A, N, lc, h, zb0, po0, 0.0, 0.0,
+            terms(h, N) = Shakti.cavity_head_terms(b, q.b_min, q.b_max, mdot, beta, ub, A, N, lc, h, zb0, po0, 0.0, 0.0,
                                                     q.rho_w, q.rho_i, q.g, q.n, q.n_minus_1_exp, 0.0, 1 / dt)
             # row residual at the head h: gd*h - gs (the head-dependent part of the row, without the flux)
             row(h, N) = (t = terms(h, N); t[2] * h - t[1])

@@ -7,11 +7,10 @@ multiple dispatch on the concrete subtype picks [`NoCellNClamping`](@ref) (no-op
 `clamp`), applied via [`apply_cell_N_clamping!`](@ref) every time
 [`compute_N!`](@ref) runs.
 
-Mirrors [`AbstractCellGapClamping`](@ref)'s design, but N (unlike b) is a derived quantity
-recomputed from scratch every Picard iteration (not a persisted state variable), so this has to be
-applied inside [`compute_N!`](@ref) itself -- a once-per-timestep post-hoc clamp (the way
-[`apply_cell_gap_clamping!`](@ref) follows [`compute_b!`](@ref)) would be inert, since N gets
-overwritten from `po - pw` again before the next timestep's first Picard iteration even starts.
+N is a derived quantity recomputed from scratch every Picard iteration (not a persisted state
+variable), so this has to be applied inside [`compute_N!`](@ref) itself -- a once-per-timestep
+post-hoc clamp would be inert, since N gets overwritten from `po - pw` again before the next
+timestep's first Picard iteration even starts.
 Preferred over the global `ModelParameters.N_min`/`N_max` where only specific known-problem cells
 need floored/capped `N`, leaving the rest of the domain free to develop real (possibly negative,
 possibly channel-driving) `N` excursions rather than flooring them everywhere.

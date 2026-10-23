@@ -114,7 +114,6 @@ include("gap_height.jl")
 include("unfilled_cavities.jl") # must precede simulation.jl: Simulation type-annotates its `cf` field with AbstractCavityFilling
 include("hydraulic_potential.jl") # must precede simulation.jl (the `hp` field), after mask.jl (GROUNDED)
 include("ice_uplift.jl") # must precede simulation.jl (the `up` field)
-include("cell_gap_clamping.jl")
 include("head_extrapolation.jl")
 include("simulation.jl")
 include("static_fields.jl")
@@ -208,7 +207,6 @@ export AbstractCreepLengthScheme, StandardCreep, CreepCutoff
 export AbstractHeadScheme, ParabolicHeadScheme, EllipticHeadScheme
 export AbstractGapScheme, ExplicitGapScheme, ImplicitGapScheme, FullyImplicitGapScheme
 export AbstractTimeStepScheme, FixedTimeStep, AdaptiveTimeStep, target_time
-export AbstractCellGapClamping, NoCellGapClamping, CellGapClamping, apply_cell_gap_clamping!
 export AbstractCellNClamping, NoCellNClamping, CellNClamping, apply_cell_N_clamping!
 export Simulation
 

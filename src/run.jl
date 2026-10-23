@@ -615,7 +615,6 @@ function step_b!(sim::Simulation)
 
     compute_b!(sim)          # updates b based on the new state variables (GROUNDED cells only)
     clamp_b_empty!(s, sim.cf) # the empty part cannot exceed the (just updated) gap
-    apply_cell_gap_clamping!(s, sim.cgc) # optional per-cell b_min/b_max override on top of p's global clamp -- no-op under the default NoCellGapClamping()
 
     compute_beta!(s, p, sim.oss) # opening-by-sliding parameter depends on the new b
     compute_lc!(s, p, sim.cls)   # ice-creep length scale depends on the new b

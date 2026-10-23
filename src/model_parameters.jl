@@ -34,7 +34,6 @@ struct ModelParameters{F <: AbstractFloat, NE1, NE2, NE3}
     mdot_includes_sensible::Bool    # include the sensible-heat-exchange term in compute_mdot! (its own ct*cw*rho_w prefactor still applies when on)
     mdot_includes_qT::Bool          # include (subtract) the conductive-heat-into-ice term q_T in compute_mdot!
     limit_freeze_on::Bool           # cap freeze-on at the water the gap can supply this step (mdot >= -rho_i*C, see freeze_on_capacity!)
-    clamp_budget::Int               # water budget of filled rows where b is clamped (gap_budget_terms, linear_solver.jl): 0 legacy, 1 at b_max, 2 at b_max and b_min; unfilled/uplifted rows always hold
     outflow_only_land::Bool         # LAND faces pass water out of the grounded ice only, never in (compute_face_masks!, mask.jl)
     outflow_only_ocean::Bool        # same for OCEAN faces (false allows ocean water into the bed, e.g. tidal intrusion)
     n_exp::NE1         # canonical_exponent(n), see the fast-exponentiation note below
@@ -146,7 +145,6 @@ function ModelParameters(;
     mdot_includes_sensible = true,
     mdot_includes_qT = true,
     limit_freeze_on = true,
-    clamp_budget = 0,
     outflow_only_land = true,
     outflow_only_ocean = true)
 
@@ -160,7 +158,7 @@ function ModelParameters(;
     return ModelParameters(
         F(rho_w), F(rho_sw), F(rho_i), F(g), F(nu), n_F, F(omega), F(L), F(br), F(lr), F(b_c), F(ct), F(cw), F(p_atm), F(b_min), F(b_max), F(N_min), F(N_max), F(e_v), F(T_freeze), F(T_hysteresis),
         mdot_includes_G, mdot_includes_frictional, mdot_includes_potential, mdot_includes_sensible, mdot_includes_qT,
-        limit_freeze_on, Int(clamp_budget), Bool(outflow_only_land), Bool(outflow_only_ocean), n_exp, n_minus_1_exp, inv_n_exp
+        limit_freeze_on, Bool(outflow_only_land), Bool(outflow_only_ocean), n_exp, n_minus_1_exp, inv_n_exp
     )
 
 end
