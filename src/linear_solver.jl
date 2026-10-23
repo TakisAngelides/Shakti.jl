@@ -546,7 +546,7 @@ end
         Ge = scheme_gap(gu, b, b_min, b_max, mdot, beta, abs_ub, A, po, rho_i, n_minus_1)
         return mdot / rho_w - (Ge - b) * inv_dt - sempty + stor * zb, stor
     end
-    δ = 1e-6 * max(abs(N), oftype(N, 1e3)) # [Pa]
+    δ = oftype(N, 1e-6) * max(abs(N), oftype(N, 1e3)) # [Pa]
     # filled: the water the gap update leaves (scheme_water), against the water present b - b_dry (b_dry = 0 without the dry floor)
     G0 = scheme_water(gu, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, N, rho_i, n_minus_1)
     Gm = scheme_water(gu, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, N - δ, rho_i, n_minus_1)

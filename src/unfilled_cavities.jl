@@ -135,7 +135,7 @@ end
                    scheme_gap(gu, b, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1)
 @inline end_of_step_gap_slope(::ExplicitGapCoupling, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1, rho_w, ggrav) = zero(b)
 @inline function end_of_step_gap_slope(gu::SchemeGapUpdate, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1, rho_w, ggrav)
-    δ = 1e-6 * max(abs(Nv), oftype(Nv, 1e3))
+    δ = oftype(Nv, 1e-6) * max(abs(Nv), oftype(Nv, 1e3))
     Gm = end_of_step_gap(gu, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, Nv - δ, rho_i, n_minus_1)
     Gp = end_of_step_gap(gu, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, Nv + δ, rho_i, n_minus_1)
     return rho_w * ggrav * max(zero(b), (Gm - Gp) / (2δ))
@@ -220,7 +220,7 @@ end
 @parallel_indices (ix, iy) function limit_regime_crossing_kernel!(h, h_prev, dh_it, b, zb, po, stor, stor_up, rho_w, ggrav, filled_cap, mask, land, ocean)
     if ix <= size(h, 1) && iy <= size(h, 2)
         hn, hp, z = h[ix, iy], h_prev[ix, iy], zb[ix, iy]
-        ins = max(1e-6 * b[ix, iy], 64 * eps(abs(z) + one(z))) # a step inside the new regime, keeping W ~ b
+        ins = max(oftype(z, 1e-6) * b[ix, iy], 64 * eps(abs(z) + one(z))) # a step inside the new regime, keeping W ~ b
         bc = b[ix, iy]
         rg = rho_w * ggrav
         if filled_cap && (stor[ix, iy] > 0 || stor_up[ix, iy] > 0) && !(stor[ix, iy] > 0 && hp < z) && !(stor_up[ix, iy] > 0 && hp > z + po[ix, iy] / rg)
