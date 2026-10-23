@@ -155,11 +155,10 @@ $(TYPEDSIGNATURES)
 Advances `sim` by one timestep: recomputes `sim.dt[]` if `sim.ts` is adaptive
 (`update_dt!`), refreshes the melt input ([`update_ieb!`](@ref)), brings the head solve's
 inputs up to date and sets its initial guess (`prepare_head_solve!`), solves for the new
-head ([`step_h!`](@ref)), records it for the next step's extrapolation (`sim.he`), sets the empty part of the gap
-([`update_b_empty!`](@ref), [`UnfilledCavities`](@ref)) and the uplift layer ([`update_b_uplift!`](@ref),
-[`IceUplift`](@ref)) from the solved head, evolves the gap height ([`step_b!`](@ref)), checks it
-(`check_gap_height`), and under the elliptic scheme sets the empty volume from the water budget
-([`update_b_empty_budget!`](@ref)).
+head ([`step_h!`](@ref)), records it for the next step's extrapolation (`sim.he`), sets the uplift layer from
+the solved head ([`update_b_uplift!`](@ref), [`IceUplift`](@ref)) and, under the parabolic scheme, the empty part of
+the gap too ([`update_b_empty!`](@ref), [`UnfilledCavities`](@ref)), evolves the gap height ([`step_b!`](@ref), which
+under the elliptic scheme then takes both from the water budget) and checks it (`check_gap_height`).
 """
 function step!(sim::Simulation)
     compute_abs_ub!(sim.state) # a coupler may have set new ub_x/ub_y: opening by sliding, the freeze-on cap and update_dt! read |u_b|
@@ -169,11 +168,10 @@ function step!(sim::Simulation)
     step_h!(sim.hs, sim)
     store_start_of_step_melt!(sim.kfs, sim.state) # ImplicitUpwind: the converged melt, the next step's start-of-step melt (unfilled_cavities.jl); taken here so that a refresh_state! between steps cannot replace it
     record_head!(sim.he, sim.state, sim.dt[], first(picard_status(sim.hs)))
-    update_b_empty!(sim.state, sim.cf) # from the solved head, before step_b! evolves b
-    update_b_uplift!(sim.state, sim.p, sim.up) # IceUplift: the uplift layer from the solved head (no-op under NoUplift)
+    sim.hs isa ParabolicHeadScheme && update_b_empty!(sim.state, sim.cf) # from the solved head, before step_b! evolves b (the elliptic scheme takes it from the water budget, step_b!)
+    update_b_uplift!(sim.state, sim.p, sim.up) # IceUplift: the uplift layer from the solved head (no-op under NoUplift); under the elliptic scheme the budget overwrites it on uplifted cells only, so this also zeroes the others
     step_b!(sim)
     check_gap_height(sim)
-    sim.hs isa EllipticHeadScheme && update_b_empty_budget!(sim.state, sim.grid, sim.p, sim.dt[], sim.cf) # empty volume from the water budget, now that the gap is final
 end
 
 # A runaway gap: water above the overburden (N < 0) makes creep open the gap, and the implicit and fully implicit gap
@@ -601,11 +599,19 @@ function compute_b_dry_floor!(sim::Simulation)
     return sim
 end
 
+# The empty part of the gap and the uplift layer once the gap is final. Elliptic scheme: from the water budget
+# (update_b_empty_budget!, which also limits b_empty to [-b, b]), so the bump compute_beta! takes next is that of the
+# stored b_uplift. Parabolic scheme: b_empty from the solved head (update_b_empty!, step!), capped at the new gap; its
+# storage terms are not in that budget.
+settle_cavity_water!(sim::Simulation, ::EllipticHeadScheme) = update_b_empty_budget!(sim.state, sim.grid, sim.p, sim.dt[], sim.cf)
+settle_cavity_water!(sim::Simulation, ::ParabolicHeadScheme) = clamp_b_empty!(sim.state, sim.cf)
+
 """
 $(TYPEDSIGNATURES)
 
 Evolves the gap height `sim.state.b` for one timestep ([`compute_b!`](@ref), dispatching
-internally on `sim.ds`/`sim.gs`), then refreshes everything that depends on it (`beta`, `lc`) so it is ready for the
+internally on `sim.ds`/`sim.gs`), sets the empty part of the gap and the uplift layer for it (`settle_cavity_water!`),
+then refreshes everything that depends on it (`beta`, `lc`) so it is ready for the
 *next* timestep's Picard loop, and the face diagnostics `b_x`/`b_y` (no longer read by the solve; the face conductances
 take the water depth `b_w`, [`compute_face_flux!`](@ref)).
 """
@@ -614,7 +620,7 @@ function step_b!(sim::Simulation)
     s, p = sim.state, sim.p
 
     compute_b!(sim)          # updates b based on the new state variables (GROUNDED cells only)
-    clamp_b_empty!(s, sim.cf) # the empty part cannot exceed the (just updated) gap
+    settle_cavity_water!(sim, sim.hs) # b_empty and b_uplift for the new gap, before compute_beta! reads b_uplift
 
     compute_beta!(s, p, sim.oss) # opening-by-sliding parameter depends on the new b
     compute_lc!(s, p, sim.cls)   # ice-creep length scale depends on the new b

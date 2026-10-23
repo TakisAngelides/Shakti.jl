@@ -349,7 +349,7 @@ end
 $(TYPEDSIGNATURES)
 
 Caps `s.b_empty` at the gap height `s.b` (the water present, `b - b_empty`, cannot be negative); called
-after the gap update. A safety only: it acts when the head solve left a cell more than empty, e.g.
+after the gap update under the parabolic scheme (the elliptic one takes `b_empty` from [`update_b_empty_budget!`](@ref)). A safety only: it acts when the head solve left a cell more than empty, e.g.
 after a Picard loop that did not converge. A no-op under [`FilledCavities`](@ref).
 """
 clamp_b_empty!(s::State, ::FilledCavities) = s
@@ -407,8 +407,8 @@ lost: positive when the gap is larger than the water (partly empty), negative wh
 than gap (stored above the gap volume, released as a source the next step). `W` is floored at 0, and
 `b_empty` limited to `[-b, b]`; water beyond these limits is the only water the bookkeeping can still
 create or lose. Under [`IceUplift`](@ref), in a cell whose head is above the overburden head the water
-beyond the gap is the uplift layer instead, `b_uplift = W - b` (no upper limit), and `b_empty >= 0`. Called after the gap update; the head-based [`update_b_empty!`](@ref) stays for the
-parabolic scheme, whose storage terms the water budget above does not include. A no-op under
+beyond the gap is the uplift layer instead, `b_uplift = W - b` (no upper limit), and `b_empty >= 0`. Called by [`step_b!`](@ref) under the elliptic scheme, right after the gap update and before `compute_beta!` reads
+`b_uplift`; the head-based [`update_b_empty!`](@ref) is for the parabolic scheme only, whose storage terms the water budget above does not include. A no-op under
 [`FilledCavities`](@ref).
 """
 update_b_empty_budget!(s::State, g::Grid, p::ModelParameters, dt, ::FilledCavities) = s

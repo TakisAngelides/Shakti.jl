@@ -86,8 +86,7 @@
                 end
                 # the converged head satisfies the cell budgets with that same flux (gap update still to come):
                 # div(q) = mdot/rho_w + ieb - rate, rate = db/dt the head row assumed (explicit gap: exactly what step_b! applies)
-                Shakti.update_b_empty!(s, sim.cf); step_b!(sim)
-                sim.hs isa EllipticHeadScheme && update_b_empty_budget!(s, sim.grid, sim.p, sim.dt[], sim.cf)
+                step_b!(sim) # the elliptic scheme: b_empty from the water budget
                 qx, qy = Array(s.q_x), Array(s.q_y)
                 div = [(qx[i+1, j] - qx[i, j]) / grid.dx + (qy[i, j+1] - qy[i, j]) / grid.dy for i in 1:nx, j in 1:ny]
                 dW = ((Array(s.b) .- Array(s.b_empty)) .- (b_old .- e_old)) ./ dt
