@@ -25,7 +25,7 @@ The aim is a Shakti fast enough to be coupled to an ice-flow model such as
 | `gap_coupling` | `ConsistentGapCoupling()` | `ExplicitGapCoupling()` |
 | `b_max` | `Inf` | a finite cap |
 
-`"implicit_upwind"` needs `LUDirectSolver` or `CUDSSDirectSolver(grid; structure = :general)`.
+`"implicit_upwind"` needs `LUDirectSolver` or `CUDSSDirectSolver(grid)`.
 SHAKTI's original equations are `FilledCavities()`, `NoUplift()`, `BedPotential()` and
 `ExplicitGapCoupling()` together.
 

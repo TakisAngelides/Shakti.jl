@@ -79,7 +79,7 @@ and stable at any `dt`. Each head solve also takes the Newton terms of the face 
 donor's water depth (`water_depth_newton_kernel!`, `water_flux.jl`), so the Picard iteration is
 Newton's method in `W` and converges at any `dt` (a plain fixed point in `W` does not, see
 [`compute_b_w!`](@ref)). Those terms couple each face to its donor cell only, so the assembled matrix is no
-longer symmetric: it needs [`LUDirectSolver`](@ref) or `CUDSSDirectSolver(grid; structure = :general)`.
+longer symmetric: it needs [`LUDirectSolver`](@ref) or `CUDSSDirectSolver(grid)` (`structure = :general`, the default).
 Without unfilled cavities and uplift every water depth is the gap and this is [`Upwind`](@ref) exactly.
 """
 struct ImplicitUpwind <: AbstractKFaceScheme end

@@ -318,7 +318,7 @@ $(TYPEDSIGNATURES)
 Builds an [`LUDirectSolver`](@ref) on grid `g`. CPU (`"Threads"` backend) only.
 """
 function LUDirectSolver(g::Grid{F}) where F
-    backend != "Threads" && error("LUDirectSolver is CPU-only (SparseArrays/UMFPACK has no GPU path); use CUDSSDirectSolver(grid; structure = :general) for a GPU LU.")
+    backend != "Threads" && error("LUDirectSolver is CPU-only (SparseArrays/UMFPACK has no GPU path); use CUDSSDirectSolver(grid) for a GPU LU.")
     sals = SparseAssembledLinearSystem(g)
     fact = lu(sals.M) # symbolic analysis on the fixed 5-point pattern (the placeholder identity diagonal keeps it nonsingular)
     return LUDirectSolver(sals, fact, zeros(F, g.nx * g.ny))

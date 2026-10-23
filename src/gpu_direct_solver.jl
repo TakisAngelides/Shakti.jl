@@ -68,11 +68,11 @@ $(TYPEDSIGNATURES)
 Builds a [`CUDSSDirectSolver`](@ref) on grid `g`. Requires the "Threads" backend at construction
 (like [`CholeskyDirectSolver`](@ref)) -- see this file's module-level notes for why "CUDA" backend
 does not work here (ParallelStencil's own GPU field arrays are incompatible with
-`SparseAssembledLinearSystem`'s CPU-only assembly). `structure`: `:spd` (default, Cholesky) or `:general`
-(LU, for the non-symmetric matrix [`ImplicitUpwind`](@ref) assembles; the GPU counterpart of
-[`LUDirectSolver`](@ref)).
+`SparseAssembledLinearSystem`'s CPU-only assembly). `structure`: `:general` (default, LU: the GPU counterpart of
+[`LUDirectSolver`](@ref), for the non-symmetric matrix [`ImplicitUpwind`](@ref) and so the default sheet assembles) or
+`:spd` (Cholesky, symmetric matrices only: SHAKTI's sheet, `"upwind"`, or WithDiffusion's gap solve).
 """
-function CUDSSDirectSolver(g::Grid{F}; structure::Symbol = :spd) where F
+function CUDSSDirectSolver(g::Grid{F}; structure::Symbol = :general) where F
     structure in (:spd, :general) || error("Unknown structure: $structure (use :spd or :general)")
 
     backend != "Threads" && error("CUDSSDirectSolver requires the \"Threads\" backend (current backend: $backend) -- it uses CUDA/CUDSS internally regardless, see this file's module-level notes.")

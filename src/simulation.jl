@@ -247,7 +247,7 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
   wave in it, `q ~ K(W)*grad(zb)`; with `W` lagged to the start of the step a face mean is unstable (explicit central
   advection) at any `dt`, and `"upwind"` is stable only for `dt < dx*W/(3|q|)` (minutes at 100 m).
   `"implicit_upwind"` ([`ImplicitUpwind`](@ref)) takes `W` at the end of the step and is stable at any `dt`; it needs
-  a Picard solver with [`LUDirectSolver`](@ref) or `CUDSSDirectSolver(grid; structure = :general)` in `ps`/`pps`, and
+  a Picard solver with [`LUDirectSolver`](@ref) or `CUDSSDirectSolver(grid)` (`structure = :general`, the default) in `ps`/`pps`, and
   `Simulation` errors otherwise. `"upwind"` is the faster opt-out at short steps.
 - `cell_gap_clamping`: [`NoCellGapClamping`](@ref) (default, no-op) or a [`CellGapClamping`](@ref)
   overriding specific cells' `b_min`/`b_max` on top of `p`'s global values (see
@@ -368,7 +368,7 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
         hasproperty(solver, :ls) && supports_nonsymmetric(solver.ls) ||
             error("k_face_choice = \"implicit_upwind\"" * (k_face_default ? " (the default with $(nameof(typeof(cavity_filling)))/$(nameof(typeof(uplift))))" : "") *
                   " assembles a non-symmetric head matrix: it needs a Picard solver (PicardSolver/ParabolicPicardSolver) " *
-                  "with LUDirectSolver(grid) or CUDSSDirectSolver(grid; structure = :general) as its linear solver, got $(nameof(typeof(solver)))" *
+                  "with LUDirectSolver(grid) or CUDSSDirectSolver(grid) (structure = :general) as its linear solver, got $(nameof(typeof(solver)))" *
                   (hasproperty(solver, :ls) ? " with $(nameof(typeof(solver.ls)))" : "") *
                   (k_face_default ? ". Alternatively pass k_face_choice = \"upwind\" (stable only at short dt), or cavity_filling = FilledCavities(), " *
                                     "uplift = NoUplift() for SHAKTI's original filled sheet." : ""))
@@ -382,7 +382,7 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice, tracked_obs::
         error("The parabolic head scheme has no solve with $(nameof(typeof(hs.pps.ls))): use CholeskyDirectSolver, LUDirectSolver, CUDSSDirectSolver or CGIterativeSolver in the ParabolicPicardSolver")
     diffusion_scheme isa WithDiffusion &&
         !hasmethod(solve_b_diffusion!, Tuple{typeof(diffusion_scheme.ls), State, Grid, ModelParameters, Any}) &&
-        error("WithDiffusion's gap solve has no method for $(nameof(typeof(diffusion_scheme.ls))): use CholeskyDirectSolver(grid), CUDSSDirectSolver(grid) or CGIterativeSolver (the gap system is symmetric positive definite)")
+        error("WithDiffusion's gap solve has no method for $(nameof(typeof(diffusion_scheme.ls))): use CholeskyDirectSolver(grid), CUDSSDirectSolver(grid; structure = :spd) or CGIterativeSolver (the gap system is symmetric positive definite)")
 
     # Observer setup
     if isempty(tracked_obs)

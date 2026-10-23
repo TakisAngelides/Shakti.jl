@@ -162,8 +162,8 @@ and `pps = ParabolicPicardSolver(...)` for `e_v > 0` (see the [Parabolic scheme]
 
 Linear solver `ls`:
 * `LUDirectSolver(grid)`  UMFPACK LU, CPU; the default sheet's matrix is non-symmetric
-* `CUDSSDirectSolver(grid; structure = :general)`  the same on a GPU node (fields stay on the CPU); the fastest on large grids
-* `CholeskyDirectSolver(grid)`, `CUDSSDirectSolver(grid)` (`:spd`)  symmetric matrices only: SHAKTI's sheet or `"upwind"`
+* `CUDSSDirectSolver(grid)` (`structure = :general`, the default)  the same on a GPU node (fields stay on the CPU); the fastest on large grids
+* `CholeskyDirectSolver(grid)`, `CUDSSDirectSolver(grid; structure = :spd)`  symmetric matrices only: SHAKTI's sheet or `"upwind"`
 * `CGIterativeSolver(grid, SparseAssembledLinearSystem; amg = true)`  symmetric only, CPU
 * `CGIterativeSolver(grid, MatrixFreeLinearSystem)`  symmetric only, the one GPU-resident solver
 
