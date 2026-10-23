@@ -55,7 +55,7 @@ $(TYPEDSIGNATURES)
 
 Applies the diagonal-Jacobi-scaled operator `D^-1*A` via `mul!` below. The same wrapper works for
 both `SparseAssembledLinearSystem`'s `SparseMatrixCSC` and `MatrixFreeLinearSystem`'s
-[`StencilOperator`](@ref), since both already have a `mul!` method -- nothing here is backend- or
+`StencilOperator`, since both already have a `mul!` method -- nothing here is backend- or
 representation-specific. Used internally by [`ChebyshevPreconditioner`](@ref).
 """
 struct JacobiScaledOperator{Op, V <: AbstractVector}

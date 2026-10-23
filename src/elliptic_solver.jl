@@ -91,7 +91,7 @@ experimentation (e.g. once a scenario is found where it does help, or if this QR
 changes the picture where the normal-equations version didn't -- re-validate this claim itself
 when testing that).
 
-History is reset once per Picard loop (see [`reset_relaxation!`](@ref)/[`Picard_loop!`](@ref)):
+History is reset once per Picard loop (see `reset_relaxation!`/[`Picard_loop!`](@ref)):
 different timesteps solve a different fixed-point map (the Newton-linearization point and boundary
 data both change), so carrying history across timesteps would extrapolate against a stale map.
 """
@@ -232,7 +232,7 @@ Common supertype for anything [`EllipticHeadScheme`](@ref) can drive to solve th
 elliptic head equation each timestep -- [`PicardSolver`](@ref) (Picard iteration) or
 [`NewtonJFNKSolver`](@ref) (Jacobian-Free Newton-Krylov, `newton_solver.jl`). Any concrete subtype
 must expose mutable `converged::Bool`/`last_iter::Int` fields (read generically by
-[`picard_status`](@ref)) and a matching [`elliptic_solver!`](@ref) method.
+`picard_status`) and a matching [`elliptic_solver!`](@ref) method.
 """
 abstract type AbstractEllipticSolver end
 
@@ -293,7 +293,7 @@ $(TYPEDSIGNATURES)
 Builds a [`PicardSolver`](@ref) with up to `iters` iterations, relative tolerance `tol`, linear
 solver `ls`, on grid `g`. `alpha` (in `(0, 1]`) enables [`UnderHeadRelaxation`](@ref) if given,
 otherwise [`NoHeadRelaxation`](@ref) is used. `atol > 0` [m] replaces the relative check by
-`max|delta_h| < atol` (see [`head_converged`](@ref)).
+`max|delta_h| < atol` (see `head_converged`).
 """
 function PicardSolver(iters, tol, ls::AbstractLinearSolver, g::Grid; alpha = nothing, check_every::Int = DEFAULT_CHECK_EVERY, atol = 0)
 
@@ -381,7 +381,7 @@ Repeatedly calls [`Picard_iteration!`](@ref) (up to `ps.iters` times; a donor po
 after the head converged adds up to `ps.check_every` more, so a polish on the last iteration is still re-solved), checking convergence every
 `ps.check_every` iterations via a relative max-norm on the head update
 (`max|delta_h| / (max|h| + eps) < ps.tol`, or `max|delta_h| < ps.atol` when `ps.atol > 0`, see
-[`head_converged`](@ref)), and sets `ps.converged`/`ps.last_iter` accordingly.
+`head_converged`), and sets `ps.converged`/`ps.last_iter` accordingly.
 """
 function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), wdt = 0)
 

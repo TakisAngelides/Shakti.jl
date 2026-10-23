@@ -7,7 +7,7 @@ $(TYPEDSIGNATURES)
 
 Known hydraulic head at a Dirichlet (`OCEAN`/`LAND`) cell -- shared by that cell's own row
 (`h_j = g_j`) and by any `GROUNDED` neighbour that needs to fold `g_j` into its rhs instead of
-coupling to it in the matrix (see the symmetric-elimination note on [`update_SALS_elliptic!`](@ref)/
+coupling to it in the matrix (see the symmetric-elimination note on `update_SALS_elliptic!`/
 [`update_MFLS_elliptic!`](@ref)).
 """
 @inline function dirichlet_head(m, zb_ij, p_atm, rho_w, rho_sw, ggrav)
@@ -107,7 +107,7 @@ $(TYPEDSIGNATURES)
 The linear system as an explicit sparse matrix `M` (5-point stencil) and dense `rhs`, plus index
 arrays (`idxP`/`idxE`/`idxW`/`idxN`/`idxS`) mapping each grid cell to where its diagonal/neighbour
 coefficients live in `M.nzval` -- built once (the sparsity pattern never changes across Picard
-iterations/timesteps) so [`update_SALS_elliptic!`](@ref) only ever rewrites values, not structure. CPU-only
+iterations/timesteps) so `update_SALS_elliptic!` only ever rewrites values, not structure. CPU-only
 (`SparseArrays`/CHOLMOD have no GPU path); see [`MatrixFreeLinearSystem`](@ref) for the
 GPU-capable alternative.
 """
@@ -125,8 +125,8 @@ end
 $(TYPEDSIGNATURES)
 
 The linear system as per-cell stencil coefficients (`aP`/`aE`/`aW`/`aN`/`aS`, one value per grid
-cell each) with no sparse matrix ever materialized -- the matvec ([`stencil_matvec_kernel!`](@ref)
-via [`StencilOperator`](@ref)) applies the stencil directly. GPU-capable (every array lands on the
+cell each) with no sparse matrix ever materialized -- the matvec (`stencil_matvec_kernel!`
+via `StencilOperator`) applies the stencil directly. GPU-capable (every array lands on the
 active backend, see the constructor below); the alternative to
 [`SparseAssembledLinearSystem`](@ref) for backends without a sparse-direct-solver path.
 """
@@ -180,7 +180,7 @@ end
 $(TYPEDSIGNATURES)
 
 Builds a [`SparseAssembledLinearSystem`](@ref) on grid `g`: a 5-point-stencil sparse matrix `M`
-(placeholder zero off-diagonal values, filled in properly by [`update_SALS_elliptic!`](@ref) each solve)
+(placeholder zero off-diagonal values, filled in properly by `update_SALS_elliptic!` each solve)
 and the index arrays needed to address into `M.nzval` by grid coordinate.
 """
 function SparseAssembledLinearSystem(g::Grid{F}) where F
@@ -438,13 +438,13 @@ $(TYPEDSIGNATURES)
 
 The original equations (the default before [`ConsistentGapCoupling`](@ref) became it wherever available, see
 [`Simulation`](@ref)): the head rows assume `db = dt*rate(N, b_old)`, the gap rate at the new effective
-pressure and the old gap, with its creep term Newton-linearised in the head ([`gap_budget_terms`](@ref)). That is the
+pressure and the old gap, with its creep term Newton-linearised in the head (`gap_budget_terms`). That is the
 explicit gap update; the implicit and fully implicit gap schemes move the gap by less when creep is fast,
 `dt*A*|N|^(n-1)*N > 1`, so the head equation and the gap disagree on the water stored: water is created or lost (under
 [`UnfilledCavities`](@ref) the difference goes into `b_empty`, and where it exceeds its limits it is lost), and the
 explicit closure in the head row overshoots (the gap would close by more than its height). At `N < 0` (water above the
 overburden) creep opens the gap, which these schemes grow as `exp(dt*|C|)` while the head rows assume linear growth, so `N`
-does not recover; with `b_max = Inf` the gap can run away ([`check_gap_height`](@ref) reports it).
+does not recover; with `b_max = Inf` the gap can run away (`check_gap_height` reports it).
 """
 struct ExplicitGapCoupling <: AbstractGapCoupling end
 
@@ -458,10 +458,10 @@ update then store the same water at any `dt` (mass is conserved, the empty-volum
 [`UnfilledCavities`](@ref) stays consistent with the head), and an implicit or fully implicit gap scheme stays implicit in
 the head equation too. With the explicit gap scheme it differs from [`ExplicitGapCoupling`](@ref) only by the clamp.
 Under [`WithDiffusion`](@ref) the gap update is SUHMO's coupled linear system: the head rows then take the gap that system
-gives at each head iterate ([`DiffusiveGapUpdate`](@ref)). The default wherever available (see [`Simulation`](@ref)).
+gives at each head iterate (`DiffusiveGapUpdate`). The default wherever available (see [`Simulation`](@ref)).
 At `N < 0` the head rows see the gap's exponential opening, so `N` recovers where the explicit coupling runs away; at large
 enough `dt` the Picard iteration itself stops converging and the gap can still run away (Helheim at 500 m, filled cavities:
-5-day steps hold, 10-day steps do not), which [`check_gap_height`](@ref) reports.
+5-day steps hold, 10-day steps do not), which `check_gap_height` reports.
 """
 struct ConsistentGapCoupling <: AbstractGapCoupling end
 
@@ -486,9 +486,9 @@ $(TYPEDSIGNATURES)
 
 Kernel form of [`ConsistentGapCoupling`](@ref) under [`WithDiffusion`](@ref) (SUHMO), built every step
 ([`gap_coupling_terms`](@ref), `run.jl`). The gap update is a coupled linear system (creep closure and opening by sliding
-implicit on the diagonal, the wall diffusion `dt*div(D grad b)` coupling the cells, [`b_diffusion_local_terms`](@ref)),
+implicit on the diagonal, the wall diffusion `dt*div(D grad b)` coupling the cells, `b_diffusion_local_terms`),
 so no cell can compute it alone: every Picard iteration solves it at the current head iterate
-([`solve_gap_iterate!`](@ref)) into `State.b_next`, with the local slope of each cell's gap in its own head (the
+(`solve_gap_iterate!`) into `State.b_next`, with the local slope of each cell's gap in its own head (the
 neighbours' new gaps held) in `State.db_next`. The head rows store exactly `b_next - b` and take the slope as their Newton
 term ([`diffusive_head_terms`](@ref)), so at convergence the head equation and the gap update hold the same water. The
 explicit coupling assumed `dt*rate(N, b_old)` plus the diffusion of the old gap instead, and at dt = 1 day lost or created
@@ -588,13 +588,13 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Head-row terms (source, diagonal) of a GROUNDED cell under [`DiffusiveGapUpdate`](@ref): the row stores the gap change
+Head-row terms (source, diagonal) of a GROUNDED cell under `DiffusiveGapUpdate`: the row stores the gap change
 `bn - b` of SUHMO's coupled gap solve at the head iterate `h` (`bn = State.b_next`), Newton-linearised in the head with
 its slope `gbn = State.db_next` (`W(h') = bn + gbn*(h' - h)`). The wall diffusion is part of `bn`, so the row has no
 separate `-div(D grad b)` source ([`diffusion_in_head`](@ref)). As [`scheme_head_terms`](@ref) for the other regimes: an
 unfilled cell ([`UnfilledCavities`](@ref), `h < zb`) stores `bn + (h - zb)`, an uplifted one ([`IceUplift`](@ref),
 `h > h_o`) `bn + (h - h_o)`, both with storage slope 1, `bn` then being the gap solve's at `N = po` or `N = 0` (`State.N` of
-that iterate); `sempty` is last step's empty volume and uplift layer, as in [`cavity_head_terms`](@ref).
+that iterate); `sempty` is last step's empty volume and uplift layer, as in `cavity_head_terms`.
 """
 @inline function diffusive_head_terms(gu, b, mdot, h, zb, po, stor, b_empty, rho_w, ggrav, b_uplift, stor_up, bn, gbn)
     sempty = b_empty * stor - b_uplift * stor_up
@@ -648,7 +648,7 @@ end
 $(TYPEDSIGNATURES)
 
 Whether the head rows add the wall diffusion of the start-of-step gap as a source ([`diffusion_source`](@ref)): under
-[`WithDiffusion`](@ref), except with [`DiffusiveGapUpdate`](@ref), whose gap change already holds the diffusion.
+[`WithDiffusion`](@ref), except with `DiffusiveGapUpdate`, whose gap change already holds the diffusion.
 """
 diffusion_in_head(ds::AbstractDiffusionScheme, gc::AbstractGapCoupling) = Val(ds isa WithDiffusion && !(gc isa DiffusiveGapUpdate))
 
@@ -928,7 +928,7 @@ get a Dirichlet row, `OTHER_BASIN`/`FROZEN_BED` cells get a frozen (`h` held at 
 row. `M` stays exactly symmetric: a `GROUNDED` cell's Dirichlet neighbours are eliminated by
 folding their known head into `rhs` rather than left as a one-sided matrix coupling. Under
 [`ImplicitUpwind`](@ref) the rows also get the Newton terms of the donors' water depths
-([`add_water_depth_newton!`](@ref)), and `M` is no longer symmetric ([`LUDirectSolver`](@ref)).
+(`add_water_depth_newton!`), and `M` is no longer symmetric ([`LUDirectSolver`](@ref)).
 """
 function update_SALS_elliptic!(sals::SparseAssembledLinearSystem, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
 
@@ -1045,15 +1045,15 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Rebuilds `sals.M`/`sals.rhs` in place for the parabolic head scheme ([`update_SALS_parabolic_kernel!`](@ref)) --
-the `p.e_v != 0` counterpart of [`update_SALS_elliptic!`](@ref): same diffusion stencil,
+Rebuilds `sals.M`/`sals.rhs` in place for the parabolic head scheme (`update_SALS_parabolic_kernel!`) --
+the `p.e_v != 0` counterpart of `update_SALS_elliptic!`: same diffusion stencil,
 Dirichlet/frozen rows, and Newton-linearized creep-closure term, plus a backward-Euler englacial
 storage reaction term (`p.e_v/dt*h_old`) on top -- every other nonlinear coefficient (`K`,
 `A_visc`, `b`, `mdot`, `beta`, `abs_ub`) is still lagged at the current iterate, refreshed across
 iterations by [`Parabolic_loop!`](@ref) (`parabolic_solver.jl`) rather than within this one
 assembly. `h_old` (the head at the *start of the real timestep*, fixed across every
 [`Parabolic_loop!`](@ref) sub-iteration) is taken as an explicit argument, separate from `s.h`
-(the current Picard sub-iterate) -- see [`update_SALS_parabolic_kernel!`](@ref)'s own docstring
+(the current Picard sub-iterate) -- see `update_SALS_parabolic_kernel!`'s own docstring
 note for why conflating the two breaks convergence.
 """
 function update_SALS_parabolic!(sals::SparseAssembledLinearSystem, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, dt, h_old, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
@@ -1154,7 +1154,7 @@ end
 $(TYPEDSIGNATURES)
 
 Rebuilds `mfls.aP`/`aE`/`aW`/`aN`/`aS`/`rhs` in place from the current `s`/`p` -- the
-[`MatrixFreeLinearSystem`](@ref) counterpart of [`update_SALS_elliptic!`](@ref) (same per-cell logic, no
+[`MatrixFreeLinearSystem`](@ref) counterpart of `update_SALS_elliptic!` (same per-cell logic, no
 sparse matrix to address into).
 """
 function update_MFLS_elliptic!(mfls::MatrixFreeLinearSystem, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
@@ -1245,7 +1245,7 @@ $(TYPEDSIGNATURES)
 
 Rebuilds `mfls.aP`/`aE`/`aW`/`aN`/`aS`/`rhs` in place for the parabolic head scheme
 ([`update_MFLS_parabolic_kernel!`](@ref)) -- the [`MatrixFreeLinearSystem`](@ref) counterpart of
-[`update_SALS_parabolic!`](@ref), including its `h_old` argument (see that function's docstring).
+`update_SALS_parabolic!`, including its `h_old` argument (see that function's docstring).
 """
 function update_MFLS_parabolic!(mfls::MatrixFreeLinearSystem, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, dt, h_old, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
 
@@ -1424,7 +1424,7 @@ end
 $(TYPEDSIGNATURES)
 
 Rebuilds `mfls.aP`/`aE`/`aW`/`aN`/`aS`/`rhs` in place for `b`'s own diffusion solve -- the
-[`MatrixFreeLinearSystem`](@ref) counterpart of [`update_SALS_b_diffusion!`](@ref).
+[`MatrixFreeLinearSystem`](@ref) counterpart of `update_SALS_b_diffusion!`.
 """
 function update_MFLS_b_diffusion!(mfls::MatrixFreeLinearSystem, s::State, g::Grid, p::ModelParameters, dt)
 
@@ -1471,7 +1471,7 @@ end
 """
 $(TYPEDSIGNATURES)
 
-The gap at the end of the step that the head rows of [`DiffusiveGapUpdate`](@ref) store, from the current head iterate:
+The gap at the end of the step that the head rows of `DiffusiveGapUpdate` store, from the current head iterate:
 solves SUHMO's coupled gap system ([`solve_b_diffusion!`](@ref), with the current `N`, `mdot` and `D`) into `s.b_next`,
 leaving the start-of-step gap `s.b` as it is, and each cell's slope in its own head into `s.db_next`
 ([`gap_iterate_slope_kernel!`](@ref)). Called before the Picard loop and by [`refresh_head_dependents!`](@ref) after each
@@ -1531,7 +1531,7 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Builds a [`StencilOperator`](@ref) view of `mfls`'s current coefficients.
+Builds a `StencilOperator` view of `mfls`'s current coefficients.
 """
 StencilOperator(mfls::MatrixFreeLinearSystem) = StencilOperator(mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, size(mfls.aP, 1), size(mfls.aP, 2))
 
@@ -1582,7 +1582,7 @@ end
 $(TYPEDSIGNATURES)
 
 Solves the linearized elliptic equation for `h`, storing the result in `s.h` -- the
-[`CholeskyDirectSolver`](@ref) method: rebuilds the system ([`update_SALS_elliptic!`](@ref)),
+[`CholeskyDirectSolver`](@ref) method: rebuilds the system (`update_SALS_elliptic!`),
 refactorizes in place, and solves via `\\` (see the module note on why not `ldiv!`).
 """
 function solve_elliptic_linear_system!(ls::CholeskyDirectSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
@@ -1608,10 +1608,10 @@ $(TYPEDSIGNATURES)
 
 Solves the backward-Euler parabolic equation for `h` (`p.e_v != 0`), storing the result in `s.h`
 -- the [`CholeskyDirectSolver`](@ref) method: rebuilds the system
-([`update_SALS_parabolic!`](@ref)), refactorizes in place, and solves via `\\` (see
+(`update_SALS_parabolic!`), refactorizes in place, and solves via `\\` (see
 [`solve_elliptic_linear_system!`](@ref)'s note on why not `ldiv!`). `h_old` is the head at the
 *start of the real timestep* (fixed across every [`Parabolic_loop!`](@ref) sub-iteration, unlike
-`s.h` itself) -- see [`update_SALS_parabolic!`](@ref)'s docstring for why it must be threaded
+`s.h` itself) -- see `update_SALS_parabolic!`'s docstring for why it must be threaded
 through explicitly rather than read off `s.h`.
 """
 function solve_parabolic_linear_system!(ls::CholeskyDirectSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, dt, h_old, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
@@ -1634,7 +1634,7 @@ Solves `b`'s own coupled diffusion system (SUHMO Eq. 17) via `ls`, storing the (
 [`CholeskyDirectSolver`](@ref) method. `ls` here is the *second*, independent solver instance
 bundled in [`WithDiffusion`](@ref) (built the same way as `h`'s own, e.g. a second
 `CholeskyDirectSolver(grid)`) -- reuses `ls.h_vec` as a generic solve-result scratch buffer despite
-its name; this instance never actually solves for `h`. `out` (default `s.b`) receives the result; [`solve_gap_iterate!`](@ref)
+its name; this instance never actually solves for `h`. `out` (default `s.b`) receives the result; `solve_gap_iterate!`
 passes `s.b_next`, keeping the start-of-step gap. The CG methods warm-start from `s.b` either way.
 """
 function solve_b_diffusion!(ls::CholeskyDirectSolver, s::State, g::Grid, p::ModelParameters, dt, out = s.b)
@@ -1667,7 +1667,7 @@ end
 $(TYPEDSIGNATURES)
 
 Solves the linearized elliptic equation for `h` with an [`LUDirectSolver`](@ref): rebuilds the system
-([`update_SALS_elliptic!`](@ref)), refactorizes in place and solves.
+(`update_SALS_elliptic!`), refactorizes in place and solves.
 """
 function solve_elliptic_linear_system!(ls::LUDirectSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
     update_SALS_elliptic!(ls.sals, s, g, p, kfs, ds, gc)
@@ -1680,7 +1680,7 @@ end
 $(TYPEDSIGNATURES)
 
 Solves the backward-Euler parabolic equation for `h` (`p.e_v != 0`) with an [`LUDirectSolver`](@ref)
-([`update_SALS_parabolic!`](@ref); `h_old` as for [`CholeskyDirectSolver`](@ref)).
+(`update_SALS_parabolic!`; `h_old` as for [`CholeskyDirectSolver`](@ref)).
 """
 function solve_parabolic_linear_system!(ls::LUDirectSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, dt, h_old, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
     update_SALS_parabolic!(ls.sals, s, g, p, kfs, dt, h_old, ds, gc)
@@ -1860,9 +1860,9 @@ $(TYPEDSIGNATURES)
 
 Solves the backward-Euler parabolic equation for `h` (`p.e_v != 0`), storing the result in `s.h`
 -- the [`CGIterativeSolver`](@ref) over [`SparseAssembledLinearSystem`](@ref) method: rebuilds the
-system ([`update_SALS_parabolic!`](@ref)), refreshes the preconditioner, and runs `cg!` warm-started
+system (`update_SALS_parabolic!`), refreshes the preconditioner, and runs `cg!` warm-started
 from the current `s.h`. `h_old` is the head at the *start of the real timestep* -- see
-[`update_SALS_parabolic!`](@ref)'s docstring.
+`update_SALS_parabolic!`'s docstring.
 """
 function solve_parabolic_linear_system!(ls::CGIterativeSolver{<:SparseAssembledLinearSystem}, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, dt, h_old, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
 
@@ -1902,7 +1902,7 @@ $(TYPEDSIGNATURES)
 
 Solves the linearized elliptic equation for `h`, storing the result in `s.h` -- the
 [`CGIterativeSolver`](@ref) over [`MatrixFreeLinearSystem`](@ref) method, using
-[`StencilOperator`](@ref) as `cg!`'s matvec.
+`StencilOperator` as `cg!`'s matvec.
 """
 function solve_elliptic_linear_system!(ls::CGIterativeSolver{<:MatrixFreeLinearSystem}, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
 
@@ -1922,8 +1922,8 @@ $(TYPEDSIGNATURES)
 
 Solves the backward-Euler parabolic equation for `h` (`p.e_v != 0`), storing the result in `s.h`
 -- the [`CGIterativeSolver`](@ref) over [`MatrixFreeLinearSystem`](@ref) method, using
-[`StencilOperator`](@ref) as `cg!`'s matvec. `h_old` is the head at the *start of the real
-timestep* -- see [`update_SALS_parabolic!`](@ref)'s docstring.
+`StencilOperator` as `cg!`'s matvec. `h_old` is the head at the *start of the real
+timestep* -- see `update_SALS_parabolic!`'s docstring.
 """
 function solve_parabolic_linear_system!(ls::CGIterativeSolver{<:MatrixFreeLinearSystem}, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, dt, h_old, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
 
@@ -1943,7 +1943,7 @@ $(TYPEDSIGNATURES)
 
 Solves `b`'s own coupled diffusion system (SUHMO Eq. 17), storing the (clamped) result in `s.b` --
 the [`CGIterativeSolver`](@ref) over [`MatrixFreeLinearSystem`](@ref) method, using
-[`StencilOperator`](@ref) as `cg!`'s matvec, warm-started from the current `s.b`.
+`StencilOperator` as `cg!`'s matvec, warm-started from the current `s.b`.
 """
 function solve_b_diffusion!(ls::CGIterativeSolver{<:MatrixFreeLinearSystem}, s::State, g::Grid, p::ModelParameters, dt, out = s.b)
 

@@ -90,7 +90,7 @@ application) -- opt in explicitly (e.g. `ModelParameters(N_min = 0.0)`) where th
 standard linear-in-`b` term as `b -> 0` below `b_c`, letting sheet-like drainage survive under
 persistent lubricated bed areas rather than fully closing. Combines with every
 [`AbstractGapScheme`](@ref), including [`FullyImplicitGapScheme`](@ref) (see
-[`compute_b_fully_implicit_kernel!`](@ref)'s docstring for its closed-form solve).
+`compute_b_fully_implicit_kernel!`'s docstring for its closed-form solve).
 
 **Before setting `b_c != 0`**: read [`CreepCutoff`](@ref)'s own docstring first -- real-dataset
 testing found a known, dataset-dependent instability (an uncontained gap-height runaway on one

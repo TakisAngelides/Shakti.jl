@@ -32,7 +32,7 @@ struct FilledCavities <: AbstractCavityFilling end
 $(TYPEDSIGNATURES)
 
 The gap may be partly empty (free-surface regime, `p_w = 0`), see this file's header. A `GROUNDED`
-cell whose head falls below the bed takes the unfilled head row ([`cavity_head_terms`](@ref),
+cell whose head falls below the bed takes the unfilled head row (`cavity_head_terms`,
 `linear_solver.jl`): `N = po`, and the empty depth `zb - h` is the cell's storage. `State.b_empty`
 records the empty depth (from the water budget after the gap update, [`update_b_empty_budget!`](@ref)),
 the face conductances use the water depth `b - b_empty` ([`compute_b_w!`](@ref)), and `p_w` is
@@ -92,7 +92,7 @@ that kept that conductance drained water it did not have wherever its head staye
 (a margin cell on a slope next to `LAND`), and [`update_b_empty_budget!`](@ref)'s floor `W >= 0` then
 created it: 1.4 m^3/s on Drang Drung at 25 m, 21 times the melt input. Without the floor a dry cell's
 outflow vanishes with its water; its row stays regular through the unfilled storage `1/dt`
-([`cavity_head_terms`](@ref)), or is a closed cell's once all its faces carry no water. It is the water present at the start of the step,
+(`cavity_head_terms`), or is a closed cell's once all its faces carry no water. It is the water present at the start of the step,
 not at the current head iterate: like `b` in the legacy equations it stays fixed during the Picard
 loop. That lag makes the water-depth dependence of the flux explicit in time where the water depth is
 free (an unfilled or uplifted cell): a step longer than the time such a cell takes to fill or drain,
@@ -174,7 +174,7 @@ Water depth at the end of the step as a function of the current head iterate, fo
 gap may be partly empty (`s.stor > 0`, [`UnfilledCavities`](@ref)) and `h < zb`, `W = G(0) + (h - h_o)` where the ice may be
 lifted (`s.stor_up > 0`, [`IceUplift`](@ref)) and `h > h_o`, `W = G(N)` otherwise, never below 0 (no floor, see [`compute_b_w!`](@ref)). These are
 the head rows' own water: the depth they conserve (with the melt opening of `G` from the start of the step,
-[`store_start_of_step_melt!`](@ref), or at the iterate where that gives less water). Under [`ExplicitGapCoupling`](@ref) `G` is the start-of-step gap `b`
+`store_start_of_step_melt!`, or at the iterate where that gives less water). Under [`ExplicitGapCoupling`](@ref) `G` is the start-of-step gap `b`
 (the head rows add the gap change only to the water budget), so a filled cell's depth is `b` with slope 0 (the gap is lagged
 in its conductance, as in the original scheme) and the unfilled and uplifted depths move one to one with the head. Under
 [`ConsistentGapCoupling`](@ref) `G` is the gap scheme's own update: the conductance of every cell then uses the end-of-step
@@ -309,14 +309,14 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Limits each `GROUNDED` cell's head step per Picard iteration under the dry floor ([`dry_floor`](@ref), `gc.dry_floor`)
+Limits each `GROUNDED` cell's head step per Picard iteration under the dry floor (`dry_floor`, `gc.dry_floor`)
 with a K-face scheme other than [`ImplicitUpwind`](@ref) (which has [`limit_regime_crossing!`](@ref)); a no-op otherwise.
 The effective pressure may change by at most half of itself, or a quarter of the overburden near `N = 0`, and a step that
 reverses the previous one without contracting is halved (the oscillation damping of [`limit_regime_crossing!`](@ref)).
 On the negative side (`N < 0`, head above the overburden, which no physical solution of a filled thick-ice cell reaches) the
 relative cap would let `N` run away geometrically (`-5e6`, `-6e7`, `-6.5e8`, ...): `N` may then fall at most `po/4` below
 `min(N_prev, 0)` per iteration. Without that, the first raw iterate of the stuck-cells fixture (`N` around `-1e16`) made the
-exponential branch of [`relax_update`](@ref) overflow (NaN without this limiter) and, limited, stalled at `N` near `-1e9`.
+exponential branch of `relax_update` overflow (NaN without this limiter) and, limited, stalled at `N` near `-1e9`.
 Without it a cold start on thick ice diverged at the first step (Greenland and Antarctica 16 km, Thwaites 2 km at
 `dt = 1 h`): where creep closes the gap within a step the gap update is nearly flat in `N`, the first linear solve
 pushes the melt through the floor's conductance, and the head overshoots by kilometres, past the overburden; there the gap

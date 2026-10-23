@@ -4,7 +4,7 @@ $(TYPEDSIGNATURES)
 How hydraulic conductivity `K` is combined across two neighbouring `GROUNDED` cells' shared face
 into a single face conductance -- multiple dispatch on the concrete subtype picks arithmetic or
 harmonic averaging, the donor cell's value ([`Upwind`](@ref)), or the donor's value at the end-of-step
-water depth ([`ImplicitUpwind`](@ref)) (see [`compute_K_face`](@ref) and [`boundary_K_face`](@ref)).
+water depth ([`ImplicitUpwind`](@ref)) (see [`compute_K_face`](@ref) and `boundary_K_face`).
 """
 abstract type AbstractKFaceScheme end
 
@@ -76,7 +76,7 @@ empty ([`UnfilledCavities`](@ref)) and `W = b + max(0, h - h_o)` in one where th
 uplift layer) the flux is a kinematic wave in it, `q ~ K(W) grad(zb)`: with `W` lagged ([`Upwind`](@ref)) that
 wave is explicit in time and stable only for `dt < dx*W/(3|q|)`, minutes at 100 m. Here it is backward Euler
 and stable at any `dt`. Each head solve also takes the Newton terms of the face flux's dependence on the
-donor's water depth ([`water_depth_newton_kernel!`](@ref), `water_flux.jl`), so the Picard iteration is
+donor's water depth (`water_depth_newton_kernel!`, `water_flux.jl`), so the Picard iteration is
 Newton's method in `W` and converges at any `dt` (a plain fixed point in `W` does not, see
 [`compute_b_w!`](@ref)). Those terms couple each face to its donor cell only, so the assembled matrix is no
 longer symmetric: it needs [`LUDirectSolver`](@ref) or `CUDSSDirectSolver(grid; structure = :general)`.
@@ -108,7 +108,7 @@ therefore exactly what the linear system assembles:
 
 - both `GROUNDED`: the K-face scheme's mean (`kfs`);
 - one `GROUNDED`, the other `OCEAN`/`LAND`: the grounded cell's own value (see
-  [`boundary_K_face`](@ref) for why the Dirichlet cell's placeholder `0` must not be averaged in);
+  `boundary_K_face` for why the Dirichlet cell's placeholder `0` must not be averaged in);
 - anything else (a face touching `OTHER_BASIN`/`FROZEN_BED`, or between two non-solved cells): `0`,
   a zero-flux face.
 """

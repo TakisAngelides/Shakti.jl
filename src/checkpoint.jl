@@ -50,7 +50,7 @@ Restores `sim.state`, `sim.total_time[]`, `sim.dt[]` and the head-extrapolation 
 written by [`save_checkpoint`](@ref), and returns the timestep it was saved at, so [`run!`](@ref) knows
 where to resume the loop. A checkpoint written before `dt` was added to it (no `"dt"` key) leaves
 `sim.dt[]` untouched, at whatever the `Simulation` constructor set it to; one without the history clears it
-([`load_head_history!`](@ref)).
+(`load_head_history!`).
 """
 function load_checkpoint!(sim::Simulation, path::String)
     state = sim.state

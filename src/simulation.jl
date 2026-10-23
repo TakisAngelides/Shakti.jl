@@ -73,7 +73,7 @@ $(TYPEDSIGNATURES)
 Fully implicit update of `b`: both the creep-closure term AND the opening-by-sliding term are
 evaluated at the new (`k+1`) `b`, not the lagged one -- unconditionally stable for any `dt`,
 regardless of `p.br`. `beta(b) = max(0, (p.br-b)/p.lr)` is piecewise-linear (not smooth, but not
-genuinely nonlinear either), so this doesn't need a Newton iteration: [`compute_b_fully_implicit_kernel!`](@ref)
+genuinely nonlinear either), so this doesn't need a Newton iteration: `compute_b_fully_implicit_kernel!`
 solves both linear branches (`b_{k+1} < p.br` and `b_{k+1} >= p.br`) in closed form and picks
 whichever is self-consistent with its own assumption. Same per-step cost as
 [`ImplicitGapScheme`](@ref) (often cheaper in practice, since Picard convergence tends to benefit
@@ -120,7 +120,7 @@ Note this recomputes `dt` from the *previous* step's converged `N`/`u_b` (it can
 current step's `N` before solving it) -- the same lagged-coefficient idiom already used for
 `s.beta` in [`ImplicitGapScheme`](@ref).
 
-Build with the [`AdaptiveTimeStep(grid, state; ...)`](@ref) convenience constructor below, not
+Build with the [`AdaptiveTimeStep`](@ref) convenience constructor below, not
 this one directly -- it sizes `rate_field`/`host_rate`/`scratch` correctly.
 """
 struct AdaptiveTimeStep{UsePercentile, F} <: AbstractTimeStepScheme
@@ -157,7 +157,7 @@ Builds an [`AdaptiveTimeStep`](@ref), sizing its scratch buffers from `grid`/`st
   that same bound as `tsteps` when constructing the [`Simulation`](@ref).
 - `target_time`: the physical duration (seconds) this run is meant to cover -- the final step is
   clipped to land exactly on it rather than overshoot, and the step before it is shortened when the
-  remainder would otherwise be less than `dt_min` (see [`update_dt!`](@ref)).
+  remainder would otherwise be less than `dt_min` (see `update_dt!`).
 """
 function AdaptiveTimeStep(grid::Grid, state::State; use_percentile::Bool = false, safety_factor, percentile = 0.75, dt_min, dt_max, target_time)
     F = eltype(state.N)
@@ -234,7 +234,7 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
 - Opening-by-sliding scheme: off automatically ([`NoOpenBySliding`](@ref)) if `p.br` is zero, else
   [`WithOpenBySliding`](@ref).
 - Creep-length scheme: [`StandardCreep`](@ref) (`l_c = b`) automatically if `p.b_c` is zero, else
-  [`CreepCutoff`](@ref) (see [`compute_b_fully_implicit_kernel!`](@ref) for how this combines with
+  [`CreepCutoff`](@ref) (see `compute_b_fully_implicit_kernel!` for how this combines with
   `gap_scheme_choice = "fully_implicit"`).
 - `diffusion_scheme`: [`NoDiffusion`](@ref) (default) or [`WithDiffusion`](@ref) (`linear_solver.jl`)
   -- unlike the opening-by-sliding/creep-length schemes above, this is never auto-inferred from a
@@ -284,7 +284,7 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
   [`WithDiffusion`](@ref)). Pass `ExplicitGapCoupling()` to reproduce results from before this default. With
   `"implicit_upwind"` the conductance then also takes the end-of-step gap, so the head-gap step is implicit throughout.
   With [`WithDiffusion`](@ref) (SUHMO) `ConsistentGapCoupling()` solves the coupled gap system at every Picard iteration
-  ([`DiffusiveGapUpdate`](@ref)), one extra linear solve per iteration (two with `"implicit_upwind"`), with any cavity
+  (`DiffusiveGapUpdate`), one extra linear solve per iteration (two with `"implicit_upwind"`), with any cavity
   filling and uplift.
 - `timestep_scheme`: [`FixedTimeStep`](@ref) (default, `dt` never changes) or
   [`AdaptiveTimeStep`](@ref) (`dt` recomputed every step from `C+gamma`). With the latter, `dt` is

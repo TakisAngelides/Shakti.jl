@@ -113,7 +113,7 @@ supports_nonsymmetric(ls::CUDSSDirectSolver) = ls.general
 $(TYPEDSIGNATURES)
 
 Solves the elliptic head equation's linear system under [`CUDSSDirectSolver`](@ref): rebuilds
-`sals.M`/`sals.rhs` on the CPU (same [`update_SALS_elliptic!`](@ref) call as
+`sals.M`/`sals.rhs` on the CPU (same `update_SALS_elliptic!` call as
 [`CholeskyDirectSolver`](@ref)), scatters the updated values into the existing, fixed-pattern GPU
 matrix in place, refactorizes on the GPU reusing the symbolic analysis, solves, and copies the
 result back into `s.h`.
@@ -129,7 +129,7 @@ end
 $(TYPEDSIGNATURES)
 
 Solves the backward-Euler parabolic equation for `h` (`p.e_v != 0`) under [`CUDSSDirectSolver`](@ref): assembled by
-[`update_SALS_parabolic!`](@ref) (`h_old` as for [`CholeskyDirectSolver`](@ref)), then solved as the elliptic method.
+`update_SALS_parabolic!` (`h_old` as for [`CholeskyDirectSolver`](@ref)), then solved as the elliptic method.
 """
 function solve_parabolic_linear_system!(ls::CUDSSDirectSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, dt, h_old, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
     update_SALS_parabolic!(ls.sals, s, g, p, kfs, dt, h_old, ds, gc)
@@ -142,7 +142,7 @@ end
 $(TYPEDSIGNATURES)
 
 Solves SUHMO's gap system under [`CUDSSDirectSolver`](@ref) (the second solver of [`WithDiffusion`](@ref)), clamped
-into `out` as the [`CholeskyDirectSolver`](@ref) method. [`update_SALS_b_diffusion!`](@ref) writes values only into
+into `out` as the [`CholeskyDirectSolver`](@ref) method. `update_SALS_b_diffusion!` writes values only into
 the fixed pattern of `ls.sals.M` (the same stencil slots as the head system), so the precomputed `vals_perm` and the
 symbolic analysis stay valid.
 """

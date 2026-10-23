@@ -1,8 +1,13 @@
-# API
+# API Reference
+
+Every exported name, grouped the way a run uses them: grid and state, parameters and mask, the sheet
+options, the solvers, the simulation and its output. The [Tutorial](@ref) explains when to pick
+each option.
 
 ## Backend selection
 
 ```@docs
+Shakti
 Shakti.backend
 Shakti.floattype
 ```
@@ -35,6 +40,13 @@ OCEAN
 LAND
 OTHER_BASIN
 compute_face_masks!
+FROZEN_BED
+set_mask!
+freeze_cells!
+thaw_cells!
+update_frozen_mask!
+freeze_isolated!
+freeze_on_capacity!
 ```
 
 ## Melt input
@@ -44,6 +56,9 @@ AbstractMeltInput
 ConstantMeltInput
 SeasonalMeltInput
 update_ieb!
+GaussianMoulinMeltInput
+combine_ieb!
+set_ieb_external!
 ```
 
 ## K-face scheme
@@ -66,10 +81,17 @@ FilledCavities
 UnfilledCavities
 compute_b_w!
 compute_b_w_iterate!
+set_cavity_storage!
+update_b_empty!
+update_b_empty_budget!
+clamp_b_empty!
 AbstractHydraulicPotential
 BedPotential
 SheetTopPotential
+update_gap_jumps!
 AbstractIceUplift
+set_uplift_storage!
+update_b_uplift!
 NoUplift
 IceUplift
 AbstractGapCoupling
@@ -85,6 +107,8 @@ AbstractSlidingLaw
 RegularizedCoulombSlidingLaw
 PrescribedSlidingLaw
 LinearSlidingLaw
+RegularizedCoulombV0SlidingLaw
+RegularizedCoulombFieldSlidingLaw
 initialize_taub!
 compute_taub_x!
 compute_taub_y!
@@ -106,6 +130,7 @@ SparseAssembledLinearSystem
 MatrixFreeLinearSystem
 CholeskyDirectSolver
 LUDirectSolver
+CUDSSDirectSolver
 CGIterativeSolver
 solve_elliptic_linear_system!
 solve_parabolic_linear_system!
@@ -116,7 +141,7 @@ solve_parabolic_linear_system!
 ```@docs
 ChebyshevPreconditioner
 update_chebyshev_bounds!
-estimate_eigenvalue_bounds
+estimate_eigenvalue_bounds!
 AMGPreconditioner
 update_amg!
 ```
@@ -128,16 +153,25 @@ AbstractHeadRelaxation
 NoHeadRelaxation
 UnderHeadRelaxation
 relax_h!
+AndersonHeadRelaxation
+AbstractEllipticSolver
 PicardSolver
 elliptic_solver!
 Picard_loop!
 Picard_iteration!
+refresh_head_dependents!
+refresh_state!
+NewtonJFNKSolver
+newton_status
 ```
 
 ## Parabolic solver
 
 ```@docs
+ParabolicPicardSolver
 parabolic_solver!
+Parabolic_loop!
+Parabolic_iteration!
 ```
 
 ## Simulation
@@ -149,11 +183,16 @@ EllipticHeadScheme
 AbstractGapScheme
 ExplicitGapScheme
 ImplicitGapScheme
+FullyImplicitGapScheme
 Simulation
 AbstractHeadExtrapolation
 NoHeadExtrapolation
 HeadExtrapolation
 reset_head_history!
+AbstractTimeStepScheme
+FixedTimeStep
+AdaptiveTimeStep
+target_time
 ```
 
 ## Derived fields
@@ -165,6 +204,7 @@ compute_h!
 compute_abs_ub!
 compute_pw!
 compute_N!
+apply_boundary_pw!
 compute_dhdx!
 compute_dhdy!
 compute_dhdxy!
@@ -200,6 +240,29 @@ compute_beta!
 compute_b_x!
 compute_b_y!
 compute_b!
+AbstractCreepLengthScheme
+StandardCreep
+CreepCutoff
+compute_lc!
+AbstractCellGapClamping
+NoCellGapClamping
+CellGapClamping
+apply_cell_gap_clamping!
+AbstractCellNClamping
+NoCellNClamping
+CellNClamping
+SmoothCellNClamping
+apply_cell_N_clamping!
+```
+
+## SUHMO channel-wall diffusion
+
+```@docs
+AbstractDiffusionScheme
+NoDiffusion
+WithDiffusion
+compute_D!
+solve_b_diffusion!
 ```
 
 ## Initial conditions

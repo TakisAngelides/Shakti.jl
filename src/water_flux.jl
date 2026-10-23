@@ -356,9 +356,9 @@ $(TYPEDSIGNATURES)
 
 [`ImplicitUpwind`](@ref) method: the face fluxes from the donor's water depth at the end of the step
 ([`compute_b_w_iterate!`](@ref), from the current head iterate and the gap coupling `gc`), and the Newton coefficients `s.Jw_x`/`s.Jw_y` of
-their dependence on the donor's head through that depth ([`water_depth_newton_kernel!`](@ref)), which the head
-rows add ([`add_water_depth_newton!`](@ref), `linear_solver.jl`). The donor of a face is the higher-potential cell, except
-that a face whose donor has flipped `MAX_DONOR_FLIPS` times within the step keeps its donor ([`reset_donors!`](@ref)).
+their dependence on the donor's head through that depth (`water_depth_newton_kernel!`), which the head
+rows add (`add_water_depth_newton!`, `linear_solver.jl`). The donor of a face is the higher-potential cell, except
+that a face whose donor has flipped `MAX_DONOR_FLIPS` times within the step keeps its donor (`reset_donors!`).
 """
 function compute_face_flux!(s::State, p::ModelParameters, kfs::ImplicitUpwind, gc::AbstractGapCoupling = ExplicitGapCoupling())
     compute_b_w_iterate!(s, p, gc)

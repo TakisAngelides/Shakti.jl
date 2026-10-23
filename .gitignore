@@ -38,5 +38,13 @@ Thumbs.db
 
 # Literate.jl output: regenerated from docs/src/examples/*.jl by docs/make.jl on every build.
 /docs/src/examples/*.md
-# DrangDrung.md is hand-written (no live @example execution, see its own header), not Literate output.
+# The real-data example pages are hand-written markdown with figures from docs/make_figures.jl.
 !/docs/src/examples/DrangDrung.md
+!/docs/src/examples/Helheim.md
+!/docs/src/examples/Thwaites.md
+!/docs/src/examples/Greenland.md
+!/docs/src/examples/Antarctica.md
+/docs/src/tutorial.md
+
+# Local input paths of docs/make_figures.jl
+/docs/figure_paths.jl

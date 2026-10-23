@@ -10,7 +10,7 @@ Every nonlinear coefficient (`K`, `N`, `A_visc`, `b`, `mdot`, `beta`, `abs_ub`) 
 linear solve is lagged at whatever `state` held when this is called, with no correction -- unlike
 [`Parabolic_iteration!`](@ref)/[`ParabolicPicardSolver`](@ref) below, this never re-evaluates them
 against the new `h`. That lag is provably harmless once the state has actually reached a fixed
-point (nothing left to lag behind), which is what [`parabolic_solver_test.jl`](@ref)'s "steady
+point (nothing left to lag behind), which is what `parabolic_solver_test.jl`'s "steady
 state matches EllipticHeadScheme's" test exercises; away from a fixed point (large `dt`, or a
 locally stiff cell -- e.g. a thin, marine-grounded cell near flotation) it can leave real error
 in the transient uncorrected for the rest of the run, since nothing here re-solves with fresher
@@ -64,7 +64,7 @@ elliptic kernels use (baked into `aP`/`rhs`, not something this loop does) -- `K
 sensitivity gets the Newton treatment, but that was the term actually responsible for the
 non-convergence.
 
-Build one with the [`ParabolicPicardSolver(iters, tol, ls, g; ...)`](@ref) convenience constructor
+Build one with the [`ParabolicPicardSolver`](@ref) convenience constructor
 below, not this positional one directly; `converged`/`last_iter` are updated in place by
 [`Parabolic_loop!`](@ref) each time it's called.
 """
@@ -119,7 +119,7 @@ are consistent -- the exact parabolic counterpart of [`Picard_iteration!`](@ref)
 
 `h_old` (fixed for the whole real timestep) and `h_prev` (the previous sub-iteration's head,
 which does change every call) are deliberately two different arguments -- see
-[`update_SALS_parabolic_kernel!`](@ref)'s docstring (`linear_solver.jl`) for why passing the same
+`update_SALS_parabolic_kernel!`'s docstring (`linear_solver.jl`) for why passing the same
 array for both breaks convergence.
 """
 function Parabolic_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation, s::State, g::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, dt, h_old, h_prev; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
@@ -142,7 +142,7 @@ checking convergence every `pps.check_every` iterations via a relative max-norm 
 -- the exact parabolic counterpart of [`Picard_loop!`](@ref). Captures `pps.h_old` from `s.h`
 exactly once, before the first sub-iteration -- every sub-iteration solves backward-Euler from
 that same fixed starting point, not from whatever the previous sub-iteration happened to leave in
-`s.h` (see [`update_SALS_parabolic_kernel!`](@ref)'s docstring for why that distinction is not
+`s.h` (see `update_SALS_parabolic_kernel!`'s docstring for why that distinction is not
 just bookkeeping: conflating the two is a real bug that prevented this loop from converging at
 all on stiff cells, confirmed on the real Greenland grid).
 """

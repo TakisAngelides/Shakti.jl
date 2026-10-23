@@ -131,7 +131,7 @@ coefficient `C = A|N|^(n-1)*N` is negative), the cutoff branch used to return
 `b_below = b_old + dt*opening` directly, dropping the `(1 + dt*C)` implicit-closure term in that
 regime, unlike [`StandardCreep`](@ref). `b` then grew by the bare opening term every step until it
 crossed `b_c` onto the linear branch, by which point the growth did not turn over. That branch now
-falls back to the `StandardCreep` form at `C <= 0` ([`relax_update`](@ref): the exact exponential at
+falls back to the `StandardCreep` form at `C <= 0` (`relax_update`: the exact exponential at
 `N < 0`); the real-data runs above predate that change and have not been repeated, so the caution
 below stands.
 
@@ -257,7 +257,7 @@ C*l_c(b_{k+1}))`, dispatched on `cls` (see [`AbstractCreepLengthScheme`](@ref)):
 [`StandardCreep`](@ref) is the plain linear solve `compute_b_implicit_kernel!` always used before
 this generalization; [`CreepCutoff`](@ref) additionally has a self-consistent closed form despite
 `l_c` being quadratic (not linear) in `b` below `p.b_c` -- same "solve both branches, keep whichever
-is self-consistent" idea as [`compute_b_fully_implicit_kernel!`](@ref)'s `beta` branches, just for
+is self-consistent" idea as `compute_b_fully_implicit_kernel!`'s `beta` branches, just for
 `l_c`'s own piecewise definition instead:
 
   - Branch "`b_{k+1} <= b_c`" (`l_c = b_{k+1}^2/b_c`): `b_{k+1} + dt*C/b_c*b_{k+1}^2 = b_k +
@@ -338,7 +338,7 @@ and returning the first self-consistent one is correct either way, at the cost o
 (cheap) candidate evaluation per cell. Under [`StandardCreep`](@ref) this collapses back to the
 original two branches (`l_c` linear everywhere, so only the `beta`-threshold matters).
 
-Every linear branch goes through [`relax_update`](@ref): backward Euler while its rate (`C` or
+Every linear branch goes through `relax_update`: backward Euler while its rate (`C` or
 `gamma + C`) is non-negative, and the exact exponential solution when it is negative (`N < 0`,
 where "closure" is really opening) -- so no branch ever divides by a vanishing or negative
 `1 + dt*rate`. The quadratic branches only run for `C > 0`. Unconditionally stable for any `dt`,
@@ -399,7 +399,7 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Writes `C + gamma` (the same local relaxation rate behind [`compute_b_fully_implicit_kernel!`](@ref)'s
+Writes `C + gamma` (the same local relaxation rate behind `compute_b_fully_implicit_kernel!`'s
 branch-1 denominator, i.e. the reciprocal of the physical timescale `tau` the timestep-selection
 report is built on) into `rate` for every `GROUNDED` cell; non-grounded cells get `-Inf`, which never
 wins a `maximum` reduction and marks the cell for exclusion from a percentile reduction
@@ -448,8 +448,8 @@ end
 """
 $(TYPEDSIGNATURES)
 
-[`freeze_on_capacity_cell`](@ref) for the local terms of the SUHMO gap update under
-[`WithDiffusion`](@ref) ([`b_diffusion_local_terms`](@ref)), ignoring the diffusion itself: creep
+`freeze_on_capacity_cell` for the local terms of the SUHMO gap update under
+[`WithDiffusion`](@ref) (`b_diffusion_local_terms`), ignoring the diffusion itself: creep
 with `C > 0` is implicit through the lagged ratio `lc/b` (so it closes `C*(lc/b)*b_min` at the
 limit), creep with `C <= 0` is explicit (`C*lc`), and opening by sliding is implicit while the lagged
 `beta > 0` (`gamma*(br - b_min)`). Setting the solved `b` to `b_min` with `mdot/rho_i = -f` gives

@@ -152,12 +152,12 @@ picard_status(hs::ParabolicHeadScheme) = (hs.pps.converged, hs.pps.last_iter)
 $(TYPEDSIGNATURES)
 
 Advances `sim` by one timestep: recomputes `sim.dt[]` if `sim.ts` is adaptive
-([`update_dt!`](@ref)), refreshes the melt input ([`update_ieb!`](@ref)), brings the head solve's
-inputs up to date and sets its initial guess ([`prepare_head_solve!`](@ref)), solves for the new
+(`update_dt!`), refreshes the melt input ([`update_ieb!`](@ref)), brings the head solve's
+inputs up to date and sets its initial guess (`prepare_head_solve!`), solves for the new
 head ([`step_h!`](@ref)), records it for the next step's extrapolation (`sim.he`), sets the empty part of the gap
 ([`update_b_empty!`](@ref), [`UnfilledCavities`](@ref)) and the uplift layer ([`update_b_uplift!`](@ref),
 [`IceUplift`](@ref)) from the solved head, evolves the gap height ([`step_b!`](@ref)), checks it
-([`check_gap_height`](@ref)), and under the elliptic scheme sets the empty volume from the water budget
+(`check_gap_height`), and under the elliptic scheme sets the empty volume from the water budget
 ([`update_b_empty_budget!`](@ref)).
 """
 function step!(sim::Simulation)
@@ -264,7 +264,7 @@ Recomputes every field derived from the current `h`, `b` and mask with the simul
 helpers ([`set_initial_conditions!`](@ref), [`freeze_cells!`](@ref), [`thaw_cells!`](@ref), [`set_mask!`](@ref),
 [`update_frozen_mask!`](@ref)) know only the `State` and `ModelParameters`, so they leave `N` without the cell clamps,
 the outflow-only faces open and the face conductances arithmetic. Every step refreshes them before its first solve
-([`prepare_head_solve!`](@ref)), but what is read before that saw the helper's version: the observer's frame 0, step 1's
+(`prepare_head_solve!`), but what is read before that saw the helper's version: the observer's frame 0, step 1's
 start-of-step melt ([`ImplicitUpwind`](@ref)) and freeze-on capacity, and a coupled model reading `N` or `mdot` after a
 mask change. Called by `Simulation` at construction and by the `Simulation` methods of the mask helpers; `h` and `b` are
 not changed, nor is the start-of-step melt of [`ImplicitUpwind`](@ref) (`State.mdot0`, the melt at the start-of-step gap,
@@ -339,7 +339,7 @@ end
 $(TYPEDSIGNATURES)
 
 Reduces `rate` (this step's `C+gamma` field, see [`compute_dt_rate_kernel!`](@ref)) to the single
-statistic [`update_dt!`](@ref) divides `safety_factor` by. `UsePercentile=false`: the plain domain
+statistic `update_dt!` divides `safety_factor` by. `UsePercentile=false`: the plain domain
 maximum -- a single GPU-native reduction, no allocation, fully conservative (governed by the
 single fastest-relaxing cell). `UsePercentile=true`: one bulk `copyto!` of `rate` into
 `ts.host_rate` (CUDA.jl/Metal.jl's real device->host transfer -- scalar-indexing `rate` directly
@@ -348,7 +348,7 @@ gathers the `GROUNDED`-cell values (those [`compute_dt_rate_kernel!`](@ref) did 
 so the grounded set follows mask changes during the run) into `ts.scratch`, sorts them in place,
 and indexes the `ts.percentile`-th entry. None of this allocates -- every buffer is preallocated
 once by [`AdaptiveTimeStep`](@ref)'s constructor. Returns `0` outright if there are no `GROUNDED`
-cells, which feeds the same `stat <= 0 -> dt_max` fallback [`update_dt!`](@ref) uses for "no cell
+cells, which feeds the same `stat <= 0 -> dt_max` fallback `update_dt!` uses for "no cell
 has a positive rate" (the maximum of an all-`-Inf` field is `-Inf`, so `UsePercentile=false` falls
 back the same way).
 """
@@ -402,7 +402,7 @@ Evolves the gap height `sim.state.b` by one timestep. Dispatches on `sim.ds` fir
 [`WithDiffusion`](@ref), `sim.gs` is **not consulted at all** -- [`solve_b_diffusion!`](@ref) solves
 the coupled diffusion system (SUHMO Eq. 17) directly, since that equation only defines one way to
 combine diffusion with the local opening/closure terms (closure with `N > 0` and
-opening-by-sliding implicit on the diagonal, melt explicit -- see [`b_diffusion_local_terms`](@ref),
+opening-by-sliding implicit on the diagonal, melt explicit -- see `b_diffusion_local_terms`,
 `linear_solver.jl`), not one per
 [`AbstractGapScheme`](@ref). Under [`NoDiffusion`](@ref) (the default), behaves exactly as before,
 dispatching on `sim.gs` (`ImplicitGapScheme()`/`ExplicitGapScheme()`/`FullyImplicitGapScheme()`) to
@@ -424,18 +424,18 @@ $(TYPEDSIGNATURES)
 Freeze-on capacity [m/s of ice] of every `GROUNDED` cell for a host's capacity basal boundary
 condition, from the current state (call it before the host's thermodynamic step, i.e. with this
 step's `b` and the last step's `N` and `|u_b|`): the fastest freezing the next gap update can absorb
-without `b` falling below `p.b_min`, see [`freeze_on_capacity_cell`](@ref). Zero off `GROUNDED`.
+without `b` falling below `p.b_min`, see `freeze_on_capacity_cell`. Zero off `GROUNDED`.
 Under [`UnfilledCavities`](@ref) (`water_limited = true`, the default; `false` restores the gap-room limit alone) the capacity is also capped by the water actually present, `(rho_w/rho_i)*(b - b_empty)/dt`: freezing
 consumes water, which an empty cavity does not have. Without the cap a dry cell can freeze water that is not there (about 3 times the melt supply on Greenland 16 km).
 Freezing closes the gap by the ice thickness and expels the excess water into the flow, so the limit
-is gap room, not water mass, and the result is local (no inflow term). Under the dry floor ([`dry_floor`](@ref)) the water
+is gap room, not water mass, and the result is local (no inflow term). Under the dry floor (`dry_floor`) the water
 `W = b - b_dry` replaces `b - b_min` as the room, and the capacity is capped by the water too, `(rho_w/rho_i)*W/dt`
-([`freeze_on_capacity_dry_floor_kernel!`](@ref)): a gap the update may drain to zero can freeze only the water it holds.
+(`freeze_on_capacity_dry_floor_kernel!`): a gap the update may drain to zero can freeze only the water it holds.
 
 Where each term is evaluated follows the gap scheme in use: [`FullyImplicitGapScheme`](@ref) takes
 opening by sliding and creep at `b_min`, [`ImplicitGapScheme`](@ref) sliding at the old `b` (lagged
 `beta`) and creep at `b_min`, [`ExplicitGapScheme`](@ref) both at the old `b`. Under [`WithDiffusion`](@ref) it follows SUHMO's
-local terms ([`freeze_on_capacity_cell_diffusion`](@ref)) and ignores the diffusion of `b`, which only
+local terms (`freeze_on_capacity_cell_diffusion`) and ignores the diffusion of `b`, which only
 moves gap volume between grounded cells: `C` is then conservative where `b` is a local minimum and
 generous where it is a local maximum.
 
@@ -511,7 +511,7 @@ Fully implicit update of `sim.state.b`: both the creep-closure term and the open
 term are evaluated at the new `b` -- unconditionally stable for any `sim.dt`, regardless of `p.br`.
 Unlike [`ImplicitGapScheme`](@ref), this reads `p.br`/`p.lr` directly instead of `s.beta` (which
 stays lagged by design, see `gap_height.jl`'s module docstring) -- see
-[`compute_b_fully_implicit_kernel!`](@ref) for the closed-form solve (two branches under
+`compute_b_fully_implicit_kernel!` for the closed-form solve (two branches under
 [`StandardCreep`](@ref), four under [`CreepCutoff`](@ref)).
 """
 function compute_b!(sim::Simulation, ::FullyImplicitGapScheme)
@@ -540,7 +540,7 @@ $(TYPEDSIGNATURES)
 
 The gap coupling the head rows of this step use: [`ExplicitGapCoupling`](@ref) as it is, or, for
 [`ConsistentGapCoupling`](@ref), its kernel form [`SchemeGapUpdate`](@ref) with this step's `dt` and the simulation's gap
-and creep-length schemes, or [`DiffusiveGapUpdate`](@ref) under [`WithDiffusion`](@ref).
+and creep-length schemes, or `DiffusiveGapUpdate` under [`WithDiffusion`](@ref).
 """
 gap_coupling_terms(sim::Simulation) = gap_coupling_terms(sim, sim.gcp)
 gap_coupling_terms(sim::Simulation, ::ExplicitGapCoupling) = ExplicitGapCoupling()
@@ -576,7 +576,7 @@ end
 """
 $(TYPEDSIGNATURES)
 
-[`compute_b!`](@ref) under the dry floor ([`dry_floor`](@ref)), for every gap scheme: the water moves by the scheme's own
+[`compute_b!`](@ref) under the dry floor (`dry_floor`), for every gap scheme: the water moves by the scheme's own
 update with no lower clamp ([`scheme_water`](@ref), the same function the head rows use), the gap is that water held at
 `b_min`, and `b_dry` the volume below the water.
 """

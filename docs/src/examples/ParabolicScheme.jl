@@ -1,115 +1,79 @@
 #=
 # [Parabolic head scheme](@id ParabolicScheme)
-Every other example in this gallery uses the default [`EllipticHeadScheme`](@ref) (`p.e_v == 0`):
-each timestep, hydraulic head `h` is solved to full nonlinear (Picard) convergence given the
-current transmissivity `K`/gap height `b` -- `h` has no memory of its own, only `b` carries state
-forward between timesteps. Setting `p.e_v != 0` (a nonzero englacial storage void ratio, Sommers,
-Rajaram & Morlighem 2018's Eq. 13 `∂(e_v(h-zb))/∂t` term) switches to [`ParabolicHeadScheme`](@ref)
-instead: `h` itself now has inertia, so it takes several timesteps to catch up to a sudden change
-in forcing rather than jumping there in one step. This example runs the same synthetic slab
-under both schemes from an identical spun-up state and tracks how far apart their `h` fields
-stay as both relax toward steady state.
+With `e_v = 0` (the default) the head has no memory: each step solves an elliptic equation, and
+`h` jumps to the balance of the current gap and input. A non-zero englacial void ratio `e_v` adds
+the storage term `e_v ∂h/∂t` of [Sommers2018](@cite) (Eq. 13), so the head equation becomes
+parabolic and `h` takes time to follow a change in the input.
+
+This page runs when the docs are built. It spins up the margin of the [Tutorial](@ref), then
+raises the input from 1 to 10 m/a and follows the water pressure for ten days with
+`e_v = 0`, `1e-4` and `1e-3`.
 =#
 
 using Shakti
 using CairoMakie
+using Statistics: mean
 
-# ## Geometry, mask, and physical setup
-# The same synthetic slab as the [Seasonal melt input](@ref SeasonalMeltInput) example (Table 2
-# geometry from Sommers, Rajaram & Morlighem 2018): outlet at `x=0` ([`LAND`](@ref), Dirichlet
-# head = 0), zero-flux elsewhere ([`OTHER_BASIN`](@ref)). No moulin here -- `ieb` is applied
-# uniformly, so a single domain-mean head timeseries tells the whole story.
-
-const NX, NY = 16, 16
-const LX, LY = 4000.0, 8000.0
-grid = Grid(NX, NY, LX, LY)
-
-zb = zeros(NX, NY)
-H0, H1 = 550.0, 700.0
-Hx = sqrt.(H0^2 .+ (H1^2 - H0^2) .* (grid.x ./ LX))
-zs = repeat(Hx, 1, NY)
-
-mask = fill(GROUNDED, NX, NY)
-mask[1, :]   .= LAND
+#=
+## Spin-up
+The tutorial's margin with the defaults, 100 days of 1-day steps at 1 m/a.
+=#
+nx, ny = 80, 20
+grid = Grid(nx, ny, 20000.0, 5000.0)
+mask = fill(GROUNDED, nx, ny)
+mask[1, :] .= LAND
 mask[end, :] .= OTHER_BASIN
-mask[:, 1]   .= OTHER_BASIN
-mask[:, end] .= OTHER_BASIN
+mask[:, [1, end]] .= OTHER_BASIN
+zs = [6 * (sqrt(x + 5000.0) - sqrt(5000.0)) + 1 for x in grid.x, y in grid.y]
+spy = 365 * 86400.0
 
-A_visc = fill(5e-25, NX, NY)
-b      = fill(0.01, NX, NY)
-G      = fill(0.05, NX, NY)
-ub_x   = fill(1e-6, NX + 1, NY)
-ub_y   = zeros(NX, NY + 1)
-sl     = RegularizedCoulombSlidingLaw(0.25)
-taub_x = zeros(NX + 1, NY) # unused: RegularizedCoulombSlidingLaw recomputes taub from N/ub every Picard iteration
-taub_y = zeros(NX, NY + 1)
-
-const SECONDS_PER_YEAR = 365 * 86400.0
-
-# ## Baseline: spin up under the elliptic scheme
-# `p.e_v` doesn't enter [`set_initial_conditions!`](@ref) at all, so a single elliptic spin-up
-# (matching [Seasonal melt input](@ref SeasonalMeltInput)'s own baseline) gives a physically
-# sensible common starting point for both schemes below -- built with elliptic rather than
-# parabolic since Picard's nonlinear convergence, not storage-damped transients, is what "steady"
-# should mean for a baseline.
-
-p_base = ModelParameters(e_v = 0.0, b_min = 1e-3, omega = 1e-4)
-ieb_base = fill(1.0 / SECONDS_PER_YEAR, NX, NY) # 1 m/yr distributed background melt
-
+sl = RegularizedCoulombSlidingLaw(0.25)
 state0 = State(grid)
-set_initial_conditions!(state0, grid, p_base, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb_base, taub_x, taub_y)
+set_initial_conditions!(state0, grid, ModelParameters(), sl, mask, fill(5e-25, nx, ny), zeros(nx, ny), zs,
+                        fill(0.01, nx, ny), fill(0.05, nx, ny), fill(1e-6, nx + 1, ny), zeros(nx, ny + 1),
+                        fill(1.0 / spy, nx, ny), zeros(nx + 1, ny), zeros(nx, ny + 1))
+ps = PicardSolver(200, 1e-6, LUDirectSolver(grid), grid)
+run!(Simulation(grid, state0, 100, floattype(86400.0), ModelParameters(), "fully_implicit", String[],
+                ConstantMeltInput(), sl; ps = ps))
 
-ls_spinup = CholeskyDirectSolver(grid)
-ps_spinup = PicardSolver(500, 1e-6, ls_spinup, grid; alpha = 0.1)
-sim_spinup = Simulation(grid, state0, 20, floattype(3600.0), p_base, "fully_implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps_spinup)
-run!(sim_spinup)
+#=
+## The step in the input
+`set_ieb_external!` adds 9 m/a on top of the 1 m/a, the way a coupled model adds its own input.
+The parabolic scheme takes its own solver, `pps = ParabolicPicardSolver(...)`, with the same
+linear solvers as the elliptic one. Hourly steps resolve the response.
+=#
+dt, nsteps = 3600.0, 240
+gr = mask .== GROUNDED
+runs = map((0.0, 1e-4, 1e-3)) do e_v
+    st = deepcopy(state0)
+    set_ieb_external!(st, fill(9.0 / spy, nx, ny))
+    p = ModelParameters(e_v = e_v)
+    solver = e_v == 0 ? (ps = PicardSolver(200, 1e-6, LUDirectSolver(grid), grid),) :
+                        (pps = ParabolicPicardSolver(200, 1e-6, LUDirectSolver(grid), grid),)
+    sim = Simulation(grid, st, nsteps, floattype(dt), p, "fully_implicit", ["pw", "po"], ConstantMeltInput(), sl;
+                     solver..., which_observer = "Live", tracked_times = 0:nsteps)
+    run!(sim)
+    pw, po = sim.observer.history["pw"], sim.observer.history["po"]
+    (e_v = e_v, ratio = [mean(pw[:, :, k][gr] ./ po[:, :, k][gr]) for k in axes(pw, 3)])
+end;
 
-# ## Steady state: same destination, different path
-# `e_v` only sets how fast `h` relaxes toward the steady balance of diffusion vs. sources
-# (Sommers et al. 2018 Eq. 13's `e_v*∂h/∂t` storage term vanishes once `∂h/∂t -> 0`) -- it doesn't
-# change what that balance *is*. Starting fresh from the spun-up baseline `state0` (the
-# 1 m/yr background melt), running both schemes forward with `h` tracked at every step shows the
-# two fields converging onto the same fixed point rather than just confirming they end there.
-
-p_elliptic_ss  = ModelParameters(e_v = 0.0,  b_min = 1e-3, omega = 1e-4)
-p_parabolic_ss = ModelParameters(e_v = 1e-3, b_min = 1e-3, omega = 1e-4)
-
-state_elliptic_ss  = deepcopy(state0)
-state_parabolic_ss = deepcopy(state0)
-
-dt_ss, tsteps_ss = 86400.0, 300 # 1 day steps, ~10 months -- long enough for both schemes to plateau
-tracked_times_ss = 0:tsteps_ss
-
-ls_elliptic_ss = CholeskyDirectSolver(grid)
-ps_elliptic_ss = PicardSolver(500, 1e-6, ls_elliptic_ss, grid; alpha = 0.1)
-sim_elliptic_ss = Simulation(grid, state_elliptic_ss, tsteps_ss, floattype(dt_ss), p_elliptic_ss, "fully_implicit", ["h"], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(),
-                             ps = ps_elliptic_ss, which_observer = "Live", tracked_times = tracked_times_ss)
-run!(sim_elliptic_ss)
-
-ls_parabolic_ss = CholeskyDirectSolver(grid)
-sim_parabolic_ss = Simulation(grid, state_parabolic_ss, tsteps_ss, floattype(dt_ss), p_parabolic_ss, "fully_implicit", ["h"], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(),
-                              ls = ls_parabolic_ss, which_observer = "Live", tracked_times = tracked_times_ss)
-run!(sim_parabolic_ss)
-
-# ## Results
-# Relative difference (max |Δh| over the domain, scaled by max |h| that step) between the two
-# `h` fields at every tracked step: it starts at 0 (identical spin-up state), grows while the
-# parabolic scheme's storage still lags the elliptic scheme's instantaneous balance, then decays
-# back toward 0 as both relax onto the same steady state. The inset re-plots the back half on a
-# log axis, since on the main linear axis the tail is indistinguishable from 0 even though it's
-# still decaying (down to floating-point noise by the end).
-
-hist_e_ss, hist_p_ss = sim_elliptic_ss.observer.history["h"], sim_parabolic_ss.observer.history["h"]
-days = collect(tracked_times_ss) .* (dt_ss / 86400)
-h_diff_rel = [maximum(abs.(view(hist_e_ss, :, :, i) .- view(hist_p_ss, :, :, i))) / maximum(abs.(view(hist_e_ss, :, :, i))) for i in axes(hist_e_ss, 3)]
-
-fig_diff = Figure(size = (600, 400))
-ax = Axis(fig_diff[1, 1], title = "Relative difference between elliptic and parabolic steady-state h", xlabel = "Days", ylabel = "max |Δh| / max |h|")
-lines!(ax, days, h_diff_rel)
-
-tail = (length(days) ÷ 2):length(days)
-ax_inset = Axis(fig_diff[1, 1], width = Relative(0.4), height = Relative(0.4), halign = 0.9, valign = 0.9,
-                yscale = log10, backgroundcolor = :white, xlabelsize = 10, ylabelsize = 10, xticklabelsize = 8, yticklabelsize = 8)
-lines!(ax_inset, days[tail], h_diff_rel[tail])
-translate!(ax_inset.blockscene, 0, 0, 100)
-fig_diff
+#=
+## Results
+The mean `p_w/p_o` over the margin. All runs end at the same pressure, about 0.18, set by the gap.
+* `e_v = 0`: the pressure jumps from 0.08 to 0.42 in the first step, because the gap is still sized
+  for 1 m/a, and falls back over two to three days as the gap opens.
+* `e_v = 1e-4`: the water first fills the englacial voids; the pressure peaks at 0.26 after about a
+  day and settles within five days.
+* `e_v = 1e-3`: the pressure rises over days, overshoots slightly at about six days and is still
+  settling after ten.
+=#
+hours = (0:nsteps) .* dt ./ 3600
+colors = cgrad(:viridis, 3; categorical = true)
+fig = Figure(size = (720, 360))
+ax = Axis(fig[1, 1]; xlabel = L"t\ [\mathrm{h}]", ylabel = L"\mathrm{mean}\ p_w/p_o",
+          xtickformat = vs -> [L"%$(round(Int, v))" for v in vs], ytickformat = vs -> [L"%$(round(v, digits = 2))" for v in vs])
+for (c, r) in enumerate(runs)
+    lines!(ax, hours, r.ratio; color = colors[c], linewidth = 2, label = L"e_v = %$(r.e_v)")
+end
+Legend(fig[1, 2], ax; framevisible = false)
+fig

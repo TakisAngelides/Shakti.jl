@@ -1,163 +1,107 @@
 #=
-# [Seasonal melt input](@id SeasonalMeltInput)
-A small, fast-running version of Sect. 3.3 of Sommers, Rajaram & Morlighem (2018)
-(https://doi.org/10.5194/gmd-11-2955-2018), "Seasonal variation and distributed meltwater
-input": a synthetic slab geometry, spun up under a steady winter melt rate, then driven for
-one year by [`SeasonalMeltInput`](@ref)'s cosine-shaped melt-season cycle -- showing how gap
-height and hydraulic head respond as the system channelizes and relaxes with the seasons.
+# [Seasonal melt](@id SeasonalMeltInput)
+The seasonal experiment of [Sommers2018](@cite) (Sect. 3.3) on the ice-sheet margin of the
+[Tutorial](@ref), with the default sheet. `SeasonalMeltInput()` holds the input at 1 m/a in winter
+and raises it along a cosine to almost 1000 m/a in the melt season, from day 146 to day 256.
+
+This page runs when the docs are built: one year of 1-day steps. The winter before the melt
+season is the spin-up.
 =#
 
 using Shakti
+using NetCDF
 using CairoMakie
-using Random
-using Statistics
+using Statistics: mean
 
-# ## Geometry
-# A small synthetic domain: flat bed, ice surface parabolic in `x` (thin near the outflow at
-# `x=0`, thickening upglacier), uniform in `y` -- the same synthetic setup the paper uses for
-# this experiment (Table 2), just at a coarser grid/timestep so this example runs quickly.
+#=
+## Setup
+The same margin as the tutorial: flat bed, SHMIP surface [deFleurian2018](@cite), outlet at `x = 0`.
+=#
+nx, ny = 80, 20
+grid = Grid(nx, ny, 20000.0, 5000.0)
 
-const NX, NY = 16, 16
-const LX, LY = 4000.0, 8000.0 # 4 km x 8 km, matching the paper's domain
-grid = Grid(NX, NY, LX, LY)
-
-zb = zeros(NX, NY)
-H0, H1 = 550.0, 700.0 # ice thickness at x=0 / x=Lx (m), the paper's endpoints
-Hx = sqrt.(H0^2 .+ (H1^2 - H0^2) .* (grid.x ./ LX)) # zb=0, so surface elevation == thickness
-zs = repeat(Hx, 1, NY)
-
-fig_geom = let
-    fig = Figure(size = (450, 350))
-    ax = Axis(fig[1, 1], title = "Ice surface elevation (m)", xlabel = "x (m)", ylabel = "y (m)")
-    hm = heatmap!(ax, grid.x, grid.y, zs)
-    Colorbar(fig[1, 2], hm)
-    fig
-end
-fig_geom
-
-# ## Mask and boundary conditions
-# Outflow at `x=0` ([`LAND`](@ref): Dirichlet head = 0, i.e. atmospheric pressure); the other
-# three edges are zero-flux ([`OTHER_BASIN`](@ref)).
-
-mask = fill(GROUNDED, NX, NY)
-mask[1, :]   .= LAND
+mask = fill(GROUNDED, nx, ny)
+mask[1, :] .= LAND
 mask[end, :] .= OTHER_BASIN
-mask[:, 1]   .= OTHER_BASIN
-mask[:, end] .= OTHER_BASIN;
+mask[:, [1, end]] .= OTHER_BASIN
 
-# ## Physical parameters and initial gap height
-# Zero englacial storage (`e_v = 0`, required by [`EllipticHeadScheme`](@ref), and the paper's
-# own choice too). Initial gap height 0.01 m plus 1% noise, to seed channelization instabilities.
-# `omega = 1e-4` (also [`ModelParameters`](@ref)'s own default, deliberately differing from Table
-# 2's `0.001` -- see its docstring) keeps the Reynolds numbers reached during channelization out of
-# the flux law's steepest, hardest-to-converge transitional band, which is what keeps the Picard
-# solve (and hence this time series) stable instead of oscillating; set explicitly here since it's
-# what actually makes this example's plots clean, not just an incidental default.
+zb = zeros(nx, ny)
+zs = [6 * (sqrt(x + 5000.0) - sqrt(5000.0)) + 1 for x in grid.x, y in grid.y]
+b  = fill(0.01, nx, ny)
 
-p = ModelParameters(e_v = 0.0, b_min = 1e-3, omega = 1e-4)
-
-A_visc = fill(5e-25, NX, NY)
-G      = fill(0.05, NX, NY)
-ub_x   = fill(1e-6, NX + 1, NY)
-ub_y   = zeros(NX, NY + 1)
-sl     = RegularizedCoulombSlidingLaw(0.25)
-taub_x = zeros(NX + 1, NY) # unused: RegularizedCoulombSlidingLaw recomputes taub from N/ub every Picard iteration
-taub_y = zeros(NX, NY + 1)
-
-rng = Random.MersenneTwister(1)
-b = fill(0.01, NX, NY) .* (1 .+ 0.01 .* randn(rng, NX, NY));
-
-# ## Spin-up
-# A short spin-up under a steady 1 m/yr distributed melt input, reaching a reasonable starting
-# state before switching on the seasonal cycle.
-
-const SECONDS_PER_YEAR = 365 * 86400.0
-mi_spinup = ConstantMeltInput()
-ieb_spinup = fill(1.0 / SECONDS_PER_YEAR, NX, NY) # 1 m/yr -> m/s
-
+p  = ModelParameters()
+sl = RegularizedCoulombSlidingLaw(0.25)
 state = State(grid)
-set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb_spinup, taub_x, taub_y)
+set_initial_conditions!(state, grid, p, sl, mask, fill(5e-25, nx, ny), zb, zs, b, fill(0.05, nx, ny),
+                        fill(1e-6, nx + 1, ny), zeros(nx, ny + 1), fill(1.0 / (365 * 86400.0), nx, ny),
+                        zeros(nx + 1, ny), zeros(nx, ny + 1));
 
-ls = CholeskyDirectSolver(grid)
-ps = PicardSolver(500, 1e-6, ls, grid; alpha = 0.1) # under-relaxed: the paper's own Fig. 10 shows this Picard/dt combination oscillates once channelization onsets
-
-sim_spinup = Simulation(grid, state, 20, floattype(3600.0), p, "fully_implicit", String[], mi_spinup, sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps)
-run!(sim_spinup)
-
-# ## Seasonal cycle
-# Switch to [`SeasonalMeltInput`](@ref)'s cosine-shaped melt season, and run for one year at the
-# paper's own hourly timestep.
-
-mi_seasonal = SeasonalMeltInput()
-state.ieb .= ieb_spinup # harmless placeholder value, overwritten on the first step below
-
-dt = 3600.0
-tsteps = round(Int, SECONDS_PER_YEAR / dt)
-tracked_times = 0:tsteps
-
-sim = Simulation(grid, state, tsteps, floattype(dt), p, "fully_implicit", ["h", "b", "N"], mi_seasonal, sl; cavity_filling = FilledCavities(), uplift = NoUplift(),
-                 ps = ps, which_observer = "Live", tracked_times = tracked_times)
+#=
+## Run
+`SeasonalMeltInput(; t_start, t_end, amplitude, offset, i_min)` sets the window (year fractions)
+and the cosine (m/a); the defaults are the paper's. The input is uniform in space and updated once
+per step.
+=#
+mi = SeasonalMeltInput()
+dt, nsteps = 86400.0, 365
+path = joinpath(mktempdir(), "seasonal.nc")
+ps = PicardSolver(200, 1e-6, LUDirectSolver(grid), grid)
+sim = Simulation(grid, state, nsteps, floattype(dt), p, "fully_implicit", ["N", "b", "Re", "ieb"], mi, sl;
+                 ps = ps, which_observer = "IO", which_file_writer = "NetCDF", tracked_times = 0:nsteps, path = path)
 run!(sim)
+sim.hs.ps.converged
 
-# ## Results
-# Domain min/mean/max gap height and head over the year: both stay low through winter, rise as
-# the melt season (roughly days 146-255, `t_start=0.4` to `t_start+period=0.7` of the year)
-# drives the system toward a more channelized, higher-flux state, then relax back down.
+#=
+## Through the year
+The input, the mean effective pressure and the largest gap. The winter state is reached within
+about 100 days. In the melt season `N` drops by half within two weeks and recovers as the gap opens;
+it is back to its winter value as soon as the input is.
+=#
+N, bb, Re, ieb = (ncread(path, v) for v in ("N", "b", "Re", "ieb"))
+days = ncread(path, "time") ./ 86400
+gr = mask .== GROUNDED
+spy = 365 * 86400.0
+series = [(L"\mathrm{input}\ [\mathrm{m\,a^{-1}}]", [mean(ieb[:, :, k][gr]) * spy for k in axes(ieb, 3)], log10),
+          (L"\mathrm{mean}\ N\ [\mathrm{MPa}]", [mean(N[:, :, k][gr]) / 1e6 for k in axes(N, 3)], identity),
+          (L"\max\ b\ [\mathrm{m}]", [maximum(bb[:, :, k][gr]) for k in axes(bb, 3)], log10)]
+lin = vs -> [L"%$(round(v, digits = 1))" for v in vs]
+pow10 = vs -> [L"10^{%$(round(Int, log10(v)))}" for v in vs]
+decades(v) = 10.0 .^ (floor(Int, log10(minimum(v))):ceil(Int, log10(maximum(v))))
 
-hist = sim.observer.history
-days = (0:tsteps) .* (dt / 86400)
-b_hist, h_hist, N_hist = hist["b"], hist["h"], hist["N"]
-
-fig_ts = Figure(size = (650, 500))
-ax_b = Axis(fig_ts[1, 1], title = "Gap height (m)", xlabel = "Day of year")
-lines!(ax_b, days, [minimum(view(b_hist, :, :, i)) for i in axes(b_hist, 3)], label = "min")
-lines!(ax_b, days, [mean(view(b_hist, :, :, i)) for i in axes(b_hist, 3)], label = "mean")
-lines!(ax_b, days, [maximum(view(b_hist, :, :, i)) for i in axes(b_hist, 3)], label = "max")
-axislegend(ax_b)
-ax_h = Axis(fig_ts[2, 1], title = "Hydraulic head (m)", xlabel = "Day of year")
-lines!(ax_h, days, [minimum(view(h_hist, :, :, i)) for i in axes(h_hist, 3)], label = "min")
-lines!(ax_h, days, [mean(view(h_hist, :, :, i)) for i in axes(h_hist, 3)], label = "mean")
-lines!(ax_h, days, [maximum(view(h_hist, :, :, i)) for i in axes(h_hist, 3)], label = "max")
-axislegend(ax_h)
-fig_ts
-
-# ## Spatial snapshots
-# Gap height, head, and effective pressure at representative days across the year: the channel
-# the melt season carves out along the outflow direction (`x=0`) opens as the season peaks
-# (days ~180-250) and closes back down to the winter baseline by day 365.
-
-grounded = mask .== GROUNDED
-mask_nan(field) = ifelse.(grounded, field, NaN)
-
-snapshot_days = (1, 150, 180, 200, 220, 250, 280, 365)
-snapshot_idx = [clamp(round(Int, d * 86400 / dt), 0, tsteps) + 1 for d in snapshot_days]
-
-fig_snap = Figure(size = (240 * length(snapshot_days), 650))
-for (col, (d, idx)) in enumerate(zip(snapshot_days, snapshot_idx))
-    ax1 = Axis(fig_snap[1, col], title = "Day $d\ngap height (m)", aspect = DataAspect())
-    heatmap!(ax1, grid.x, grid.y, mask_nan(view(b_hist, :, :, idx)), colormap = :inferno, nan_color = :transparent)
-    ax2 = Axis(fig_snap[2, col], title = "head (m)", aspect = DataAspect())
-    heatmap!(ax2, grid.x, grid.y, mask_nan(view(h_hist, :, :, idx)), colormap = :dense, nan_color = :transparent)
-    ax3 = Axis(fig_snap[3, col], title = "eff. pressure (Pa)", aspect = DataAspect())
-    heatmap!(ax3, grid.x, grid.y, mask_nan(view(N_hist, :, :, idx)), colormap = :viridis, nan_color = :transparent)
+fig = Figure(size = (720, 560))
+for (r, (name, v, scale)) in enumerate(series)
+    ax = Axis(fig[r, 1]; ylabel = name, yscale = scale, xlabel = r == 3 ? L"\mathrm{day}" : "",
+              xticklabelsvisible = r == 3, xtickformat = vs -> [L"%$(round(Int, d))" for d in vs],
+              yticks = scale === log10 ? decades(v) : Makie.automatic, ytickformat = scale === log10 ? pow10 : lin)
+    vspan!(ax, 146, 256; color = (:orange, 0.12))
+    lines!(ax, days, v; color = :black, linewidth = 2)
 end
-fig_snap
+rowgap!(fig.layout, 8)
+fig
 
-# ## Higher resolution (128×128)
-# The same experiment at production resolution (`NX = NY = 128`), gap height only, generated on
-# `albedo0` by `test/channelization_seasonal/run_channelization.jl` + `plot_channelization.jl`
-# (cluster-only tooling, see that folder's README) -- a year of hourly steps at this grid size is
-# too heavy to re-run on every docs build, so what follows is static, pre-rendered output copied
-# straight into the page; nothing below this point is executed as part of the build.
-#
-# ![Domain min/mean/max gap height over the year at 128×128](seasonal_128/timeseries.png)
-#
-# ![Spatial gap-height snapshots at 128×128](seasonal_128/snapshots.png)
-#
-# Gap height over the melt season (trimmed to the active channelization window):
-#
-# ```@raw html
-# <video autoplay loop muted playsinline style="width:100%"><source src="../seasonal_128/gap_height.mp4" type="video/mp4"></video>
-# ```
-# `../`, one level more than the images above: `@raw html` bypasses Documenter's link #src
-# rewriting, so it needs the real `prettyurls`-nested path by hand. #src
+#=
+## Along the flow line
+`N` and the gap along `x` before, during and after the melt season. Inland the gap is back to its
+winter profile within days of the season's end. Within 2 km of the outlet the ice is under 50 m
+thick and closes the gap very slowly, so the gap the season opened there stays.
+=#
+show_days = [140, 170, 200, 230, 260, 365]
+frames = [findfirst(>=(d), days) for d in show_days]
+jm = ny ÷ 2
+ix = findall(gr[:, jm])
+xkm = grid.x[ix] ./ 1e3
+colors = cgrad(:viridis, length(frames); categorical = true)
+
+fig2 = Figure(size = (720, 480))
+ax1 = Axis(fig2[1, 1]; ylabel = L"N\ [\mathrm{MPa}]", xticklabelsvisible = false, ytickformat = lin)
+ax2 = Axis(fig2[2, 1]; ylabel = L"b\ [\mathrm{m}]", yscale = log10, xlabel = L"x\ [\mathrm{km}]",
+           xtickformat = vs -> [L"%$(round(Int, v))" for v in vs], ytickformat = pow10,
+           yticks = decades(vcat((bb[ix, jm, k] for k in frames)...)))
+for (c, k) in enumerate(frames)
+    lab = L"\mathrm{day}\ %$(round(Int, days[k]))"
+    lines!(ax1, xkm, N[ix, jm, k] ./ 1e6; color = colors[c], linewidth = 2, label = lab)
+    lines!(ax2, xkm, bb[ix, jm, k]; color = colors[c], linewidth = 2, label = lab)
+end
+Legend(fig2[1:2, 2], ax1; framevisible = false)
+rowgap!(fig2.layout, 8)
+fig2

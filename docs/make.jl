@@ -1,30 +1,38 @@
 CI = get(ENV, "CI", nothing) == "true" || get(ENV, "GITHUB_TOKEN", nothing) !== nothing
-using Documenter, Literate
+using CairoMakie, Documenter, Literate
+using DocumenterCitations
 ENV["JULIA_DEBUG"] = "Documenter"
 
 using Shakti
 
-for example in ("SeasonalMeltInput", "MaskVariants", "ParabolicScheme", "AllOptions", "Helheim")
-    Literate.markdown(
-        joinpath(@__DIR__, "src", "examples", "$example.jl"),
-        joinpath(@__DIR__, "src", "examples");
-        config = Dict("credit" => false)
-    )
+bib = CitationBibliography(joinpath(@__DIR__, "src", "refs.bib"); style = :authoryear)
+
+# Literate pages run live at build time. The real-data examples (Helheim, Drang Drung, Thwaites,
+# Greenland, Antarctica) are plain markdown with figures made by make_figures.jl.
+Literate.markdown(joinpath(@__DIR__, "src", "tutorial.jl"), joinpath(@__DIR__, "src"); config = Dict("credit" => false))
+
+literate_examples = ["SeasonalMeltInput", "ParabolicScheme", "SUHMO"]
+for example in literate_examples
+    Literate.markdown(joinpath(@__DIR__, "src", "examples", "$example.jl"), joinpath(@__DIR__, "src", "examples");
+                      config = Dict("credit" => false))
 end
 
 example_pages = [
-    "examples/SeasonalMeltInput.md",
-    "examples/MaskVariants.md",
-    "examples/ParabolicScheme.md",
-    "examples/AllOptions.md",
     "examples/Helheim.md",
     "examples/DrangDrung.md",
+    "examples/Thwaites.md",
+    "examples/Greenland.md",
+    "examples/Antarctica.md",
 ]
+
+more_pages = [["examples/$example.md" for example in literate_examples]..., "performance.md"]
 
 PAGES = [
     "index.md",
+    "tutorial.md",
     "Examples" => example_pages,
-    "API.md",
+    "More" => more_pages,
+    "References" => ["API_public.md", "references.md"],
 ]
 
 makedocs(
@@ -32,12 +40,14 @@ makedocs(
     format = Documenter.HTML(
         prettyurls = CI,
         collapselevel = 2,
+        size_threshold = 1_000_000,
     ),
     sitename = "Shakti.jl",
     authors = "Takis Angelides",
     pages = PAGES,
     doctest = CI,
     draft = false,
+    plugins = [bib],
     checkdocs = :exports,
     warnonly = true,
 )

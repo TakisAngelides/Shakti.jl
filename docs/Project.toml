@@ -1,12 +1,18 @@
 [deps]
 CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+DocumenterCitations = "daee34ce-89f3-4625-b898-19384cb65244"
 Literate = "98b081ad-f1c9-55d3-8b20-4c87d4299306"
 MAT = "23992714-dd62-5051-b70f-ba57cb901cac"
+NetCDF = "30363a11-5582-574a-97bb-aa9a979735b9"
 Shakti = "d638fb90-b6c0-422d-b96d-ad6c4615b4d0"
+
+[sources]
+Shakti = {path = ".."}
 
 [compat]
 CairoMakie = "0.15.13"
 Documenter = "1.17.0"
 Literate = "2.21.0"
 MAT = "0.12.1"
+NetCDF = "0.12.2"

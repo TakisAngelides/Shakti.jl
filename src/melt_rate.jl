@@ -184,7 +184,7 @@ parameters (see [`MeltTerms`](@ref)). Also stores the heat terms `s.Q_b`/`s.Q_di
 [W/m^2], prefactors applied, so `L*mdot = G + Q_b + Q_diss + Q_sens - q_T`; a term that is off is
 stored as 0. With `p.limit_freeze_on`, `mdot` is floored at `s.mdot_min = -rho_i*C`, the
 freeze-on the gap can supply this step ([`freeze_on_capacity!`](@ref), set once per step by
-[`prepare_head_solve!`](@ref)); the heat terms are stored unlimited. Computed in one fused kernel rather than by calling [`compute_shear!`](@ref) etc. (one
+`prepare_head_solve!`); the heat terms are stored unlimited. Computed in one fused kernel rather than by calling [`compute_shear!`](@ref) etc. (one
 launch instead of four). The englacial input `s.ieb` is not part of `mdot`: it enters the water
 mass balance only, not the gap opening.
 

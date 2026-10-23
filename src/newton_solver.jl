@@ -59,7 +59,7 @@
 $(TYPEDSIGNATURES)
 
 Evaluates the nonlinear elliptic-head residual `F(h) = A(h) h - b(h)` at `h_vec` (flat, length
-`g.nx*g.ny`), writing it into `res`. `A(h)`/`b(h)` are exactly [`update_SALS_elliptic!`](@ref)'s
+`g.nx*g.ny`), writing it into `res`. `A(h)`/`b(h)` are exactly `update_SALS_elliptic!`'s
 `sals.M`/`sals.rhs`, rebuilt from `h_vec` via [`refresh_head_dependents!`](@ref) first (so every
 h-dependent coefficient -- `K`, `N`, `mdot`, ... -- is refreshed at the CURRENT `h_vec`, not
 whatever `s.h` held before this call). Mutates `s.h` in place to `h_vec` as a side effect (needed
@@ -351,6 +351,6 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Mirrors [`picard_status`](@ref) for [`NewtonJFNKSolver`](@ref): returns `(converged, last_iter)`.
+Mirrors `picard_status` for [`NewtonJFNKSolver`](@ref): returns `(converged, last_iter)`.
 """
 newton_status(ns::NewtonJFNKSolver) = (ns.converged, ns.last_iter)
