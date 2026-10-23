@@ -7,7 +7,7 @@
         # gap faster than the melt fills it in the upper part (free surface, pw = 0), the lower part is filled; LAND margin
         # in the last column. Melt terms off, so the melt input m is the only source and mdot does not depend on the head.
         function ramp(; kface = "implicit_upwind", solver = :auto, dt = 3600.0, m_mmd = 5.0, omega = 1e-4, e_v = 0.0,
-                        cf = UnfilledCavities(), up = NoUplift(), hp = BedPotential(), gap = "fully_implicit", gc = ExplicitGapCoupling(), atol = 0, b_min = 1e-6)
+                        cf = UnfilledCavities(), up = NoUplift(), hp = BedPotential(), gap = "fully_implicit", gc = ExplicitGapCoupling(), atol = 0, b_min = 1e-6, outflow = true)
             nx, ny = 40, 3
             grid = Grid(nx, ny, 3.9e3, 200.0)
             x = Array(grid.x)
@@ -16,7 +16,8 @@
             mask = fill(GROUNDED, nx, ny); mask[end, :] .= LAND
             p = ModelParameters(; br = 0.1, lr = 2.0, b_min = b_min, e_v = e_v, omega = omega,
                                 mdot_includes_G = false, mdot_includes_frictional = false, mdot_includes_potential = false,
-                                mdot_includes_sensible = false, mdot_includes_qT = false, limit_freeze_on = false)
+                                mdot_includes_sensible = false, mdot_includes_qT = false, limit_freeze_on = false,
+                                outflow_only_land = outflow, outflow_only_ocean = outflow)
             state = State(grid)
             set_initial_conditions!(state, grid, p, sl, mask, fill(5e-25, nx, ny), zb, zb .+ H, fill(0.005, nx, ny), zeros(nx, ny),
                                     fill(ub, nx + 1, ny), zeros(nx, ny + 1), fill(m_mmd / 1000 / 86400, nx, ny), zeros(nx + 1, ny), zeros(nx, ny + 1))
@@ -253,12 +254,12 @@
             z, bc = Array(s.zb)[i, j], Array(s.b)[i, j]
             ho = z + Array(s.po)[i, j] / (sim.p.rho_w * sim.p.g)
             ins = max(1e-6 * bc, 64 * eps(abs(z) + one(z)))
-            function limited(hp, hn; dl = 0.0)
+            function limited(hp, hn; dl = 0.0, filled_cap = false)
                 dli = zeros(size(s.dh_it)); dli[i, j] = dl; copyto!(s.dh_it, dli) # the previous step of the cell (oscillation damping)
                 h_prev = copy(Array(s.h)); h_prev[i, j] = hp
                 h = copy(h_prev); h[i, j] = hn
                 copyto!(s.h, h)
-                Shakti.limit_regime_crossing!(sim.kfs, s, typeof(s.h)(h_prev), sim.p)
+                Shakti.limit_head_step!(Shakti.picard_guard(sim), s, typeof(s.h)(h_prev), sim.p; filled_cap)
                 return Array(s.h)[i, j]
             end
             @test ho > z + 10 && bc > 4e-3
@@ -278,6 +279,30 @@
             @test limited(hm, hm + 0.1δ; dl = -0.4δ) ≈ hm + 0.1δ      # a contracting reversal is untouched
             @test limited(hm, hm + δ; dl = 0.4δ) ≈ hm + δ             # no reversal: untouched
             @test Array(s.dh_it)[i, j] ≈ δ                              # the limited step is kept for the next iteration
+            # the filled cap of ConsistentGapCoupling: |dN| <= max(|N|/2, po/4) from a filled cell, none from an unfilled one
+            rg = sim.p.rho_w * sim.p.g
+            Nm = Array(s.po)[i, j] - rg * (hm - z)
+            capm = max(abs(Nm) / 2, Array(s.po)[i, j] / 4) / rg
+            @test limited(hm, hm - 1e4; filled_cap = true) ≈ hm - capm
+            @test limited(hm, hm + 0.1δ; filled_cap = true) ≈ hm + 0.1δ   # a step within the cap is untouched
+            @test limited(z - 50, z - 1000; filled_cap = true) ≈ z - 100  # unfilled: only the regime limits
+            @test !Shakti.PicardGuard().active
+            s0 = copy(Array(s.h)); Shakti.limit_head_step!(Shakti.PicardGuard(), s, typeof(s.h)(s0 .+ 1e4), sim.p)
+            @test Array(s.h) == s0                                     # an inactive guard limits nothing
+        end
+
+        @testset "Picard guard: resolved from the kinks it protects, not the K-face scheme" begin
+            guard(; kw...) = Shakti.picard_guard(ramp(; kw...))
+            gd = guard() # unfilled cavities, implicit upwind
+            @test gd.active && !gd.filled_cap && gd.outflow_land && gd.outflow_ocean # outflow-only faces by default
+            @test !guard(kface = "arithmetic", cf = FilledCavities(), outflow = false).active # SHAKTI's original sheet: no limits
+            @test guard(kface = "arithmetic", cf = FilledCavities()).active          # but its outflow-only faces get their stops
+            @test guard(kface = "implicit_upwind", cf = FilledCavities()).active   # the donor flips of implicit upwind
+            @test guard(kface = "arithmetic", cf = FilledCavities(), gc = ConsistentGapCoupling()).filled_cap
+            @test guard(kface = "implicit_upwind", cf = FilledCavities(), gc = ConsistentGapCoupling()).filled_cap # the dry floor had no cap here
+            @test guard(gc = ConsistentGapCoupling()).filled_cap
+            @test guard(kface = "upwind", gc = ConsistentGapCoupling()).filled_cap # upwind gets the cap too
+            @test guard(kface = "upwind").active                                    # and the regime stops of a free surface
         end
 
         @testset "face donor: higher-potential cell, frozen after MAX_DONOR_FLIPS flips" begin
@@ -317,7 +342,7 @@
             # converged = false): one iteration allowed, a tolerance any head meets, a face frozen downstream again
             dx_[k] = -5 * sign(dh[k]); copyto!(sim.state.don_x, dx_)
             ps1 = PicardSolver(1, 1.0, LUDirectSolver(sim.grid), sim.grid)
-            Picard_loop!(ps1, sim.state, sim.grid, sim.p, sim.mt, sim.kfs, sim.sl)
+            Picard_loop!(ps1, sim.state, sim.grid, sim.p, sim.mt, sim.kfs, sim.sl; guard = Shakti.picard_guard(sim))
             @test ps1.converged && ps1.last_iter == 2
             @test Array(sim.state.don_x)[k] != dx_[k] # polished
         end
@@ -369,7 +394,7 @@
         @testset "thin ice with hollows at dt = 1 day (tol = $tol)" for tol in (1e-6, 1e-8)
             # 50 to 250 m of ice on a bumpy bed: hollows by the outlet (below the LAND head) and inland fill with water while
             # their filled rows are nearly flat in N. The head test alone accepted iterates parked at a stop of
-            # limit_regime_crossing! (water created and lost, up to 100 times the melt) or cycled to the iteration cap
+            # limit_head_step! (water created and lost, up to 100 times the melt) or cycled to the iteration cap
             # (an outflow-only face opening and closing, a block of filled cells moving together). The boundary-head stop, the
             # stall damping and the water test of the Picard loop converge every step and close the budget.
             nx, ny = 40, 12

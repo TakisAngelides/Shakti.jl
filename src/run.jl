@@ -240,7 +240,7 @@ function prepare_head_solve!(sim::Simulation)
     prepare_step_inputs!(sim)
     extrapolate_head!(sim.he, s, sim.dt[])
     fill!(s.dh_it, 0) # the oscillation damping of the guess limiter must not see the previous step's last head step (14 % fewer iterations at 6 h steps)
-    limit_head_guess!(sim.kfs, sim.he, s, sim.p) # ImplicitUpwind: the extrapolated head obeys the regime and step limits of the iteration
+    limit_head_guess!(picard_guard(sim), sim.he, s, sim.p) # the extrapolated head obeys the regime and outflow stops of the iteration
     refresh_from_head!(sim)
     return sim
 end
@@ -304,17 +304,32 @@ update_frozen_mask!(sim::Simulation, T_prime_b::AbstractMatrix) = (r = update_fr
 """
 $(TYPEDSIGNATURES)
 
-Applies [`limit_regime_crossing!`](@ref) to the extrapolated initial head of a step ([`extrapolate_head!`](@ref)), measured
-from the last converged head, under [`ImplicitUpwind`](@ref); a no-op for every other K-face scheme and without head
-extrapolation. A head that changed regime in the last step moved by tens of metres (the range of a filled cell is the
-whole overburden head), and extrapolating that change into the uplifted regime gives a blister tens of metres deep (seen
-on Drang Drung at dt = 24 h: a cell that filled in step 7 started step 8 with an 84 m uplift layer, whose dissipation melt
-then fed the layer faster than the iteration could drain it). The guess is a starting point only, so the solution is unchanged.
+Applies [`limit_head_step!`](@ref) to the extrapolated initial head of a step ([`extrapolate_head!`](@ref)), measured
+from the last converged head, without the filled cap; a no-op without head extrapolation or an active `guard`. A head
+that changed regime in the last step moved by tens of metres (the range of a filled cell is the whole overburden head),
+and extrapolating that change into the uplifted regime gives a blister tens of metres deep (seen on Drang Drung at
+dt = 24 h: a cell that filled in step 7 started step 8 with an 84 m uplift layer, whose dissipation melt then fed the
+layer faster than the iteration could drain it). The filled cap is left out: on the guess it doubled the iterations of
+the dry floor on Drang Drung (25 m) and Helheim (200 m). The guess is a starting point only, so the solution is unchanged.
 """
-limit_head_guess!(::AbstractKFaceScheme, he, s::State, p::ModelParameters) = s
-limit_head_guess!(::ImplicitUpwind, ::NoHeadExtrapolation, s::State, p::ModelParameters) = s
-limit_head_guess!(kfs::ImplicitUpwind, he::HeadExtrapolation, s::State, p::ModelParameters) =
-    he.count >= 1 ? limit_regime_crossing!(kfs, s, he.hist[1], p) : s
+limit_head_guess!(::PicardGuard, he, s::State, p::ModelParameters) = s
+limit_head_guess!(guard::PicardGuard, he::HeadExtrapolation, s::State, p::ModelParameters) =
+    he.count >= 1 ? limit_head_step!(guard, s, he.hist[1], p; filled_cap = false) : s
+
+"""
+$(TYPEDSIGNATURES)
+
+The [`PicardGuard`](@ref) of `sim`: the limits of the head iterate that its sheet, gap coupling, face scheme and boundary
+faces need ([`limit_head_step!`](@ref)). The filled cap is left out under the parabolic scheme on SHAKTI's filled sheet
+([`FilledCavities`](@ref), [`NoUplift`](@ref)): the englacial storage keeps the filled rows steep in `N`, and with the
+cap the stuck-cells fixture of the tests took 251 iterations per step instead of 4 at `e_v = 1e-4` (same solution).
+"""
+function picard_guard(sim::Simulation)
+    p = sim.p
+    filled_cap = sim.gcp isa ConsistentGapCoupling && !(sim.hs isa ParabolicHeadScheme && sim.cf isa FilledCavities && sim.up isa NoUplift)
+    active = sim.cf isa UnfilledCavities || sim.up isa IceUplift || filled_cap || p.outflow_only_land || p.outflow_only_ocean || sim.kfs isa ImplicitUpwind
+    return PicardGuard(active, filled_cap, p.outflow_only_land, p.outflow_only_ocean)
+end
 
 """
 $(TYPEDSIGNATURES)
@@ -392,7 +407,7 @@ Solves for the new hydraulic head under [`EllipticHeadScheme`](@ref): runs the P
 solve (`sim.mi`'s melt input for the current time was already refreshed by [`step!`](@ref)).
 """
 function step_h!(hs::EllipticHeadScheme, sim::Simulation)
-    elliptic_solver!(hs.ps, sim.state, sim.grid, sim.p, sim.mt, sim.kfs, sim.sl; cnc = sim.cnc, ds = sim.ds, gc = gap_coupling_terms(sim), wdt = water_check_dt(sim))
+    elliptic_solver!(hs.ps, sim.state, sim.grid, sim.p, sim.mt, sim.kfs, sim.sl; cnc = sim.cnc, ds = sim.ds, gc = gap_coupling_terms(sim), wdt = water_check_dt(sim), guard = picard_guard(sim))
 end
 
 # The time step for the water test of the Picard loop (water_converged, elliptic_solver.jl), 0 where it does not apply: the
@@ -414,7 +429,7 @@ Solves for the new hydraulic head under [`ParabolicHeadScheme`](@ref): repeats t
 linear solve to nonlinear convergence within this timestep ([`Parabolic_loop!`](@ref)).
 """
 function step_h!(hs::ParabolicHeadScheme, sim::Simulation)
-    Parabolic_loop!(hs.pps, sim.state, sim.grid, sim.p, sim.mt, sim.kfs, sim.sl, sim.dt[]; cnc = sim.cnc, ds = sim.ds, gc = gap_coupling_terms(sim))
+    Parabolic_loop!(hs.pps, sim.state, sim.grid, sim.p, sim.mt, sim.kfs, sim.sl, sim.dt[]; cnc = sim.cnc, ds = sim.ds, gc = gap_coupling_terms(sim), guard = picard_guard(sim))
 end
 
 """

@@ -30,7 +30,7 @@ struct State{A <: AbstractArray}
     abs_ub::A     # absolute value of the sliding velocity
     mdot::A       # melt rate
     mdot0::A      # melt rate at the start of the step (ImplicitUpwind with ConsistentGapCoupling: the melt opening of the end-of-step gap in the conductance, compute_b_w_iterate!); untouched otherwise
-    dh_it::A      # the previous head iteration's (limited) step of each cell, for the oscillation damping of limit_regime_crossing! (ImplicitUpwind) and limit_filled_step! (the dry floor, other K-face schemes), unfilled_cavities.jl; zeroed at the start of each step; zero otherwise
+    dh_it::A      # the previous head iteration's (limited) step of each cell, for the oscillation damping of limit_head_step! (unfilled_cavities.jl); zeroed at the start of each step; zero without an active PicardGuard
     mdot_min::A   # floor on mdot this step, -rho_i*C (freeze-on capacity); applied when p.limit_freeze_on
     Q_b::A        # frictional (sliding) heat |u_b . taub| [W/m^2], written by compute_mdot! (0 when that term is off)
     Q_diss::A     # heat dissipated by water flowing down the driving head gradient rho_w*g*|q . grad(h)| [W/m^2] (grad(h + b) under SheetTopPotential; 0 when off)

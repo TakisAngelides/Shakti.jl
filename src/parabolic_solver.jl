@@ -24,7 +24,7 @@ block (still used standalone in `parabolic_solver_test.jl`); [`ParabolicHeadSche
 same reasoning as [`elliptic_solver!`](@ref): this file is included before `simulation.jl`, so
 `ParabolicHeadScheme{PPS}` can use a proper `PPS <: ParabolicPicardSolver` bound.
 """
-function parabolic_solver!(ls::AbstractLinearSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, dt; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
+function parabolic_solver!(ls::AbstractLinearSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, dt; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), guard::PicardGuard = PicardGuard())
 
     s, g = state, grid
 
@@ -122,11 +122,12 @@ which does change every call) are deliberately two different arguments -- see
 `update_SALS_parabolic_kernel!`'s docstring (`linear_solver.jl`) for why passing the same
 array for both breaks convergence.
 """
-function Parabolic_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation, s::State, g::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, dt, h_old, h_prev; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
+function Parabolic_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation, s::State, g::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, dt, h_old, h_prev; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), ω = 1, guard::PicardGuard = PicardGuard())
 
     solve_parabolic_linear_system!(ls, s, g, p, kfs, dt, h_old, ds, gc)
     relax_h!(hr, s, h_prev)
-    limit_regime_crossing!(kfs, s, h_prev, p, gc) # ImplicitUpwind: stop at the bed/overburden head when crossing it (unfilled_cavities.jl); no-op otherwise
+    ω < 1 && (@. s.h = h_prev + ω * (s.h - h_prev)) # stall damping of Parabolic_loop!, as Picard_iteration!'s
+    limit_head_step!(guard, s, h_prev, p) # the filled |dN| cap, regime and outflow stops, oscillation damping, as the guard says (unfilled_cavities.jl)
 
     refresh_head_dependents!(s, g, p, mt, kfs, sl; cnc, ds, gc)
 
@@ -146,7 +147,7 @@ that same fixed starting point, not from whatever the previous sub-iteration hap
 just bookkeeping: conflating the two is a real bug that prevented this loop from converging at
 all on stiff cells, confirmed on the real Greenland grid).
 """
-function Parabolic_loop!(pps::ParabolicPicardSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, dt; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
+function Parabolic_loop!(pps::ParabolicPicardSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, dt; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), guard::PicardGuard = PicardGuard())
 
     s = state
 
@@ -156,6 +157,7 @@ function Parabolic_loop!(pps::ParabolicPicardSolver, state::State, grid::Grid, p
     pps.last_iter = 0
     reset_relaxation!(pps.hr) # as Picard_loop!: an AndersonHeadRelaxation history is only valid within one time step
     npol = 0 # donor polishing rounds this step (polish_donors!, ImplicitUpwind)
+    ω, best, since = 1.0, Inf, 0 # stall damping, as Picard_loop!'s (stall_damping, elliptic_solver.jl)
 
     iter, limit = 0, pps.iters # a donor polishing round may extend the limit (below)
     @inbounds while iter < limit
@@ -163,12 +165,13 @@ function Parabolic_loop!(pps::ParabolicPicardSolver, state::State, grid::Grid, p
 
         @. pps.h_prev = s.h
 
-        Parabolic_iteration!(pps.ls, pps.hr, state, grid, p, mt, kfs, sl, dt, pps.h_old, pps.h_prev; cnc, ds, gc)
+        Parabolic_iteration!(pps.ls, pps.hr, state, grid, p, mt, kfs, sl, dt, pps.h_old, pps.h_prev; cnc, ds, gc, ω, guard)
 
         @. pps.delta_h = s.h - pps.h_prev
 
         if iter % pps.check_every == 0 || iter == limit
-            delta_h_max = raw_update_max(pps.hr, pps.delta_h) # the UNrelaxed update, see raw_update_max (elliptic_solver.jl)
+            delta_h_max = raw_update_max(pps.hr, pps.delta_h) / ω # the UNrelaxed update, see raw_update_max (elliptic_solver.jl)
+            ω, best, since = stall_damping(ω, best, since, delta_h_max)
             h_max = mapreduce(abs, max, s.h; init = zero(eltype(s.h)))
             if head_converged(delta_h_max, h_max, pps.tol, pps.atol)
                 if npol < MAX_DONOR_POLISH_ROUNDS && polish_donors!(kfs, s) > 0 # faces left frozen downstream: refrozen, iterate on

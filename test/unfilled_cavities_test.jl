@@ -91,7 +91,7 @@
             p = ModelParameters(e_v = 0.0, b_min = 1e-6)
             state = State(grid)
             set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b0, G, ub_x, ub_y, ieb .* ieb_scale, taub_x, taub_y)
-            ps = PicardSolver(500, floattype(1e-12), CholeskyDirectSolver(grid), grid)
+            ps = PicardSolver(500, floattype(1e-12), kface == "implicit_upwind" ? LUDirectSolver(grid) : CholeskyDirectSolver(grid), grid)
             return Simulation(grid, state, 1, floattype(dt), p, gap, String[], ConstantMeltInput(), sl; uplift = NoUplift(), ps = ps, cavity_filling = cf, k_face_choice = something(kface, cf isa UnfilledCavities ? "upwind" : "arithmetic"), gap_coupling = gcp,
                               hydraulic_potential = BedPotential()) # compare cavity filling alone (the default is SheetTopPotential)
         end
@@ -222,11 +222,14 @@
         @testset "stuck cells, filled, ConsistentGapCoupling: no overflow (the first raw iterate has N ~ -1e16)" begin
             # The gap here is flat in N (A = 1e-30), so the first linear solve pushes the moulin's water through the b_min floor
             # and returns N ~ -1e16: the exponential branch of relax_update (and the N^n creep law of the explicit scheme)
-            # overflowed to Inf/NaN. limit_filled_step! now bounds the Picard step on the negative side (N falls at most po/4
-            # below min(N_prev, 0) per iteration), so the head stays finite; the first steps may need many iterations.
-            for gap in ("explicit", "implicit", "fully_implicit")
-              @testset "gap $gap" begin
-                sim = make_sim(FilledCavities(); gap = gap, kface = "arithmetic", gcp = ConsistentGapCoupling())
+            # overflowed to Inf/NaN. limit_head_step! now bounds the Picard step on the negative side (N falls at most po/4
+            # below min(N_prev, 0) per iteration), so the head stays finite; the first steps may need many iterations. Under
+            # implicit_upwind the dry floor had no such limit and the head matrix went singular at step 1 (ARCH-2). With the
+            # explicit gap scheme implicit_upwind still diverges (b ~ 1e12 m by step 4): not tested.
+            for gap in ("explicit", "implicit", "fully_implicit"), kface in ("arithmetic", "implicit_upwind")
+              gap == "explicit" && kface == "implicit_upwind" && continue
+              @testset "gap $gap, $kface" begin
+                sim = make_sim(FilledCavities(); gap = gap, kface = kface, gcp = ConsistentGapCoupling())
                 s = sim.state
                 @test Shakti.dry_floor(sim)
                 for k in 1:3

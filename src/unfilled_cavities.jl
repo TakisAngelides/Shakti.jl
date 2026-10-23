@@ -199,15 +199,18 @@ store_start_of_step_melt!(::ImplicitUpwind, s::State) = (copyto!(s.mdot0, s.mdot
     return hn
 end
 
-@parallel_indices (ix, iy) function limit_regime_crossing_kernel!(h, h_prev, dh_it, b, zb, po, stor, stor_up, rho_w, ggrav, filled_cap, mask, land, ocean)
+@parallel_indices (ix, iy) function limit_head_step_kernel!(h, h_prev, dh_it, b, zb, po, stor, stor_up, rho_w, ggrav, filled_cap, mask, land, ocean)
     if ix <= size(h, 1) && iy <= size(h, 2)
         hn, hp, z = h[ix, iy], h_prev[ix, iy], zb[ix, iy]
         ins = max(oftype(z, 1e-6) * b[ix, iy], 64 * eps(abs(z) + one(z))) # a step inside the new regime, keeping W ~ b
         bc = b[ix, iy]
         rg = rho_w * ggrav
-        if filled_cap && (stor[ix, iy] > 0 || stor_up[ix, iy] > 0) && !(stor[ix, iy] > 0 && hp < z) && !(stor_up[ix, iy] > 0 && hp > z + po[ix, iy] / rg)
-            cap = max(max(abs(po[ix, iy] - rg * (hp - z)) / 2, po[ix, iy] / 4) / rg, one(hn)) # from a filled cell: |dN| <= max(|N|/2, po/4), as limit_filled_step!
+        ho = z + po[ix, iy] / rg
+        if filled_cap && mask[ix, iy] == GROUNDED && !(stor[ix, iy] > 0 && hp < z) && !(stor_up[ix, iy] > 0 && hp > ho) # a filled cell
+            Np = po[ix, iy] - rg * (hp - z)                                       # N at the previous iterate
+            cap = max(max(abs(Np) / 2, po[ix, iy] / 4) / rg, one(hn))            # |dN| <= max(|N|/2, po/4), and at least 1 m of head
             hn = clamp(hn, hp - cap, hp + cap)
+            stor[ix, iy] == 0 && stor_up[ix, iy] == 0 && (hn = min(hn, hp + max((Np - (min(Np, zero(Np)) - po[ix, iy] / 4)) / rg, one(hn)))) # filled sheet, N below zero: at most po/4 past min(N_prev, 0) per iteration (linear, not geometric)
         end
         if stor[ix, iy] > 0
             hp >= z && hn < z && (hn = z - ins) # filled -> unfilled: stop just below the bed (the unfilled row next)
@@ -215,7 +218,6 @@ end
             hp < z && (hn = max(hn, hp - max(3 * bc / 4, z - hp))) # within unfilled: the head's depth below the bed at most doubles per iteration, or by 3/4 of the gap
         end
         if stor_up[ix, iy] > 0
-            ho = z + po[ix, iy] / (rho_w * ggrav)
             hp <= ho && hn > ho && (hn = ho + ins) # filled -> uplifted
             hp > ho && hn < ho && (hn = ho)        # uplifted -> filled
             hp > ho && (hn = min(hn, hp + (bc + hp - ho))) # within uplifted: the water depth at most doubles per iteration
@@ -237,88 +239,65 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Stops a head iterate at the regime boundary it crosses (the bed `zb` between the unfilled and filled rows, the overburden
-head `h_o` between the filled and uplifted rows), just inside the new regime, under [`ImplicitUpwind`](@ref); a no-op
-for every other K-face scheme. Called after each linear solve of the head ([`Picard_iteration!`](@ref),
-[`Parabolic_iteration!`](@ref)). The head row's storage slope jumps at these boundaries, from `1/dt` (an unfilled or
-uplifted cell, plus the Newton terms of its water depth) to the creep derivative of a filled cell (orders of magnitude
-smaller, and zero at `N = 0`), so one Newton step from the filled side lands far into the other regime, where the water
-depth hits its floor and the Newton terms vanish, and the next step lands far back: the iteration cycles (seen on SHW12
-at dt = 1 h). From a point at the boundary the row is convex on the unfilled and uplifted side and concave on the filled
-side, so Newton then approaches the root without crossing back. The same remedy as the "chopping" of phase transitions in
-fully implicit reservoir simulators. Inside the unfilled and uplifted regimes the step is limited too, as reservoir
-simulators limit the saturation change per Newton iteration: an uplifted cell's water depth at most doubles per
-iteration, and the head of an unfilled cell sinks below the bed at most twice as deep per iteration, or by 3/4 of the gap if
-that is more (the gap empties in two iterations; below `zb - b` the water depth is at its floor and the head of a dry cell
-reaches its value, which can be tens of metres below the bed, in about fifteen iterations instead of one step of 3/4 of the
-gap at a time). The factor 2 costs no time against 4 on Drang Drung (dt = 1 h to 1 day) and gives the same solution; at 8
-a dt = 1 day run fails (a singular head matrix after a runaway step). Without it, a
-Newton step from a thin layer, where the conductance and its Newton terms are small, can land kilometres away (seen on
-Drang Drung at dt = 1 h: one cell 1.1 km below the bed, then a neighbour 67 km above the overburden, then overflow). A
-converged head is a fixed point of the limited iteration too, so the solution is unchanged. Last, a step that reverses
-the previous iteration's step of the same cell is at most half of it (the "oscillation damping" of reservoir simulators):
-near a root Newton's steps shrink much faster than that and the damping never binds; it binds only where the iteration
-cycles, at a kink of the row (the bed or the overburden head, where the slope of the water depth jumps, or a face whose
-upwind donor flips), and there it brackets the root and halves the bracket each iteration, as bisection does (seen on
-Drang Drung at dt = 24 h: a cell just below the bed whose Newton step from W = b empties three quarters of the gap, and
-from there refills it, every iteration). The previous steps (`s.dh_it`) are zeroed at the start of each step.
+Limits a head iterate, after each linear solve of the head ([`Picard_iteration!`](@ref), [`Parabolic_iteration!`](@ref))
+and on the extrapolated guess of a step ([`limit_head_guess!`](@ref)), as the [`PicardGuard`](@ref) `guard` says (a no-op
+when it is inactive). Every limit protects a kink of the head rows, so each is switched on by what makes the kink, not by
+the K-face scheme. A converged head is a fixed point of the limited iteration, so the solution is unchanged (within the
+Picard tolerance). In order:
 
-Under [`ConsistentGapCoupling`](@ref) (`gc` a [`SchemeGapUpdate`](@ref)) the step of a filled cell is also capped at
-`|dN| <= max(|N|/2, po/4)`, the cap of [`limit_filled_step!`](@ref). On thick ice the gap update closes a thin gap within
-one step for most `N`, so at `N` near `po` it is nearly flat in `N` and the Newton step of a filled row overshoots by
-kilometres; the iteration then jumped between the bed and the overburden head every iteration (synthetic slab under 1.5 to
-3 km of ice, dt = 1 h: 500 of 500 iterations from step 5, and the water budget off by 10 to 100 times the melt). With the
-cap it converges in 3 to 16 iterations at dt = 1 h and 1 day and closes the budget. [`ExplicitGapCoupling`](@ref), whose
-creep term is steep in `N`, is left unchanged.
+**Filled cap** (`filled_cap`, [`ConsistentGapCoupling`](@ref)): the step of a filled `GROUNDED` cell (any cell of
+[`FilledCavities`](@ref) with [`NoUplift`](@ref); otherwise one whose head lies between the bed and the overburden head)
+is capped at `|dN| <= max(|N|/2, po/4)`, and at least 1 m of head. On thick ice the gap update closes a thin gap within one
+step for most `N`, so at `N` near `po` it is nearly flat in `N` and the Newton step of a filled row overshoots by
+kilometres. Without the cap the iteration jumped between the bed and the overburden head every iteration (synthetic slab
+under 1.5 to 3 km of ice, dt = 1 h: 500 of 500 iterations from step 5, and the water budget off by 10 to 100 times the
+melt; with the cap 3 to 16 iterations at dt = 1 h and 1 day), and a cold start of the dry floor diverged at the first step
+(Greenland and Antarctica 16 km, Thwaites 2 km at `dt = 1 h`): the first linear solve pushes the melt through the floor's
+conductance, the head overshoots past the overburden, the gap sits at `b_max`, opening no longer takes up the melt, and the
+dissipation melt feeds itself to NaN. With the cap every step converged on all three at `dt = 1 h` (30 days), `6 h` and
+`24 h` (90 days), in at most about 30 iterations. Relative to `N`, the cap moves the high-suction cells (`N` up to
+thousands of times `po`) geometrically: half the overburden head instead left the first step of Antarctica and Thwaites
+unconverged after 500 iterations. Tested: `|N|/4` to `3|N|/4` and `po/10` to `po/4` behave alike; `po/2` near `N = 0`
+fails on Thwaites at `dt = 24 h`. On the negative side (`N < 0`, head above the overburden, which a filled thick-ice cell
+without uplift can reach only transiently) the relative cap would let `N` run away geometrically (`-5e6`, `-6e7`,
+`-6.5e8`, ...), so there `N` may fall at most `po/4` below `min(N_prev, 0)` per iteration: without that, the first raw
+iterate of the stuck-cells fixture (`N` around `-1e16`) made the exponential branch of `relax_update` overflow. This bound
+applies on the filled sheet only (no cavity or uplift storage): the unfilled sheet without uplift reaches `N` near `-6e8`
+on the same fixture in 66 iterations, and the linear bound left that step unconverged after 500. Under
+[`ImplicitUpwind`](@ref) with the dry floor and no cap the head matrix went singular at step 1 of that fixture.
+[`ExplicitGapCoupling`](@ref), whose creep term is steep in `N`, is left unchanged.
+
+**Regime stops** (wherever `stor > 0`, [`UnfilledCavities`](@ref), or `stor_up > 0`, [`IceUplift`](@ref)): an iterate
+that crosses a regime boundary (the bed `zb` between the unfilled and filled rows, the overburden head `h_o` between the
+filled and uplifted rows) stops just inside the new regime. The head row's storage slope jumps at these boundaries, from
+`1/dt` (an unfilled or uplifted cell, plus the Newton terms of its water depth) to the creep derivative of a filled cell
+(orders of magnitude smaller, and zero at `N = 0`), so one Newton step from the filled side lands far into the other
+regime, where the water depth hits its floor and the Newton terms vanish, and the next step lands far back: the iteration
+cycles (seen on SHW12 at dt = 1 h). From a point at the boundary the row is convex on the unfilled and uplifted side and
+concave on the filled side, so Newton then approaches the root without crossing back. The same remedy as the "chopping"
+of phase transitions in fully implicit reservoir simulators. Inside the unfilled and uplifted regimes the step is limited
+too, as reservoir simulators limit the saturation change per Newton iteration: an uplifted cell's water depth at most
+doubles per iteration, and the head of an unfilled cell sinks below the bed at most twice as deep per iteration, or by 3/4
+of the gap if that is more (the gap empties in two iterations; below `zb - b` the water depth is at its floor and the head
+of a dry cell reaches its value, which can be tens of metres below the bed, in about fifteen iterations). The factor 2
+costs no time against 4 on Drang Drung (dt = 1 h to 1 day) and gives the same solution; at 8 a dt = 1 day run fails (a
+singular head matrix after a runaway step). Without it, a Newton step from a thin layer, where the conductance and its
+Newton terms are small, can land kilometres away (seen on Drang Drung at dt = 1 h: one cell 1.1 km below the bed, then a
+neighbour 67 km above the overburden, then overflow).
+
+**Outflow stops** (`guard.outflow_land`, `guard.outflow_ocean`): an outflow-only face is a kink of the row like the bed,
+so an iterate that crosses the boundary head stops at it (`stop_at_boundary_head`).
+
+**Oscillation damping** (whenever the guard is active): a step that reverses the previous iteration's step of the same
+cell is at most half of it, as in reservoir simulators. Near a root Newton's steps shrink much faster than that and the
+damping never binds; it binds only where the iteration cycles, at a kink of the row (the bed, the overburden head, an
+outflow face, or a face whose upwind donor flips), and there it brackets the root and halves the bracket each iteration,
+as bisection does (seen on Drang Drung at dt = 24 h: a cell just below the bed whose Newton step from W = b empties three
+quarters of the gap, and from there refills it, every iteration; without it Greenland's dry floor does not converge). The
+previous steps (`s.dh_it`) are zeroed at the start of each step.
 """
-limit_regime_crossing!(::AbstractKFaceScheme, s::State, h_prev, p::ModelParameters, gc::AbstractGapCoupling = ExplicitGapCoupling()) = s
-limit_regime_crossing!(::ImplicitUpwind, s::State, h_prev, p::ModelParameters, gc::AbstractGapCoupling = ExplicitGapCoupling()) =
-    (@parallel limit_regime_crossing_kernel!(s.h, h_prev, s.dh_it, s.b, s.zb, s.po, s.stor, s.stor_up, p.rho_w, p.g, gc isa Union{SchemeGapUpdate, DiffusiveGapUpdate}, s.mask, p.outflow_only_land, p.outflow_only_ocean); s)
-
-@parallel_indices (ix, iy) function limit_filled_step_kernel!(h, h_prev, dh_it, mask, zb, po, rho_w, ggrav)
-    if ix <= size(h, 1) && iy <= size(h, 2) && mask[ix, iy] == GROUNDED
-        hn, hp = h[ix, iy], h_prev[ix, iy]
-        rg = rho_w * ggrav
-        Np = po[ix, iy] - rg * (hp - zb[ix, iy])                         # N at the previous iterate
-        cap = max(max(abs(Np) / 2, po[ix, iy] / 4) / rg, one(hn))        # |dN| <= max(|N|/2, po/4), and at least 1 m of head
-        d = clamp(hn - hp, -cap, cap)
-        dmax = max((Np - (min(Np, zero(Np)) - po[ix, iy] / 4)) / rg, one(hn)) # N below zero: at most po/4 past min(N_prev, 0) per iteration (linear, not geometric)
-        d = min(d, dmax)
-        dl = dh_it[ix, iy]
-        d * dl < 0 && abs(d) > abs(dl) / 2 && (d = copysign(abs(dl) / 2, d)) # step reverses without contracting: at most half the previous one
-        dh_it[ix, iy] = d
-        h[ix, iy] = hp + d
-    end
-    return
-end
-
-"""
-$(TYPEDSIGNATURES)
-
-Limits each `GROUNDED` cell's head step per Picard iteration under the dry floor (`dry_floor`, `gc.dry_floor`)
-with a K-face scheme other than [`ImplicitUpwind`](@ref) (which has [`limit_regime_crossing!`](@ref)); a no-op otherwise.
-The effective pressure may change by at most half of itself, or a quarter of the overburden near `N = 0`, and a step that
-reverses the previous one without contracting is halved (the oscillation damping of [`limit_regime_crossing!`](@ref)).
-On the negative side (`N < 0`, head above the overburden, which no physical solution of a filled thick-ice cell reaches) the
-relative cap would let `N` run away geometrically (`-5e6`, `-6e7`, `-6.5e8`, ...): `N` may then fall at most `po/4` below
-`min(N_prev, 0)` per iteration. Without that, the first raw iterate of the stuck-cells fixture (`N` around `-1e16`) made the
-exponential branch of `relax_update` overflow (NaN without this limiter) and, limited, stalled at `N` near `-1e9`.
-Without it a cold start on thick ice diverged at the first step (Greenland and Antarctica 16 km, Thwaites 2 km at
-`dt = 1 h`): where creep closes the gap within a step the gap update is nearly flat in `N`, the first linear solve
-pushes the melt through the floor's conductance, and the head overshoots by kilometres, past the overburden; there the gap
-sits at `b_max`, opening no longer takes up the melt, and the dissipation melt feeds itself to NaN. With the limit every
-step converged on all three at `dt = 1 h` (30 days), `6 h` and `24 h` (90 days), in at most about 30 iterations. Relative
-to `N`, the limit moves the high-suction cells (`N` up to thousands of times `po`) geometrically: a cap of half the
-overburden head instead left the first step of Antarctica and Thwaites unconverged after 500 iterations and failed on
-Thwaites at `dt = 24 h`. Tested: `|N|/4` to `3|N|/4` and `po/10` to `po/4` behave alike; `po/2` near `N = 0` fails on
-Thwaites at `dt = 24 h`, and without the damping Greenland does not converge. A converged head is a fixed point of the
-limited iteration, so the solution is unchanged (within the Picard tolerance); warm starts cost about the same. The
-extrapolated head guess of a step is not limited: that doubled the iterations on Drang Drung (25 m) and Helheim (200 m).
-"""
-limit_filled_step!(::AbstractKFaceScheme, ::AbstractGapCoupling, s::State, h_prev, p::ModelParameters) = s
-limit_filled_step!(::ImplicitUpwind, ::SchemeGapUpdate, s::State, h_prev, p::ModelParameters) = s
-limit_filled_step!(::AbstractKFaceScheme, gu::SchemeGapUpdate, s::State, h_prev, p::ModelParameters) =
-    gu.dry_floor ? (@parallel limit_filled_step_kernel!(s.h, h_prev, s.dh_it, s.mask, s.zb, s.po, p.rho_w, p.g); s) : s
+limit_head_step!(guard::PicardGuard, s::State, h_prev, p::ModelParameters; filled_cap::Bool = guard.filled_cap) =
+    guard.active ? (@parallel limit_head_step_kernel!(s.h, h_prev, s.dh_it, s.b, s.zb, s.po, s.stor, s.stor_up, p.rho_w, p.g, filled_cap, s.mask, guard.outflow_land, guard.outflow_ocean); s) : s
 
 # Per GROUNDED cell: the head row's end-of-step water minus the water the fluxes and sources leave, W + dt (mdot/rho_w
 # + ieb - div q), as update_water_budget! takes it (water_converged, elliptic_solver.jl). The row's water is that of
