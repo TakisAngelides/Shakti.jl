@@ -68,15 +68,17 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Marks, via `s.stor = 1/dt` on `GROUNDED` cells, where the gap may be partly empty this step, and records the water present as the step starts (`s.w_old = max(0, b - b_empty) + b_uplift`). A no-op
-under [`FilledCavities`](@ref) (`s.stor` stays 0, selecting the legacy equations everywhere).
+Marks, via `s.stor = 1/dt` on `GROUNDED` cells, where the gap may be partly empty this step, and records the water present as the step starts (`s.w_old = max(0, b - b_empty) + b_uplift`). Under
+[`FilledCavities`](@ref) it zeroes `s.stor` and `s.b_empty`, selecting the legacy equations everywhere: the kernels read
+these fields whatever the option, so a `State` that ran with unfilled cavities (a spin-up, a checkpoint) would otherwise
+keep their rows.
 """
-set_cavity_storage!(s::State, dt, ::FilledCavities) = s
+set_cavity_storage!(s::State, dt, ::FilledCavities) = (fill!(s.stor, zero(eltype(s.stor))); fill!(s.b_empty, zero(eltype(s.b_empty))); s)
 set_cavity_storage!(s::State, dt, ::UnfilledCavities) = (@parallel set_cavity_storage_kernel!(s.stor, s.w_old, s.mask, s.b, s.b_empty, s.b_uplift, inv(dt)); s)
 
-@parallel_indices (ix, iy) function compute_b_w_kernel!(b_w, b, b_empty, b_uplift)
+@parallel_indices (ix, iy) function compute_b_w_kernel!(b_w, b, b_empty, b_uplift, b_dry)
     if ix <= size(b_w, 1) && iy <= size(b_w, 2)
-        b_w[ix, iy] = max(b[ix, iy] - b_empty[ix, iy] + b_uplift[ix, iy], zero(eltype(b_w)))
+        b_w[ix, iy] = max(b[ix, iy] - b_empty[ix, iy] + b_uplift[ix, iy] - b_dry[ix, iy], zero(eltype(b_w)))
     end
     return
 end
@@ -84,9 +86,9 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Water depth `s.b_w = b - b_empty + b_uplift` as the step starts (`b_uplift` the lifted water layer under
-[`IceUplift`](@ref), zero otherwise), never below 0; exactly `b` while `b_empty` is zero (always, under
-[`FilledCavities`](@ref)). The face conductances ([`compute_face_flux!`](@ref)) are built from it, so
+Water depth `s.b_w = b - b_empty + b_uplift - b_dry` as the step starts (`b_uplift` the lifted water layer under
+[`IceUplift`](@ref), `b_dry` the dry volume the `b_min` clamp keeps under the filled dry floor, both zero otherwise),
+never below 0; exactly `b` while `b_empty` and `b_dry` are zero. The face conductances ([`compute_face_flux!`](@ref)) are built from it, so
 an empty cavity neither carries nor draws water. No floor at `min(b, p.b_min)`: a dry cell (`W = 0`)
 that kept that conductance drained water it did not have wherever its head stayed above a neighbour's
 (a margin cell on a slope next to `LAND`), and [`update_b_empty_budget!`](@ref)'s floor `W >= 0` then
@@ -103,14 +105,16 @@ acceleration nor [`NewtonJFNKSolver`](@ref) converged on the SHW12 benchmark at 
 the end-of-step depth together with the Newton terms of its dependence on the head,
 [`ImplicitUpwind`](@ref) ([`compute_b_w_iterate!`](@ref)). `p` is not used (kept for the call signature).
 """
-compute_b_w!(s::State, p::ModelParameters) = (@parallel compute_b_w_kernel!(s.b_w, s.b, s.b_empty, s.b_uplift); s)
+compute_b_w!(s::State, p::ModelParameters) = (@parallel compute_b_w_kernel!(s.b_w, s.b, s.b_empty, s.b_uplift, s.b_dry); s)
 
 # The gap at the end of the step that the head rows assume (linear_solver.jl): the start-of-step gap under
 # ExplicitGapCoupling (the original scheme, which lags the gap in the conductance), the gap scheme's update G(N) under
 # ConsistentGapCoupling (SchemeGapUpdate), with its slope in the head dG/dh = -rho_w g dG/dN (central difference, as in
 # scheme_head_terms) where N follows the head (a filled cell).
-# Under the dry floor (dry_floor, run.jl) the gap the conductance takes is the water held at b_min, as compute_b! leaves it:
-# the floor conducts whether or not it holds water (its row keeps the water from going below zero).
+# Under the dry floor (dry_floor, run.jl) the conductance takes the water W = b - b_dry (scheme_water), not the gap held
+# at b_min: a drained cell conducting at K(b_min) relayed its neighbours' water at a flat head, lost its storage slope
+# (dG/dN -> 0 as W -> 0) and drove p_w to -3 po on Drang Drung (b_min = 1e-3), a state it never left. With K from W the
+# results no longer depend on b_min (b_min = 1e-3 matches b_min = 1e-6 to all printed digits there).
 # DiffusiveGapUpdate (WithDiffusion): its gap update is a global solve, so each cell takes the gap of the last solve,
 # State.b_next, and its slope State.db_next (DiffusiveCellGap). The head rows store that gap; the conductance takes the
 # smaller of it and the start-of-step gap: lagged where the gap opens (a melt opening at the iterate would close the loop
@@ -127,7 +131,7 @@ end
 @inline end_of_step_gap_slope(gc::DiffusiveCellGap, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1, rho_w, ggrav) = gc.conduct && gc.bn >= b ? zero(b) : gc.gbn
 @inline end_of_step_gap(::ExplicitGapCoupling, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1) = b
 @inline end_of_step_gap(gu::SchemeGapUpdate, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1) =
-    gu.dry_floor ? max(scheme_water(gu, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1), b_min) :
+    gu.dry_floor ? scheme_water(gu, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1) :
                    scheme_gap(gu, b, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1)
 @inline end_of_step_gap_slope(::ExplicitGapCoupling, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1, rho_w, ggrav) = zero(b)
 @inline function end_of_step_gap_slope(gu::SchemeGapUpdate, b, b_dry, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1, rho_w, ggrav)

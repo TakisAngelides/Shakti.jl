@@ -62,10 +62,11 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Marks, via `s.stor_up = 1/dt` on `GROUNDED` cells, where the ice may be lifted this step. A no-op under
-[`NoUplift`](@ref) (`s.stor_up` stays 0, selecting the legacy rows).
+Marks, via `s.stor_up = 1/dt` on `GROUNDED` cells, where the ice may be lifted this step. Under [`NoUplift`](@ref) it
+zeroes `s.stor_up` and `s.b_uplift`, selecting the legacy rows (the kernels read these fields whatever the option, see
+[`set_cavity_storage!`](@ref)).
 """
-set_uplift_storage!(s::State, dt, ::NoUplift) = s
+set_uplift_storage!(s::State, dt, ::NoUplift) = (fill!(s.stor_up, zero(eltype(s.stor_up))); fill!(s.b_uplift, zero(eltype(s.b_uplift))); s)
 set_uplift_storage!(s::State, dt, ::IceUplift) = (@parallel set_uplift_storage_kernel!(s.stor_up, s.mask, inv(dt)); s)
 
 @parallel_indices (ix, iy) function update_b_uplift_kernel!(b_uplift, mask, h, zb, po, rho_w, ggrav)

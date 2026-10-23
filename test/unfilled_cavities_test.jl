@@ -129,6 +129,28 @@
             @test maximum(abs, res[g]) < 1e-6 * scale
         end
 
+        @testset "a GlaDS-2 State rewrapped as the filled sheet keeps no unfilled/uplift fields" begin
+            # The kernels read stor, stor_up, b_empty, b_uplift and b_dry whatever the option: the 'off' options must zero them
+            # (spin-up then switch, or a checkpoint written under other options), not leave a hybrid sheet.
+            A_visc = fill(1e-30, nx, ny); b0 = fill(1e-6, nx, ny); ub_x = fill(3e-7, nx + 1, ny); ub_y = zeros(nx, ny + 1)
+            p = ModelParameters(e_v = 0.0, b_min = 1e-6)
+            st = State(grid)
+            set_initial_conditions!(st, grid, p, sl, base_mask(), A_visc, zb, zs, b0, G, ub_x, ub_y, ieb, taub_x, taub_y)
+            mk(state; kw...) = Simulation(grid, state, 1, floattype(dt), p, "fully_implicit", String[], ConstantMeltInput(), sl;
+                                          ps = PicardSolver(500, floattype(1e-12), LUDirectSolver(grid), grid), kw...)
+            glads = mk(st)
+            for _ in 1:3; step!(glads); end
+            @test maximum(Array(st.b_uplift)) > 0 && maximum(Array(st.stor)) > 0 # the fixture really lifts the ice
+            filled_kw = (cavity_filling = FilledCavities(), uplift = NoUplift(), k_face_choice = "arithmetic", gap_coupling = ExplicitGapCoupling())
+            ref = deepcopy(st)
+            for f in (ref.stor, ref.stor_up, ref.b_empty, ref.b_uplift, ref.b_dry); fill!(f, 0); end
+            wrapped, clean = mk(st; filled_kw...), mk(ref; filled_kw...)
+            for f in (:stor, :stor_up, :b_empty, :b_uplift, :b_dry); @test all(iszero, Array(getfield(st, f))); end
+            step!(wrapped); step!(clean)
+            @test Array(st.h) == Array(ref.h)
+            @test Array(st.b) == Array(ref.b)
+        end
+
         @testset "stuck cells, filled, ConsistentGapCoupling: no overflow (the first raw iterate has N ~ -1e16)" begin
             # The gap here is flat in N (A = 1e-30), so the first linear solve pushes the moulin's water through the b_min floor
             # and returns N ~ -1e16: the exponential branch of relax_update (and the N^n creep law of the explicit scheme)

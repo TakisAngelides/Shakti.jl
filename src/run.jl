@@ -239,8 +239,11 @@ function prepare_step_inputs!(sim::Simulation)
     s = sim.state
     compute_H!(s)
     compute_po!(s, sim.p)
+    # The option-owned fields (stor, b_empty, stor_up, b_uplift, b_dry) are read by the kernels whatever the option, so each
+    # 'off' option writes its neutral value: a State that ran under another sheet (spin-up, checkpoint) keeps no hybrid rows.
+    set_uplift_storage!(s, sim.dt[], sim.up) # 1/dt marks cells where the ice may be lifted (zero under NoUplift); before set_cavity_storage!, which reads b_uplift
     set_cavity_storage!(s, sim.dt[], sim.cf) # 1/dt marks cells that may be partly empty, read by the head rows and compute_pw!
-    set_uplift_storage!(s, sim.dt[], sim.up) # 1/dt marks cells where the ice may be lifted (no-op under NoUplift)
+    dry_floor(sim) || fill!(s.b_dry, zero(eltype(s.b_dry)))
     update_gap_jumps!(s, sim.hp) # SheetTopPotential: gap jumps across faces from the start-of-step b, added to the driving gradient (no-op under BedPotential)
     if sim.p.limit_freeze_on   # freeze-on floor for this step, from the start-of-step gap
         freeze_on_capacity!(s.mdot_min, sim)
@@ -556,8 +559,10 @@ Whether the `b_min` floor is dry: [`ConsistentGapCoupling`](@ref) under [`Filled
 The head rows then store the water `W = b - b_dry`, moved by the gap scheme's update with no lower clamp
 ([`scheme_water`](@ref)), and [`compute_b!`](@ref) holds the gap at `b_min` with the volume below the water dry
 (`State.b_dry`), so the head equation and the gap update store the same water also where creep closes the gap within a
-step. The conductances keep the gap: a dry floor still conducts, as the floor always did, and a cell with no water cannot
-drain through it, since its own row allows no less than zero water. Under [`UnfilledCavities`](@ref) the floor's volume
+step. The conductances take the water too ([`compute_b_w!`](@ref), `end_of_step_gap`): a dry floor does not conduct.
+Conducting at `K(b_min)` it relayed its neighbours' water at an almost flat head while its row had lost its storage
+slope, which pinned Drang Drung at `b_min` with `p_w ~ -3 po` (b_min = 1e-3); with the conductance from the water, the
+results there do not depend on `b_min`. Under [`UnfilledCavities`](@ref) the floor's volume
 is part of the empty volume `b_empty` instead, and with [`IceUplift`](@ref) the floor stays full. Not under [`WithDiffusion`](@ref),
 whose gap solve clamps at `b_min` ([`solve_b_diffusion!`](@ref)).
 """
