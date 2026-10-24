@@ -262,3 +262,37 @@
         @test cheb.lambda_min == 1.0 && cheb.lambda_max == 1.0 # unchanged, not NaN/Inf
 
     end
+
+    @testset "AggregationMultigrid is a symmetric positive definite preconditioner (CG needs one)" begin
+
+        # An odd-sized grid, so the 2 x 2 aggregates at the far edges are cut to 1 x 2, 2 x 1 and 1 x 1, with a masked
+        # hole (OCEAN, Dirichlet rows the weights leave out) inside: the cases the 80 x 20 check did not reach.
+        nx, ny = 15, 9
+        grid = Grid(nx, ny, 14e3, 8e3)
+        p = ModelParameters(e_v = 0.0)
+        sl = RegularizedCoulombSlidingLaw(0.25)
+        mask = fill(GROUNDED, nx, ny)
+        mask[end, :] .= OCEAN; mask[1, :] .= LAND; mask[:, 1] .= OTHER_BASIN
+        mask[6:7, 4:5] .= OCEAN; mask[11, 7] = OCEAN
+        zb = repeat(reshape(-0.02 .* grid.x, nx, 1), 1, ny)
+        b = [0.01 + 0.004 * sin(i + 2j) for i in 1:nx, j in 1:ny]
+        ieb = zeros(nx, ny); ieb[3, 3] = 3 / (grid.dx * grid.dy)
+        state = State(grid)
+        set_initial_conditions!(state, grid, p, sl, mask, fill(5e-25, nx, ny), zb, zb .+ 500.0, b, fill(0.06, nx, ny),
+                                fill(1e-6, nx + 1, ny), zeros(nx, ny + 1), ieb, zeros(nx + 1, ny), zeros(nx, ny + 1))
+        ls = CGIterativeSolver(grid, MatrixFreeLinearSystem)
+        sim = Simulation(grid, state, 1, floattype(3600.0), p, ConstantMeltInput(), sl; cavity_filling = FilledCavities(),
+                         uplift = NoUplift(), ps = PicardSolver(500, 1e-9, ls, grid))
+        step!(sim)
+        mg = ls.precond
+        @test mg isa AggregationMultigrid
+        Shakti.update_multigrid!(mg)
+        @test length(mg.levels) > 2
+
+        Pm(v) = ldiv!(similar(v), mg, copy(v))
+        for _ in 1:10
+            x, y = randn(nx * ny), randn(nx * ny)
+            @test dot(x, Pm(y)) ≈ dot(y, Pm(x)) rtol = 1e-10
+            @test dot(x, Pm(x)) > 0
+        end
+    end
