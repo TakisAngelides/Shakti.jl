@@ -655,7 +655,7 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Implicit (backward-Euler) update of `sim.state.b`: implicit on the creep closure term only. Deprecated, see
+Implicit (backward-Euler) update of `sim.state.b`: implicit on the creep closure term only. Deprecated (removed in 0.3), see
 [`ImplicitGapScheme`](@ref); [`FullyImplicitGapScheme`](@ref) is the default.
 """
 function compute_b!(sim::Simulation, ::ImplicitGapScheme)

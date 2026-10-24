@@ -44,7 +44,7 @@ inherits a real, if usually generous, `dt` cap from that term whenever `p.br != 
 not just in theory: a real AIS 32km run hit this at `dt=900s` and blew `b` up to the `b_max` safety
 cap in one cell, something [`FullyImplicitGapScheme`](@ref) -- now the default -- doesn't do.
 Unconditionally stable outright when `p.br == 0`. **Deprecated**: [`FullyImplicitGapScheme`](@ref) has the
-same cost without that cap; selecting it warns, and the scheme will be removed.
+same cost without that cap; selecting it warns, and the scheme will be removed in 0.3.
 """
 struct ImplicitGapScheme <: AbstractGapScheme end
 
@@ -261,7 +261,7 @@ const OPTION_RULES = (
           "(N = po) and uplifted (N = 0) head rows. These sheets bound N by po - pw already; for a floor on N use IceUplift " *
           "(water above the overburden lifts the ice), or use the filled sheet (FilledCavities(), NoUplift())."),
     (o -> o.gs isa ImplicitGapScheme, :warn_once,
-     o -> "ImplicitGapScheme is deprecated and will be removed: FullyImplicitGapScheme (the default) costs the same and is " *
+     o -> "ImplicitGapScheme is deprecated and will be removed in 0.3: FullyImplicitGapScheme (the default) costs the same and is " *
           "stable at any dt (ImplicitGapScheme's lagged opening is not)"),
 )
 
@@ -488,7 +488,7 @@ legacy_observer_expr(tracked_obs, which_observer, which_file_writer) =
 """
 $(TYPEDSIGNATURES)
 
-Deprecated: the same [`Simulation`](@ref) with the observables `tracked_obs` positional and the observer named by the
+Deprecated (removed in 0.3): the same [`Simulation`](@ref) with the observables `tracked_obs` positional and the observer named by the
 keywords `which_observer` (`"IO"` or `"Live"`), `which_file_writer` (`"NetCDF"`, `"HDF5"`, `"JLD2"`, `"CSV"`),
 `tracked_times` and `path`. Pass `observer = IOObserver(tracked_obs, tracked_times, NetCDFFileWriter(), path)` or
 `LiveObserver(tracked_obs, tracked_times)` instead.
@@ -497,7 +497,7 @@ function Simulation(grid, state, tsteps, dt, p, tracked_obs::Vector{String}, mi:
     haskey(kwargs, :observer) && error("pass either observer (an object) or tracked_obs with which_observer, not both")
     observer = legacy_observer(tracked_obs, which_observer, which_file_writer, tracked_times, path)
     obs = legacy_observer_expr(tracked_obs, which_observer, which_file_writer)
-    Base.depwarn("Simulation(grid, state, tsteps, dt, p, tracked_obs, mi, sl; which_observer, ...) is deprecated, use " *
+    Base.depwarn("Simulation(grid, state, tsteps, dt, p, tracked_obs, mi, sl; which_observer, ...) is deprecated and will be removed in 0.3, use " *
                  "Simulation(grid, state, tsteps, dt, p, mi, sl" * (isempty(obs) ? "" : "; " * obs) * ")", :Simulation)
     return Simulation(grid, state, tsteps, dt, p, mi, sl; observer, kwargs...)
 end
@@ -505,7 +505,7 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Deprecated: the same [`Simulation`](@ref) with the gap scheme named by a string before `tracked_obs`: `"fully_implicit"`
+Deprecated (removed in 0.3): the same [`Simulation`](@ref) with the gap scheme named by a string before `tracked_obs`: `"fully_implicit"`
 ([`FullyImplicitGapScheme`](@ref), the default), `"explicit"` ([`ExplicitGapScheme`](@ref)) or `"implicit"`
 ([`ImplicitGapScheme`](@ref)). Pass `gap_scheme` as a keyword instead, and the observer as an object.
 """
@@ -513,7 +513,7 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice::AbstractStrin
     haskey(kwargs, :observer) && error("pass either observer (an object) or tracked_obs with which_observer, not both")
     gs = legacy_gap_scheme(gap_scheme_choice)
     observer = legacy_observer(tracked_obs, which_observer, which_file_writer, tracked_times, path)
-    Base.depwarn("Simulation(grid, state, tsteps, dt, p, \"$gap_scheme_choice\", tracked_obs, mi, sl; ...) is deprecated, use " *
+    Base.depwarn("Simulation(grid, state, tsteps, dt, p, \"$gap_scheme_choice\", tracked_obs, mi, sl; ...) is deprecated and will be removed in 0.3, use " *
                  "Simulation(grid, state, tsteps, dt, p, mi, sl; " *
                  join(filter(!isempty, ["gap_scheme = $(nameof(typeof(gs)))()", legacy_observer_expr(tracked_obs, which_observer, which_file_writer)]), ", ") * ")", :Simulation)
     return Simulation(grid, state, tsteps, dt, p, mi, sl; gap_scheme = gs, observer, kwargs...)
