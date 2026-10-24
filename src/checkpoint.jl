@@ -7,6 +7,13 @@
 # and observer.jl's resume!/reopenfile! for resuming the tracked-output file
 # itself alongside the physics state.
 
+# The options that own State fields (cavity filling, uplift, gap coupling, face scheme, dry floor), saved with a checkpoint
+# so a restart under other options says so: the next step zeroes the fields the new options do not own and brings the
+# water W within the new sheet (prepare_step_inputs!).
+option_signature(sim::Simulation) = join((nameof(typeof(sim.cf)), nameof(typeof(sim.up)), nameof(typeof(sim.gcp)),
+                                          nameof(typeof(sim.kfs)), "dry_floor=$(dry_floor(sim))"), ", ")
+
+
 """
 $(TYPEDSIGNATURES)
 
@@ -27,12 +34,6 @@ the new one has fully landed. See `run.jl` for how `tsteps`/`checkpoint_every`/`
 together, and `observer.jl`'s `resume!`/`reopenfile!` for resuming the tracked-output file itself
 alongside the physics state.
 """
-# The options that own State fields (cavity filling, uplift, gap coupling, face scheme, dry floor), saved with a checkpoint
-# so a restart under other options says so: the next step zeroes the fields the new options do not own and brings the
-# water W within the new sheet (prepare_step_inputs!).
-option_signature(sim::Simulation) = join((nameof(typeof(sim.cf)), nameof(typeof(sim.up)), nameof(typeof(sim.gcp)),
-                                          nameof(typeof(sim.kfs)), "dry_floor=$(dry_floor(sim))"), ", ")
-
 function save_checkpoint(path::String, sim::Simulation, t::Int)
     state = sim.state
     tmp_path = path * ".tmp" # this works because jld2 recognizes its file not by the string extension but by a header inside the file, for other file types this might break
@@ -51,18 +52,6 @@ function save_checkpoint(path::String, sim::Simulation, t::Int)
     return nothing
 end
 
-"""
-$(TYPEDSIGNATURES)
-
-Restores `sim.state`, `sim.total_time[]`, `sim.dt[]` and the head-extrapolation history in place from a checkpoint
-written by [`save_checkpoint`](@ref), and returns the timestep it was saved at, so [`run!`](@ref) knows
-where to resume the loop. A checkpoint written before `dt` was added to it (no `"dt"` key) leaves
-`sim.dt[]` untouched, at whatever the `Simulation` constructor set it to; one without the history clears it
-(`load_head_history!`). A checkpoint written under other options (cavity filling, uplift, gap coupling, face scheme, dry
-floor) loads with a warning; the next step zeroes the fields the current options do not own and brings the water `W`
-within the current sheet. One written before `W` (GAP-5) takes it from the fields that then split the water,
-`max(b - b_empty - b_dry, 0) + b_uplift`.
-"""
 # The water of a checkpoint written before State.W (GAP-5): the gap less its empty part and the dry floor, plus the
 # uplift layer, each missing field zero.
 function checkpoint_water(file)
@@ -82,6 +71,19 @@ function load_timestep_control!(ts::AdaptiveTimeStep, file)
     return nothing
 end
 
+
+"""
+$(TYPEDSIGNATURES)
+
+Restores `sim.state`, `sim.total_time[]`, `sim.dt[]` and the head-extrapolation history in place from a checkpoint
+written by [`save_checkpoint`](@ref), and returns the timestep it was saved at, so [`run!`](@ref) knows
+where to resume the loop. A checkpoint written before `dt` was added to it (no `"dt"` key) leaves
+`sim.dt[]` untouched, at whatever the `Simulation` constructor set it to; one without the history clears it
+(`load_head_history!`). A checkpoint written under other options (cavity filling, uplift, gap coupling, face scheme, dry
+floor) loads with a warning; the next step zeroes the fields the current options do not own and brings the water `W`
+within the current sheet. One written before `W` (GAP-5) takes it from the fields that then split the water,
+`max(b - b_empty - b_dry, 0) + b_uplift`.
+"""
 function load_checkpoint!(sim::Simulation, path::String)
     state = sim.state
     t, total_time, dt = JLD2.jldopen(path, "r") do file

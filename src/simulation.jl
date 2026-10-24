@@ -98,7 +98,7 @@ The step that `dt` starts from is the `Simulation`'s own `dt`. Only the head sol
 the start-of-step melt and the head history change only once a step is accepted.
 
 Optionally `dt` is also capped by the local relaxation rate of the gap equation,
-`C + gamma = A_visc*|N|^(n-1)*N + |u_b|/lr` ([`compute_dt_rate_kernel!`](@ref)), over the cells whose gap is above
+`C + gamma = A_visc*|N|^(n-1)*N + |u_b|/lr` (`compute_dt_rate_kernel!`), over the cells whose gap is above
 `b_min` (a gap at `b_min` is held there: creep closes it within minutes under thick ice and nothing changes):
 `dt <= safety_factor / stat`, where `stat` is the maximum of that rate (`UsePercentile=false`, a single GPU-native
 reduction) or a chosen percentile of it (`UsePercentile=true`, a sort and a host transfer each step, less swayed by one

@@ -36,7 +36,7 @@ moves).
   `OTHER_BASIN`/`FROZEN_BED` rows hold their current value, which extrapolation would make drift.
 - Memory: `order + 1` head-sized arrays. Cost per step: `order + 1` fused broadcasts.
 - The englacial storage (`p.e_v > 0`) and the water test take the head at the start of the step, which
-  [`prepare_head_solve!`](@ref) keeps in the solver's `h_old` before the guess replaces `s.h`.
+  `prepare_head_solve!` keeps in the solver's `h_old` before the guess replaces `s.h`.
 """
 mutable struct HeadExtrapolation{A <: AbstractArray} <: AbstractHeadExtrapolation
     order::Int

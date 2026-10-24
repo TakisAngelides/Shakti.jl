@@ -168,7 +168,7 @@ uses it (`compute_lc_kernel!` below, plus `compute_b_implicit_kernel!`/`compute_
 """
 $(TYPEDSIGNATURES)
 
-`dl_c/db`, the local slope of [`creep_length`](@ref) -- feeds [`compute_dt_rate_kernel!`](@ref)'s
+`dl_c/db`, the local slope of `creep_length` -- feeds `compute_dt_rate_kernel!`'s
 closure-term relaxation rate (`C*dl_c/db`, the correct generalization of `C` once closure is no
 longer linear in `b`).
 """
@@ -195,7 +195,7 @@ Updates `s.lc` (the ice-creep length scale read by the creep-closure term everyw
 see [`AbstractCreepLengthScheme`](@ref)) from the current `s.b`. Called once per timestep by
 [`step_b!`](@ref), right after `s.b` is updated -- same timing as [`compute_beta!`](@ref), so `s.lc`
 stays lagged (not the *new* `b`) for exactly the same reason `s.beta` does. Where `s.N < 0` it is `b` under
-either scheme (see the four-argument [`creep_length`](@ref)).
+either scheme (see the four-argument `creep_length`).
 """
 compute_lc!(s::State, p::ModelParameters, cls::AbstractCreepLengthScheme) = (@parallel compute_lc_kernel!(s.lc, s.b, s.N, p.b_c, cls); s)
 

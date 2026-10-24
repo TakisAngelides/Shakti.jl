@@ -131,12 +131,14 @@ CholeskyDirectSolver
 LUDirectSolver
 CUDSSDirectSolver
 CGIterativeSolver
+BiCGStabIterativeSolver
 solve_elliptic_linear_system!
 ```
 
 ## Preconditioners
 
 ```@docs
+AggregationMultigrid
 ChebyshevPreconditioner
 update_chebyshev_bounds!
 estimate_eigenvalue_bounds!

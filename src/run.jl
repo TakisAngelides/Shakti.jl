@@ -433,7 +433,7 @@ Sets `sim.dt[]` for the step about to start under [`AdaptiveTimeStep`](@ref); a 
 (`dt` never changes). The step is the one the controller asks for (`ts.dt_ctrl[]`: the `Simulation`'s `dt` at the
 first step, then halved by `retry_step!` and grown by `control_dt!`), capped, if `ts.safety_factor > 0`, by
 `safety_factor/stat` (no lower than `dt_min`), where `stat` reduces the gap's relaxation rate `C+gamma` at the start of
-the step -- the previous step's converged `N`/`u_b` -- ([`compute_dt_rate_kernel!`](@ref)) to one number
+the step -- the previous step's converged `N`/`u_b` -- (`compute_dt_rate_kernel!`) to one number
 ([`rate_statistic`](@ref)). The step is then fitted to `target_time` (`fit_to_target`).
 """
 update_dt!(sim::Simulation) = update_dt!(sim, sim.ts)
@@ -472,7 +472,7 @@ Whether the step just solved for the head is rejected and retried. Under [`Adapt
 not converge, at a `dt` above `dt_min`, is: `dt` is halved (no lower than `dt_min`), the controller restarts its count of
 fast steps from there, and the head is reset to the start of the step (`hs.ps.h_old`). Nothing else needs restoring: the
 gap, the water `W`, the start-of-step melt and the head history change only once the head is accepted, and every field
-derived from the head is refreshed from it by the next [`prepare_head_solve!`](@ref). Never under [`FixedTimeStep`](@ref).
+derived from the head is refreshed from it by the next `prepare_head_solve!`. Never under [`FixedTimeStep`](@ref).
 """
 retry_step!(sim::Simulation, ::FixedTimeStep) = false
 function retry_step!(sim::Simulation, ts::AdaptiveTimeStep)
@@ -521,13 +521,13 @@ timestep_report(ts::AdaptiveTimeStep, sim) = " dt = $(round(sim.dt[], sigdigits 
 """
 $(TYPEDSIGNATURES)
 
-Reduces `rate` (this step's `C+gamma` field, see [`compute_dt_rate_kernel!`](@ref)) to the single
+Reduces `rate` (this step's `C+gamma` field, see `compute_dt_rate_kernel!`) to the single
 statistic `update_dt!` divides `safety_factor` by. `UsePercentile=false`: the plain domain
 maximum -- a single GPU-native reduction, no allocation, fully conservative (governed by the
 single fastest-relaxing cell). `UsePercentile=true`: one bulk `copyto!` of `rate` into
 `ts.host_rate` (CUDA.jl/Metal.jl's real device->host transfer -- scalar-indexing `rate` directly
 per grounded cell would be illegal/catastrophically slow on a GPU backend), then a plain CPU loop
-gathers the rated cells' values (`GROUNDED` with the gap above `b_min`: those [`compute_dt_rate_kernel!`](@ref) did
+gathers the rated cells' values (`GROUNDED` with the gap above `b_min`: those `compute_dt_rate_kernel!` did
 not mark `-Inf`, so the set follows mask changes during the run) into `ts.scratch`, sorts them in place,
 and indexes the `ts.percentile`-th entry. None of this allocates -- every buffer is preallocated
 once by [`AdaptiveTimeStep`](@ref)'s constructor. Returns `0` outright if there is no rated
@@ -555,7 +555,7 @@ end
 $(TYPEDSIGNATURES)
 
 Solves for the new hydraulic head: runs the Picard loop ([`elliptic_solver!`](@ref)) with the englacial storage over
-`sim.dt[]` from the head at the start of the step that [`prepare_head_solve!`](@ref) stored in `hs.ps.h_old` (`sim.mi`'s
+`sim.dt[]` from the head at the start of the step that `prepare_head_solve!` stored in `hs.ps.h_old` (`sim.mi`'s
 melt input for the current time was already refreshed by [`step!`](@ref)).
 """
 function step_h!(hs::PicardHeadScheme, sim::Simulation)

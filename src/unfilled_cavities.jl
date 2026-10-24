@@ -371,7 +371,7 @@ Under [`UnfilledCavities`](@ref) (the default sheet) `created` is the water the 
 [`update_water_budget!`](@ref) creates, about the Picard tolerance times the input once the steps converge. Under
 [`FilledCavities`](@ref) it is what the head rows and the gap update disagree on: about the Picard tolerance under
 [`ConsistentGapCoupling`](@ref), percents of the input or more under [`ExplicitGapCoupling`](@ref). A negative value is
-water lost. Mask changes are not part of it (their water is the `discarded_b` of [`set_mask!`](@ref)/[`update_frozen_bed!`](@ref)).
+water lost. Mask changes are not part of it (their water is the `discarded_b` of [`set_mask!`](@ref)/`update_frozen_bed!`).
 """
 struct WaterBudget{F <: AbstractFloat, A <: AbstractArray{F}}
     expected::A # per cell, the water the budget leaves, W_old + dt*(mdot/rho_w + ieb - div q) - dE, then the step's excess over it
