@@ -5,7 +5,8 @@
 # Jacobi leaves BiCGStab's iteration count growing with the grid (about 1900 at
 # 800 x 200 cells), and on a GPU every iteration costs the same ~0.5 ms of kernel
 # launches and reductions whatever the grid size, so the count is the cost. This
-# V-cycle holds it at 5-12 from 80 x 20 to 1600 x 400 cells.
+# V-cycle holds it at 5-12 from 80 x 20 to 1600 x 400 cells. The V-cycle is
+# symmetric, so CGIterativeSolver(g, MatrixFreeLinearSystem) uses it too.
 #
 # Coarsening merges 2 x 2 cells (unsmoothed, piecewise-constant aggregation) and
 # builds each coarse operator as the Galerkin product R*A*P with P the aggregation
@@ -153,6 +154,11 @@ end
 
 refresh_precond!(P::AggregationMultigrid, mfls::MatrixFreeLinearSystem) = update_multigrid!(P) # BiCGStabIterativeSolver's refresh, before each solve
 
+function _cg_precond!(ls::CGIterativeSolver{<:MatrixFreeLinearSystem, WS, V, <:AggregationMultigrid}) where {WS, V <: AbstractVector}
+    update_multigrid!(ls.precond) # CGIterativeSolver's refresh, before each solve
+    return ls.precond
+end
+
 # One red-black Gauss-Seidel half-sweep: updates the cells with (ix + iy) % 2 == color, whose neighbours all have
 # the other colour, so the update is in place and order-free.
 @parallel_indices (ix, iy) function mg_rbgs_kernel!(x, b, aP, aE, aW, aN, aS, color)
@@ -210,7 +216,9 @@ end
 function mg_vcycle!(P::AggregationMultigrid, l::Int, x, b)
     lv = P.levels[l]
     if l == length(P.levels)
-        mg_smooth!(lv, x, b, P.ncoarse, 0)
+        # colours 0,1 then 1,0: a palindromic sweep sequence keeps the V-cycle symmetric for CGIterativeSolver
+        mg_smooth!(lv, x, b, cld(P.ncoarse, 2), 0)
+        mg_smooth!(lv, x, b, fld(P.ncoarse, 2), 1)
         return x
     end
     c = P.levels[l+1]

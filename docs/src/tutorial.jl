@@ -162,7 +162,7 @@ Linear solver `ls`:
 * `CUDSSDirectSolver(grid)` (`structure = :general`, the default)  the same on a GPU node (fields stay on the CPU); the fastest on large grids
 * `CholeskyDirectSolver(grid)`, `CUDSSDirectSolver(grid; structure = :spd)`  symmetric matrices only: SHAKTI's sheet or `"upwind"`
 * `CGIterativeSolver(grid, SparseAssembledLinearSystem; amg = true)`  symmetric only, CPU
-* `CGIterativeSolver(grid, MatrixFreeLinearSystem)`  symmetric only, GPU-resident
+* `CGIterativeSolver(grid, MatrixFreeLinearSystem)`  symmetric only, matrix-free with the same multigrid preconditioner, GPU-resident: about 0.07 s per quiet step on an A100 at 800 x 200 and 0.08 s at 1600 x 400 (`CUDSSDirectSolver(grid; structure = :spd)`: 0.10 s and 0.24 s); `multigrid = false` gives Jacobi
 * `BiCGStabIterativeSolver(grid)`  matrix-free with a multigrid preconditioner, GPU-resident: the default sheet with fields on the GPU, about 0.2 s per step on an A100 from 800 x 200 to 1600 x 400 cells (`CUDSSDirectSolver` is faster on smaller grids, slower on larger ones)
 
 `Simulation` refuses Cholesky and CG with the default sheet, and names the opt-outs.

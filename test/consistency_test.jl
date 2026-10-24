@@ -212,11 +212,12 @@
             @test sim.total_time[] == ts.target_time
         end
 
-        @testset "Chebyshev (Gershgorin bounds) and matrix-free CG agree with Cholesky" begin
+        @testset "Chebyshev (Gershgorin bounds) and matrix-free CG (Jacobi, multigrid) agree with Cholesky" begin
             ref = fresh_sim(; order = 0)
             for _ in 1:3; step!(ref); end
             for ls in (CGIterativeSolver(grid, SparseAssembledLinearSystem; amg = false, chebyshev_degree = 4),
-                       CGIterativeSolver(grid, MatrixFreeLinearSystem; chebyshev_degree = 4),
+                       CGIterativeSolver(grid, MatrixFreeLinearSystem; multigrid = false, chebyshev_degree = 4),
+                       CGIterativeSolver(grid, MatrixFreeLinearSystem; multigrid = false),
                        CGIterativeSolver(grid, MatrixFreeLinearSystem))
                 st = State(grid)
                 p = ModelParameters(e_v = 0.0)

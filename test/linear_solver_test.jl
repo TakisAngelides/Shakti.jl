@@ -149,9 +149,17 @@
         @test state_cg_jacobi.h ≈ state_lu.h atol=1e-5
 
         state_cg_mf = fresh_state()
-        ls_cg_mf = CGIterativeSolver(grid, MatrixFreeLinearSystem) # MFLS has no amg option (see linear_solver.jl); this is plain Jacobi
+        ls_cg_mf = CGIterativeSolver(grid, MatrixFreeLinearSystem; multigrid = false) # MFLS has no amg option (see linear_solver.jl); this is plain Jacobi
         Shakti.solve_elliptic_linear_system!(ls_cg_mf, state_cg_mf, grid, p, kfs)
         @test state_cg_mf.h ≈ state_lu.h atol=1e-5
+
+        # AggregationMultigrid (multigrid.jl), MFLS's default: GPU-capable, and far fewer iterations than Jacobi
+        state_cg_mf_mg = fresh_state()
+        ls_cg_mf_mg = CGIterativeSolver(grid, MatrixFreeLinearSystem)
+        @test ls_cg_mf_mg.precond isa AggregationMultigrid
+        Shakti.solve_elliptic_linear_system!(ls_cg_mf_mg, state_cg_mf_mg, grid, p, kfs)
+        @test state_cg_mf_mg.h ≈ state_lu.h atol=1e-5
+        @test ls_cg_mf_mg.ws.stats.niter < ls_cg_mf.ws.stats.niter
 
         # ChebyshevPreconditioner (see preconditioner.jl): should converge to
         # the same head field as plain Jacobi/Cholesky regardless of degree
@@ -165,7 +173,7 @@
         @test ls_cg_cheb.ws.stats.niter <= ls_cg_jacobi.ws.stats.niter
 
         state_cg_mf_cheb = fresh_state()
-        ls_cg_mf_cheb = CGIterativeSolver(grid, MatrixFreeLinearSystem; chebyshev_degree = 4)
+        ls_cg_mf_cheb = CGIterativeSolver(grid, MatrixFreeLinearSystem; multigrid = false, chebyshev_degree = 4)
         Shakti.solve_elliptic_linear_system!(ls_cg_mf_cheb, state_cg_mf_cheb, grid, p, kfs)
         @test state_cg_mf_cheb.h ≈ state_lu.h atol=1e-5
         @test ls_cg_mf_cheb.ws.stats.niter <= ls_cg_mf.ws.stats.niter
@@ -184,6 +192,7 @@
         # choices, and amg isn't offered on MatrixFreeLinearSystem at all.
         @test_throws ErrorException CGIterativeSolver(grid, SparseAssembledLinearSystem; amg = true, chebyshev_degree = 4)
         @test_throws ErrorException CGIterativeSolver(grid, MatrixFreeLinearSystem; amg = true)
+        @test_throws ErrorException CGIterativeSolver(grid, MatrixFreeLinearSystem; chebyshev_degree = 4)
 
     end
 
