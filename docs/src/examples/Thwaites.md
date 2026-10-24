@@ -27,9 +27,8 @@ set_initial_conditions!(state, grid, p, sl, d.mask, d.A, d.zb, d.zb .+ d.H .+ b,
                         zeros(Nx, Ny), zeros(Nx + 1, Ny), zeros(Nx, Ny + 1))
 
 ps = PicardSolver(500, 1e-6, CUDSSDirectSolver(grid; structure = :general), grid)   # LUDirectSolver(grid) on CPU
-sim = Simulation(grid, state, 365, floattype(86400.0), p, "fully_implicit", ["N", "b", "Re", "po"],
-                 ConstantMeltInput(), sl; ps = ps, which_observer = "IO", which_file_writer = "NetCDF",
-                 tracked_times = [0, 365], path = "thwaites.nc")
+sim = Simulation(grid, state, 365, floattype(86400.0), p, ConstantMeltInput(), sl; ps = ps,
+                 observer = IOObserver(["N", "b", "Re", "po"], [0, 365], NetCDFFileWriter(), "thwaites.nc"))
 run!(sim)
 ```
 

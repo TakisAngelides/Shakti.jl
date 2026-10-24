@@ -256,12 +256,11 @@ function run_case(key, tag, d, p, sl, dt, nsteps; b0 = 1e-3, kw = (;))
     ls = LS == "cudss" ? CUDSSDirectSolver(grid; structure = :general) : LUDirectSolver(grid)
     path = joinpath(OUT, "$(key)_$(tag).nc")
     get(ENV, "SHAKTI_FIG_REUSE", "0") == "1" && isfile(path) && return path   # replot from an earlier run
-    sim = Simulation(grid, state, nsteps, floattype(dt), p, "fully_implicit", ["N", "b", "Re", "po"], ConstantMeltInput(), sl(grid);
-                     ps = PicardSolver(500, 1e-6, ls, grid), which_observer = "IO", which_file_writer = "NetCDF",
-                     tracked_times = [0, nsteps], path, kw...)
+    sim = Simulation(grid, state, nsteps, floattype(dt), p, ConstantMeltInput(), sl(grid);
+                     ps = PicardSolver(500, 1e-6, ls, grid), observer = IOObserver(["N", "b", "Re", "po"], [0, nsteps], NetCDFFileWriter(), path), kw...)
     if get(ENV, "SHAKTI_FIG_WARMUP", "0") == "1"            # time without compilation: one step on a copy first
         st1 = deepcopy(state)
-        run!(Simulation(grid, st1, 1, floattype(dt), p, "fully_implicit", String[], ConstantMeltInput(), sl(grid);
+        run!(Simulation(grid, st1, 1, floattype(dt), p, ConstantMeltInput(), sl(grid);
                         ps = PicardSolver(500, 1e-6, LS == "cudss" ? CUDSSDirectSolver(grid; structure = :general) : LUDirectSolver(grid), grid), kw...))
     end
     wall = @elapsed run!(sim)

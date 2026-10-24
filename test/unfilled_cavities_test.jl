@@ -83,7 +83,7 @@
 
         # `stuck`: gap at the floor, 10 m/yr of sliding, very stiff ice -- opening that no inflow or
         # creep closure at N <= po can balance (the Greenland 16 km failure, in miniature).
-        function make_sim(cf; stuck = true, mask = base_mask(), gap = "explicit", kface = nothing, ieb_scale = 1.0, gcp = ExplicitGapCoupling())
+        function make_sim(cf; stuck = true, mask = base_mask(), gap = ExplicitGapScheme(), kface = nothing, ieb_scale = 1.0, gcp = ExplicitGapCoupling())
             A_visc = fill(stuck ? 1e-30 : 5e-25, nx, ny)
             b0     = stuck ? fill(1e-6, nx, ny) : [0.01 + 0.004 * sin(i + 2j) for i in 1:nx, j in 1:ny]
             ub_x   = fill(stuck ? 3e-7 : 1e-6, nx + 1, ny)
@@ -92,7 +92,7 @@
             state = State(grid)
             set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b0, G, ub_x, ub_y, ieb .* ieb_scale, taub_x, taub_y)
             ps = PicardSolver(500, floattype(1e-12), kface == "implicit_upwind" ? LUDirectSolver(grid) : CholeskyDirectSolver(grid), grid)
-            return Simulation(grid, state, 1, floattype(dt), p, gap, String[], ConstantMeltInput(), sl; uplift = NoUplift(), ps = ps, cavity_filling = cf, k_face_choice = something(kface, cf isa UnfilledCavities ? "upwind" : "arithmetic"), gap_coupling = gcp,
+            return Simulation(grid, state, 1, floattype(dt), p, ConstantMeltInput(), sl; gap_scheme = gap, uplift = NoUplift(), ps = ps, cavity_filling = cf, k_face_choice = something(kface, cf isa UnfilledCavities ? "upwind" : "arithmetic"), gap_coupling = gcp,
                               hydraulic_potential = BedPotential()) # compare cavity filling alone (the default is SheetTopPotential)
         end
 
@@ -156,7 +156,7 @@
             p = ModelParameters(e_v = 0.0, b_min = 1e-6)
             st = State(grid)
             set_initial_conditions!(st, grid, p, sl, base_mask(), A_visc, zb, zs, b0, G, ub_x, ub_y, ieb, taub_x, taub_y)
-            mk(state; kw...) = Simulation(grid, state, 1, floattype(dt), p, "fully_implicit", String[], ConstantMeltInput(), sl;
+            mk(state; kw...) = Simulation(grid, state, 1, floattype(dt), p, ConstantMeltInput(), sl;
                                           ps = PicardSolver(500, floattype(1e-12), LUDirectSolver(grid), grid), kw...)
             glads = mk(st)
             for _ in 1:3; step!(glads); end
@@ -177,7 +177,7 @@
             p0 = ModelParameters(e_v = 0.0, b_min = 1e-6)
             st = State(grid)
             set_initial_conditions!(st, grid, p0, sl, base_mask(), fill(5e-25, nx, ny), zb, zs, fill(1e-3, nx, ny), G, fill(1e-6, nx + 1, ny), zeros(nx, ny + 1), ieb, taub_x, taub_y)
-            glads(p; kw...) = Simulation(grid, st, 1, floattype(dt), p, "fully_implicit", String[], ConstantMeltInput(), sl;
+            glads(p; kw...) = Simulation(grid, st, 1, floattype(dt), p, ConstantMeltInput(), sl;
                                          ps = PicardSolver(500, floattype(1e-12), LUDirectSolver(grid), grid), kw...)
             @test_throws r"contradicts the unfilled" glads(ModelParameters(e_v = 0.0, N_min = 1e3))
             @test_throws r"contradicts the unfilled" glads(p0; cell_N_clamping = CellNClamping(Dict((3, 3) => (0.0, 1e6))))
@@ -186,7 +186,7 @@
             @test Shakti.water_check_dt(glads(ModelParameters(e_v = 0.0, N_min = 0.0))) > 0
             @test Shakti.water_check_dt(glads(p0; uplift = NoUplift(), cell_N_clamping = CellNClamping(Dict((3, 3) => (0.0, Inf))))) == 0 # N < 0 possible: binds
             @test_logs make_sim(FilledCavities(); kface = "arithmetic") # the filled sheet takes any clamp
-            @test Simulation(grid, State(grid), 1, floattype(dt), ModelParameters(e_v = 0.0, N_min = 1e3), "explicit", String[], ConstantMeltInput(), sl;
+            @test Simulation(grid, State(grid), 1, floattype(dt), ModelParameters(e_v = 0.0, N_min = 1e3), ConstantMeltInput(), sl; gap_scheme = ExplicitGapScheme(),
                              cavity_filling = FilledCavities(), uplift = NoUplift(), ps = PicardSolver(5, floattype(1e-6), CholeskyDirectSolver(grid), grid)) isa Simulation
         end
 
@@ -195,7 +195,7 @@
             p = ModelParameters(e_v = 0.0, b_min = 1e-6)
             st = State(grid)
             set_initial_conditions!(st, grid, p, sl, base_mask(), A_visc, zb, zs, b0, G, ub_x, ub_y, ieb, taub_x, taub_y)
-            sim = Simulation(grid, st, 1, floattype(dt), p, "fully_implicit", String[], ConstantMeltInput(), sl;
+            sim = Simulation(grid, st, 1, floattype(dt), p, ConstantMeltInput(), sl;
                              ps = PicardSolver(500, floattype(1e-12), LUDirectSolver(grid), grid))
             for _ in 1:3; step!(sim); end
             water(s) = sum(Array(s.W .* (s.mask .== GROUNDED)))
@@ -226,8 +226,8 @@
             # below min(N_prev, 0) per iteration), so the head stays finite; the first steps may need many iterations. Under
             # implicit_upwind the dry floor had no such limit and the head matrix went singular at step 1 (ARCH-2). With the
             # explicit gap scheme implicit_upwind still diverges (b ~ 1e12 m by step 4): not tested.
-            for gap in ("explicit", "implicit", "fully_implicit"), kface in ("arithmetic", "implicit_upwind")
-              gap == "explicit" && kface == "implicit_upwind" && continue
+            for gap in (ExplicitGapScheme(), ImplicitGapScheme(), FullyImplicitGapScheme()), kface in ("arithmetic", "implicit_upwind")
+              gap isa ExplicitGapScheme && kface == "implicit_upwind" && continue
               @testset "gap $gap, $kface" begin
                 sim = make_sim(FilledCavities(); gap = gap, kface = kface, gcp = ConsistentGapCoupling())
                 s = sim.state
@@ -245,7 +245,7 @@
         end
 
         @testset "stuck cells, filled, no storage: the unconverged step warns with the water it lost" begin
-            sim = make_sim(FilledCavities(); gap = "fully_implicit", gcp = ConsistentGapCoupling())
+            sim = make_sim(FilledCavities(); gap = FullyImplicitGapScheme(), gcp = ConsistentGapCoupling())
             @test_logs (:warn, r"did not converge.*lost\).*IceUplift\(\) or e_v > 0") match_mode = :any step!(sim)
             @test !first(Shakti.picard_status(sim.hs)) && sim.wb.created[] < -0.9 * sim.wb.input[] # N would have to reach ~ -1e9 Pa
         end
@@ -278,7 +278,7 @@
             state = State(grid)
             set_initial_conditions!(state, grid, p, sl, base_mask(), A_visc, zb, zs, b0, G, ub_x, ub_y, zeros(nx, ny), taub_x, taub_y) # no moulin: with 3 m^3/s into ice this stiff the pressurized cells are a numerical stress test of their own
             ps = PicardSolver(500, floattype(1e-12), CholeskyDirectSolver(grid), grid)
-            sim = Simulation(grid, state, 1, floattype(dt), p, "explicit", String[], ConstantMeltInput(), sl; uplift = NoUplift(), k_face_choice = "upwind", ps = ps, cavity_filling = UnfilledCavities())
+            sim = Simulation(grid, state, 1, floattype(dt), p, ConstantMeltInput(), sl; gap_scheme = ExplicitGapScheme(), uplift = NoUplift(), k_face_choice = "upwind", ps = ps, cavity_filling = UnfilledCavities())
             s = state
             for k in 1:6
                 W_old = copy(Array(s.W))
@@ -296,7 +296,7 @@
         end
 
         @testset "water budget closes for every gap scheme (W from the water actually delivered)" begin
-            for gap in ("explicit", "implicit", "fully_implicit"), stuck in (false, true)
+            for gap in (ExplicitGapScheme(), ImplicitGapScheme(), FullyImplicitGapScheme()), stuck in (false, true)
               @testset "gap $gap, stuck=$stuck" begin
                 sim = make_sim(UnfilledCavities(); stuck = stuck, gap = gap, ieb_scale = 1e-4) # a 3 m^3/s moulin into ice this stiff is a numerical stress test of its own
                 s = sim.state
@@ -425,7 +425,7 @@
             state = State(grid)
             set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b0, G, ub_x, zeros(nx, ny + 1), ieb, taub_x, taub_y)
             ps = PicardSolver(500, floattype(pres), CholeskyDirectSolver(grid), grid)
-            return Simulation(grid, state, 1, floattype(dt), p, "explicit", String[], ConstantMeltInput(), sl; uplift = NoUplift(), ps = ps, cavity_filling = cf, k_face_choice = something(kface, cf isa UnfilledCavities ? "upwind" : "arithmetic"),
+            return Simulation(grid, state, 1, floattype(dt), p, ConstantMeltInput(), sl; gap_scheme = ExplicitGapScheme(), uplift = NoUplift(), ps = ps, cavity_filling = cf, k_face_choice = something(kface, cf isa UnfilledCavities ? "upwind" : "arithmetic"),
                               hydraulic_potential = BedPotential()) # as above
         end
 
@@ -477,7 +477,7 @@
         state = State(grid)
         set_initial_conditions!(state, grid, ModelParameters(), sl, mask, fill(2.4e-24, nx, ny), zb, zb .+ H, fill(1e-3, nx, ny),
                                 fill(0.06, nx, ny), fill(1e-6, nx + 1, ny), zeros(nx, ny + 1), fill(1e-8, nx, ny), zeros(nx + 1, ny), zeros(nx, ny + 1))
-        return Simulation(grid, state, 2, floattype(86400.0), ModelParameters(), "fully_implicit", String[], ConstantMeltInput(), sl;
+        return Simulation(grid, state, 2, floattype(86400.0), ModelParameters(), ConstantMeltInput(), sl;
                           ps = PicardSolver(500, floattype(1e-8), ls, grid), kw...)
     end
     sim = default_sim(LUDirectSolver(grid))
@@ -510,7 +510,7 @@ end
         state = State(grid)
         set_initial_conditions!(state, grid, ModelParameters(), sl, mask, fill(2.4e-24, nx, ny), zb, zb .+ H, fill(1e-3, nx, ny),
                                 fill(0.06, nx, ny), fill(1e-6, nx + 1, ny), zeros(nx, ny + 1), ieb, zeros(nx + 1, ny), zeros(nx, ny + 1))
-        return Simulation(grid, state, 4, floattype(dt), ModelParameters(), String[], ConstantMeltInput(), sl;
+        return Simulation(grid, state, 4, floattype(dt), ModelParameters(), ConstantMeltInput(), sl;
                           ps = PicardSolver(500, floattype(1e-8), ls, grid), kw...)
     end
     function budget_gap(s, W_old, dt)
@@ -561,7 +561,7 @@ end
             state = State(grid)
             set_initial_conditions!(state, grid, p, sl, mask, fill(2.4e-24, nx, ny), zb, zb .+ H, fill(1e-3, nx, ny), fill(0.06, nx, ny),
                                     fill(1e-6, nx + 1, ny), zeros(nx, ny + 1), ieb, zeros(nx + 1, ny), zeros(nx, ny + 1))
-            sim = Simulation(grid, state, 3, floattype(86400.0), p, String[], ConstantMeltInput(), sl; ps = PicardSolver(500, floattype(1e-10), LUDirectSolver(grid), grid))
+            sim = Simulation(grid, state, 3, floattype(86400.0), p, ConstantMeltInput(), sl; ps = PicardSolver(500, floattype(1e-10), LUDirectSolver(grid), grid))
             g = mask .== GROUNDED
             area = grid.dx * grid.dy
             for _ in 1:3

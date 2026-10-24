@@ -31,21 +31,20 @@
         tracked_obs = ["h", "b"]
         tracked_times = 0:tsteps
 
-        function make_sim(sim_tsteps, which_file_writer, path)
+        function make_sim(sim_tsteps, fr, path)
             state = State(grid)
             set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
             ls = CholeskyDirectSolver(grid)
             ps = PicardSolver(500, 1e-6, ls, grid)
-            return Simulation(grid, state, sim_tsteps, floattype(dt), p, "fully_implicit", tracked_obs, mi, sl; cavity_filling = FilledCavities(), uplift = NoUplift(),
-                               ps = ps, which_observer = "IO", which_file_writer = which_file_writer,
-                               tracked_times = tracked_times, path = path)
+            return Simulation(grid, state, sim_tsteps, floattype(dt), p, mi, sl; cavity_filling = FilledCavities(), uplift = NoUplift(),
+                               ps = ps, observer = IOObserver(tracked_obs, tracked_times, fr, path))
         end
 
         mktempdir() do dir
 
             @testset "NetCDF" begin
                 full_path = joinpath(dir, "full.nc")
-                sim_full = make_sim(tsteps, "NetCDF", full_path)
+                sim_full = make_sim(tsteps, NetCDFFileWriter(), full_path)
                 run!(sim_full)
 
                 # "Crashed" run: only gets to t=5 (as if killed there), but
@@ -54,14 +53,14 @@
                 # to crash_path before the "crash".
                 crash_path = joinpath(dir, "crash.nc")
                 checkpoint_path = joinpath(dir, "ckpt.jld2")
-                sim_crash = make_sim(5, "NetCDF", crash_path)
+                sim_crash = make_sim(5, NetCDFFileWriter(), crash_path)
                 run!(sim_crash; checkpoint_every = 3, checkpoint_path = checkpoint_path)
 
                 # Resume into a brand-new Simulation/State (nothing shared in
                 # memory with sim_crash -- the checkpoint file is the only
                 # link), back to the original tsteps=8. This replays t=4,5
                 # (already in crash_path) before reaching new ground at 6,7,8.
-                sim_resumed = make_sim(tsteps, "NetCDF", crash_path)
+                sim_resumed = make_sim(tsteps, NetCDFFileWriter(), crash_path)
                 run!(sim_resumed; restart_path = checkpoint_path)
 
                 @test Array(sim_resumed.state.h) ≈ Array(sim_full.state.h)
@@ -79,15 +78,15 @@
 
             @testset "HDF5" begin
                 full_path = joinpath(dir, "full.h5")
-                sim_full = make_sim(tsteps, "HDF5", full_path)
+                sim_full = make_sim(tsteps, HDF5FileWriter(), full_path)
                 run!(sim_full)
 
                 crash_path = joinpath(dir, "crash.h5")
                 checkpoint_path = joinpath(dir, "ckpt2.jld2")
-                sim_crash = make_sim(5, "HDF5", crash_path)
+                sim_crash = make_sim(5, HDF5FileWriter(), crash_path)
                 run!(sim_crash; checkpoint_every = 3, checkpoint_path = checkpoint_path)
 
-                sim_resumed = make_sim(tsteps, "HDF5", crash_path)
+                sim_resumed = make_sim(tsteps, HDF5FileWriter(), crash_path)
                 run!(sim_resumed; restart_path = checkpoint_path)
 
                 @test Array(sim_resumed.state.h) ≈ Array(sim_full.state.h)
@@ -104,15 +103,15 @@
 
             @testset "JLD2" begin
                 full_path = joinpath(dir, "full.jld2")
-                sim_full = make_sim(tsteps, "JLD2", full_path)
+                sim_full = make_sim(tsteps, JLD2FileWriter(), full_path)
                 run!(sim_full)
 
                 crash_path = joinpath(dir, "crash.jld2")
                 checkpoint_path = joinpath(dir, "ckpt3.jld2")
-                sim_crash = make_sim(5, "JLD2", crash_path)
+                sim_crash = make_sim(5, JLD2FileWriter(), crash_path)
                 run!(sim_crash; checkpoint_every = 3, checkpoint_path = checkpoint_path)
 
-                sim_resumed = make_sim(tsteps, "JLD2", crash_path)
+                sim_resumed = make_sim(tsteps, JLD2FileWriter(), crash_path)
                 run!(sim_resumed; restart_path = checkpoint_path)
 
                 @test Array(sim_resumed.state.h) ≈ Array(sim_full.state.h)
@@ -131,15 +130,15 @@
 
             @testset "CSV" begin
                 full_path = joinpath(dir, "full.csv")
-                sim_full = make_sim(tsteps, "CSV", full_path)
+                sim_full = make_sim(tsteps, CSVFileWriter(), full_path)
                 run!(sim_full)
 
                 crash_path = joinpath(dir, "crash.csv")
                 checkpoint_path = joinpath(dir, "ckpt4.jld2")
-                sim_crash = make_sim(5, "CSV", crash_path)
+                sim_crash = make_sim(5, CSVFileWriter(), crash_path)
                 run!(sim_crash; checkpoint_every = 3, checkpoint_path = checkpoint_path)
 
-                sim_resumed = make_sim(tsteps, "CSV", crash_path)
+                sim_resumed = make_sim(tsteps, CSVFileWriter(), crash_path)
                 run!(sim_resumed; restart_path = checkpoint_path)
 
                 @test Array(sim_resumed.state.h) ≈ Array(sim_full.state.h)
@@ -199,30 +198,29 @@
         # sim_tsteps (0:sim_tsteps) rather than a single fixed range shared across phases --
         # extend_path always starts a fresh file sized for "how many more steps", not the
         # original run's total (see run.jl's extend_path docstring).
-        function make_sim(sim_tsteps, which_file_writer, path)
+        function make_sim(sim_tsteps, fr, path)
             state = State(grid)
             set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
             ls = CholeskyDirectSolver(grid)
             ps = PicardSolver(500, 1e-6, ls, grid)
-            return Simulation(grid, state, sim_tsteps, floattype(dt), p, "fully_implicit", tracked_obs, mi, sl; cavity_filling = FilledCavities(), uplift = NoUplift(),
-                               ps = ps, which_observer = "IO", which_file_writer = which_file_writer,
-                               tracked_times = 0:sim_tsteps, path = path)
+            return Simulation(grid, state, sim_tsteps, floattype(dt), p, mi, sl; cavity_filling = FilledCavities(), uplift = NoUplift(),
+                               ps = ps, observer = IOObserver(tracked_obs, 0:sim_tsteps, fr, path))
         end
 
         mktempdir() do dir
 
             @testset "NetCDF" begin
                 full_path = joinpath(dir, "full.nc")
-                sim_full = make_sim(n_first + n_more, "NetCDF", full_path)
+                sim_full = make_sim(n_first + n_more, NetCDFFileWriter(), full_path)
                 run!(sim_full)
 
                 first_path = joinpath(dir, "first.nc")
                 checkpoint_path = joinpath(dir, "ckpt.jld2")
-                sim_first = make_sim(n_first, "NetCDF", first_path)
+                sim_first = make_sim(n_first, NetCDFFileWriter(), first_path)
                 run!(sim_first; checkpoint_every = 1000, checkpoint_path = checkpoint_path)
 
                 extended_path = joinpath(dir, "extended.nc")
-                sim_extended = make_sim(n_more, "NetCDF", extended_path)
+                sim_extended = make_sim(n_more, NetCDFFileWriter(), extended_path)
                 run!(sim_extended; extend_path = checkpoint_path)
 
                 @test Array(sim_extended.state.h) ≈ Array(sim_full.state.h)
@@ -240,16 +238,16 @@
 
             @testset "HDF5" begin
                 full_path = joinpath(dir, "full.h5")
-                sim_full = make_sim(n_first + n_more, "HDF5", full_path)
+                sim_full = make_sim(n_first + n_more, HDF5FileWriter(), full_path)
                 run!(sim_full)
 
                 first_path = joinpath(dir, "first.h5")
                 checkpoint_path = joinpath(dir, "ckpt2.jld2")
-                sim_first = make_sim(n_first, "HDF5", first_path)
+                sim_first = make_sim(n_first, HDF5FileWriter(), first_path)
                 run!(sim_first; checkpoint_every = 1000, checkpoint_path = checkpoint_path)
 
                 extended_path = joinpath(dir, "extended.h5")
-                sim_extended = make_sim(n_more, "HDF5", extended_path)
+                sim_extended = make_sim(n_more, HDF5FileWriter(), extended_path)
                 run!(sim_extended; extend_path = checkpoint_path)
 
                 @test Array(sim_extended.state.h) ≈ Array(sim_full.state.h)
@@ -268,16 +266,16 @@
 
             @testset "JLD2" begin
                 full_path = joinpath(dir, "full.jld2")
-                sim_full = make_sim(n_first + n_more, "JLD2", full_path)
+                sim_full = make_sim(n_first + n_more, JLD2FileWriter(), full_path)
                 run!(sim_full)
 
                 first_path = joinpath(dir, "first.jld2")
                 checkpoint_path = joinpath(dir, "ckpt3.jld2")
-                sim_first = make_sim(n_first, "JLD2", first_path)
+                sim_first = make_sim(n_first, JLD2FileWriter(), first_path)
                 run!(sim_first; checkpoint_every = 1000, checkpoint_path = checkpoint_path)
 
                 extended_path = joinpath(dir, "extended.jld2")
-                sim_extended = make_sim(n_more, "JLD2", extended_path)
+                sim_extended = make_sim(n_more, JLD2FileWriter(), extended_path)
                 run!(sim_extended; extend_path = checkpoint_path)
 
                 @test Array(sim_extended.state.h) ≈ Array(sim_full.state.h)
@@ -295,16 +293,16 @@
 
             @testset "CSV" begin
                 full_path = joinpath(dir, "full.csv")
-                sim_full = make_sim(n_first + n_more, "CSV", full_path)
+                sim_full = make_sim(n_first + n_more, CSVFileWriter(), full_path)
                 run!(sim_full)
 
                 first_path = joinpath(dir, "first.csv")
                 checkpoint_path = joinpath(dir, "ckpt4.jld2")
-                sim_first = make_sim(n_first, "CSV", first_path)
+                sim_first = make_sim(n_first, CSVFileWriter(), first_path)
                 run!(sim_first; checkpoint_every = 1000, checkpoint_path = checkpoint_path)
 
                 extended_path = joinpath(dir, "extended.csv")
-                sim_extended = make_sim(n_more, "CSV", extended_path)
+                sim_extended = make_sim(n_more, CSVFileWriter(), extended_path)
                 run!(sim_extended; extend_path = checkpoint_path)
 
                 @test Array(sim_extended.state.h) ≈ Array(sim_full.state.h)
@@ -336,7 +334,7 @@
                                  zeros(nx, ny), zeros(nx + 1, ny), zeros(nx, ny + 1))
         ls = CholeskyDirectSolver(grid)
         ps = PicardSolver(500, 1e-6, ls, grid)
-        sim = Simulation(grid, state, 3, floattype(3600.0), p, "fully_implicit", String[], mi, sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps)
+        sim = Simulation(grid, state, 3, floattype(3600.0), p, mi, sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps)
 
         mktempdir() do dir
             mkpath(dir)
@@ -358,7 +356,7 @@
             set_initial_conditions!(state, grid, p, sl, mask, fill(5e-25, nx, ny), zb, zb .+ H, fill(0.005, nx, ny), zeros(nx, ny),
                                     fill(30.0 / (365 * 86400), nx + 1, ny), zeros(nx, ny + 1), fill(5.0 / 1000 / 86400, nx, ny), zeros(nx + 1, ny), zeros(nx, ny + 1))
             ts = AdaptiveTimeStep(grid, state; safety_factor = 0.3, dt_min = 3600.0, dt_max = 6 * 3600.0, target_time = target)
-            return Simulation(grid, state, ceil(Int, target / 3600.0), floattype(3600.0), p, "fully_implicit", String[], ConstantMeltInput(), sl;
+            return Simulation(grid, state, ceil(Int, target / 3600.0), floattype(3600.0), p, ConstantMeltInput(), sl;
                               ps = PicardSolver(300, floattype(1e-9), LUDirectSolver(grid), grid), timestep_scheme = ts, kw...)
         end
         mktempdir() do dir

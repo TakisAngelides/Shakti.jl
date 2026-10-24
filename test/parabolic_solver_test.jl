@@ -27,12 +27,12 @@
             state = State(grid)
             set_initial_conditions!(state, grid, p_parabolic, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
 
-            @test_throws ErrorException Simulation(grid, state, 1, floattype(60.0), p_parabolic, "fully_implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift())
+            @test_throws ErrorException Simulation(grid, state, 1, floattype(60.0), p_parabolic, ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift())
 
             ps = PicardSolver(50, 1e-6, CholeskyDirectSolver(grid), grid)
-            sim = Simulation(grid, state, 1, floattype(60.0), p_parabolic, "fully_implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps)
+            sim = Simulation(grid, state, 1, floattype(60.0), p_parabolic, ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps)
             @test sim.hs isa PicardHeadScheme && sim.he isa HeadExtrapolation
-            @test_throws ErrorException Simulation(grid, state, 1, floattype(60.0), ModelParameters(e_v = -1e-3), "fully_implicit", String[], ConstantMeltInput(), sl;
+            @test_throws ErrorException Simulation(grid, state, 1, floattype(60.0), ModelParameters(e_v = -1e-3), ConstantMeltInput(), sl;
                                                    cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps)
         end
 
@@ -77,12 +77,12 @@
 
             ls_elliptic = CholeskyDirectSolver(grid)
             ps_elliptic = PicardSolver(500, 1e-6, ls_elliptic, grid)
-            sim_elliptic = Simulation(grid, state_elliptic, tsteps, floattype(dt), p_elliptic, "fully_implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps_elliptic)
+            sim_elliptic = Simulation(grid, state_elliptic, tsteps, floattype(dt), p_elliptic, ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps_elliptic)
             run!(sim_elliptic)
 
             ls_parabolic = CholeskyDirectSolver(grid)
             ps_parabolic = PicardSolver(50, 1e-6, ls_parabolic, grid)
-            sim_parabolic = Simulation(grid, state_parabolic, tsteps, floattype(dt), p_parabolic, "fully_implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps_parabolic)
+            sim_parabolic = Simulation(grid, state_parabolic, tsteps, floattype(dt), p_parabolic, ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps_parabolic)
             run!(sim_parabolic)
 
             # Empirically ~3e-7 relative -- rtol here leaves ample margin rather than pinning the exact residual.
@@ -98,8 +98,8 @@
 
             ls = CholeskyDirectSolver(grid)
             ps = PicardSolver(50, 1e-6, ls, grid)
-            sim = Simulation(grid, state, 5, floattype(60.0), p, "fully_implicit", ["h", "b"], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(),
-                             ps = ps, which_observer = "Live", tracked_times = 0:5)
+            sim = Simulation(grid, state, 5, floattype(60.0), p, ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(),
+                             ps = ps, observer = LiveObserver(["h", "b"], 0:5))
             run!(sim)
 
             @test all(isfinite, Array(sim.state.h))
@@ -128,7 +128,7 @@
 
             ls = CholeskyDirectSolver(grid)
             ps = PicardSolver(50, 1e-6, ls, grid)
-            sim = Simulation(grid, state, 5, floattype(60.0), p, "fully_implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps)
+            sim = Simulation(grid, state, 5, floattype(60.0), p, ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps)
             run!(sim)
 
             @test all(isfinite, Array(sim.state.h))
@@ -145,7 +145,7 @@
             state = State(grid)
             set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, fill(1e-3, nx, ny), G, ub_x, ub_y, ieb, taub_x, taub_y)
             dt = 3600.0
-            sim = Simulation(grid, state, 1, floattype(dt), p, "fully_implicit", String[], ConstantMeltInput(), sl; ps = PicardSolver(500, floattype(1e-10), LUDirectSolver(grid), grid))
+            sim = Simulation(grid, state, 1, floattype(dt), p, ConstantMeltInput(), sl; ps = PicardSolver(500, floattype(1e-10), LUDirectSolver(grid), grid))
             @test Shakti.water_check_dt(sim) == dt
             s = sim.state
             g = Array(s.mask) .== GROUNDED
@@ -169,7 +169,7 @@
             p = ModelParameters(e_v = 1e-3)
             state = State(grid)
             set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
-            sim = Simulation(grid, state, 3, floattype(3600.0), p, "fully_implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(),
+            sim = Simulation(grid, state, 3, floattype(3600.0), p, ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(),
                              ps = PicardSolver(200, floattype(1e-9), CholeskyDirectSolver(grid), grid), diffusion_scheme = WithDiffusion(CholeskyDirectSolver(grid)))
             @test sim.gcp isa ConsistentGapCoupling
             for _ in 1:3

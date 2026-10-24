@@ -70,9 +70,9 @@ set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub
 # 10 days of 1 h steps. The head is solved by Picard iteration with a sparse LU solver
 # (CUDSSDirectSolver(grid; structure = :general) instead of LUDirectSolver(grid) to run on GPU).
 ps  = PicardSolver(200, 1e-6, LUDirectSolver(grid), grid)
-sim = Simulation(grid, state, 240, floattype(3600.0), p, ["h", "N", "b"], # tsteps = 240, dt = 3600, tracked observables (gap_scheme = FullyImplicitGapScheme() by default)
+sim = Simulation(grid, state, 240, floattype(3600.0), p, # tsteps = 240, dt = 3600 (gap_scheme = FullyImplicitGapScheme() and sheet = GlaDS2Sheet() by default)
                  ConstantMeltInput(), sl; ps = ps, # type of englacial to subglacial melt input, sliding law, which picard solver
-                 which_observer = "IO", which_file_writer = "NetCDF", tracked_times = 0:24:240, path = "output.nc") # writing to file options
+                 observer = IOObserver(["h", "N", "b"], 0:24:240, NetCDFFileWriter(), "output.nc")) # write h, N, b every 24 steps to a file
 run!(sim)
 
 state.N   # effective pressure [Pa]

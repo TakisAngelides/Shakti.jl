@@ -18,7 +18,7 @@
         taub_y = zeros(nx, ny + 1)
         dt     = 10800.0
 
-        function make_sim(; hp = BedPotential(), cf = FilledCavities(), uniform_b = false, gap = "explicit", kface = nothing)
+        function make_sim(; hp = BedPotential(), cf = FilledCavities(), uniform_b = false, gap = ExplicitGapScheme(), kface = nothing)
             A_visc = fill(5e-25, nx, ny)
             b0     = uniform_b ? fill(0.01, nx, ny) : [0.01 + 0.004 * sin(i + 2j) for i in 1:nx, j in 1:ny]
             ub_x   = fill(1e-6, nx + 1, ny)
@@ -28,7 +28,7 @@
             state = State(grid)
             set_initial_conditions!(state, grid, p, sl, base_mask(), A_visc, zb, zs, b0, G, ub_x, ub_y, ieb, taub_x, taub_y)
             ps = PicardSolver(500, floattype(1e-12), CholeskyDirectSolver(grid), grid)
-            return Simulation(grid, state, 1, floattype(dt), p, gap, String[], ConstantMeltInput(), sl; uplift = NoUplift(), ps = ps,
+            return Simulation(grid, state, 1, floattype(dt), p, ConstantMeltInput(), sl; gap_scheme = gap, uplift = NoUplift(), ps = ps,
                               cavity_filling = cf, hydraulic_potential = hp, k_face_choice = something(kface, cf isa UnfilledCavities ? "upwind" : "arithmetic"))
         end
         grounded(s) = Array(s.mask) .== GROUNDED
@@ -66,7 +66,7 @@
                 @test make_sim(; hp = BedPotential(), cf = cf).hp isa BedPotential
             end
             sim = make_sim()
-            default = Simulation(grid, sim.state, 1, floattype(dt), sim.p, "explicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = sim.hs.ps)
+            default = Simulation(grid, sim.state, 1, floattype(dt), sim.p, ConstantMeltInput(), sl; gap_scheme = ExplicitGapScheme(), cavity_filling = FilledCavities(), uplift = NoUplift(), ps = sim.hs.ps)
             @test default.hp isa SheetTopPotential
         end
 

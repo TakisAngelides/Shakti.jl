@@ -7,7 +7,7 @@
         # gap faster than the melt fills it in the upper part (free surface, pw = 0), the lower part is filled; LAND margin
         # in the last column. Melt terms off, so the melt input m is the only source and mdot does not depend on the head.
         function ramp(; kface = "implicit_upwind", solver = :auto, dt = 3600.0, m_mmd = 5.0, omega = 1e-4, e_v = 0.0,
-                        cf = UnfilledCavities(), up = NoUplift(), hp = BedPotential(), gap = "fully_implicit", gc = ExplicitGapCoupling(), atol = 0, b_min = 1e-6, outflow = true)
+                        cf = UnfilledCavities(), up = NoUplift(), hp = BedPotential(), gap = FullyImplicitGapScheme(), gc = ExplicitGapCoupling(), atol = 0, b_min = 1e-6, outflow = true)
             nx, ny = 40, 3
             grid = Grid(nx, ny, 3.9e3, 200.0)
             x = Array(grid.x)
@@ -23,7 +23,7 @@
                                     fill(ub, nx + 1, ny), zeros(nx, ny + 1), fill(m_mmd / 1000 / 86400, nx, ny), zeros(nx + 1, ny), zeros(nx, ny + 1))
             solver === :auto && (solver = kface == "implicit_upwind" ? :lu : :cholesky)
             ls = solver === :lu ? LUDirectSolver(grid) : CholeskyDirectSolver(grid)
-            return Simulation(grid, state, 1, floattype(dt), p, gap, String[], ConstantMeltInput(), sl;
+            return Simulation(grid, state, 1, floattype(dt), p, ConstantMeltInput(), sl; gap_scheme = gap,
                               k_face_choice = kface, cavity_filling = cf, uplift = up, hydraulic_potential = hp, gap_coupling = gc,
                               ps = PicardSolver(200, floattype(1e-11), ls, grid; atol))
         end
@@ -147,7 +147,7 @@
             end
         end
 
-        @testset "gap scheme $gap at dt = 1 day" for gap in ("explicit", "implicit", "fully_implicit")
+        @testset "gap scheme $gap at dt = 1 day" for gap in (ExplicitGapScheme(), ImplicitGapScheme(), FullyImplicitGapScheme())
             sim = ramp(dt = 86400.0, gap = gap)
             for _ in 1:20
                 step!(sim)
@@ -177,13 +177,13 @@
             grid = Grid(nx, ny, 1e3, 1e3)
             mask = fill(GROUNDED, nx, ny); mask[end, :] .= OCEAN; mask[1, :] .= LAND; mask[:, 1] .= OTHER_BASIN
             zb = repeat(reshape(-0.02 .* grid.x, nx, 1), 1, ny)
-            for (dt, gap) in ((3 * 3600.0, "explicit"), (86400.0, "fully_implicit"))
+            for (dt, gap) in ((3 * 3600.0, ExplicitGapScheme()), (86400.0, FullyImplicitGapScheme()))
                 p = ModelParameters(b_min = 1e-6)
                 state = State(grid)
                 ieb = zeros(nx, ny); ieb[3, 3] = 3.0 / (grid.dx * grid.dy)
                 set_initial_conditions!(state, grid, p, sl, mask, fill(5e-25, nx, ny), zb, zb .+ 500.0, fill(1e-3, nx, ny), fill(0.06, nx, ny),
                                         fill(1e-6, nx + 1, ny), zeros(nx, ny + 1), ieb, zeros(nx + 1, ny), zeros(nx, ny + 1))
-                sim = Simulation(grid, state, 1, floattype(dt), p, gap, String[], ConstantMeltInput(), sl;
+                sim = Simulation(grid, state, 1, floattype(dt), p, ConstantMeltInput(), sl; gap_scheme = gap,
                                  ps = PicardSolver(500, floattype(1e-10), LUDirectSolver(grid), grid), k_face_choice = "implicit_upwind",
                                  cavity_filling = UnfilledCavities(), uplift = IceUplift())
                 s = sim.state
@@ -223,8 +223,8 @@
                 expect_closed ? (@test worst < 1e-6) : (@test worst > 1e-2)
             end
             # with the explicit gap scheme the two couplings differ only by the b_min/b_max clamp (inactive here)
-            a = ramp(kface = "upwind", cf = FilledCavities(), gap = "explicit", gc = ExplicitGapCoupling())
-            c = ramp(kface = "upwind", cf = FilledCavities(), gap = "explicit", gc = ConsistentGapCoupling())
+            a = ramp(kface = "upwind", cf = FilledCavities(), gap = ExplicitGapScheme(), gc = ExplicitGapCoupling())
+            c = ramp(kface = "upwind", cf = FilledCavities(), gap = ExplicitGapScheme(), gc = ConsistentGapCoupling())
             for _ in 1:3
                 step!(a); step!(c)
             end
@@ -232,7 +232,7 @@
             # unfilled cavities, implicit water depth, every gap scheme (the explicit one at dt = 3 h: at 1 day creep*dt ~ 2 makes
             # the explicit gap update itself collapse to b_min): the empty volume stays within its limits (no water created or
             # lost by the bookkeeping) and the water budget closes
-            for (gap, dt) in (("explicit", 3 * 3600.0), ("implicit", 86400.0), ("fully_implicit", 86400.0))
+            for (gap, dt) in ((ExplicitGapScheme(), 3 * 3600.0), (ImplicitGapScheme(), 86400.0), (FullyImplicitGapScheme(), 86400.0))
                 sim = ramp(dt = dt, gap = gap, gc = ConsistentGapCoupling())
                 for _ in 1:30
                     W_old = water(sim.state)
@@ -377,7 +377,7 @@
             state = State(grid)
             set_initial_conditions!(state, grid, p, sl, mask, fill(2.4e-24, nx, ny), zb, zb .+ H, fill(1e-3, nx, ny), fill(0.06, nx, ny),
                                     fill(100.0 / (365 * 86400), nx + 1, ny), zeros(nx, ny + 1), zeros(nx, ny), zeros(nx + 1, ny), zeros(nx, ny + 1))
-            sim = Simulation(grid, state, 1, floattype(dt), p, "fully_implicit", String[], ConstantMeltInput(), sl;
+            sim = Simulation(grid, state, 1, floattype(dt), p, ConstantMeltInput(), sl;
                              ps = PicardSolver(200, 1e-6, LUDirectSolver(grid), grid), cavity_filling = UnfilledCavities(),
                              uplift = IceUplift(), k_face_choice = "implicit_upwind", gap_coupling = ConsistentGapCoupling())
             g = grounded(sim)
@@ -407,7 +407,7 @@
             state = State(grid)
             set_initial_conditions!(state, grid, p, sl, mask, fill(2.4e-24, nx, ny), zb, zb .+ H, fill(1e-3, nx, ny), fill(0.06, nx, ny),
                                     fill(30.0 / (365 * 86400), nx + 1, ny), zeros(nx, ny + 1), zeros(nx, ny), zeros(nx + 1, ny), zeros(nx, ny + 1))
-            sim = Simulation(grid, state, 1, floattype(86400.0), p, "fully_implicit", String[], ConstantMeltInput(), sl;
+            sim = Simulation(grid, state, 1, floattype(86400.0), p, ConstantMeltInput(), sl;
                              ps = PicardSolver(500, floattype(tol), LUDirectSolver(grid), grid), cavity_filling = UnfilledCavities(),
                              uplift = IceUplift(), k_face_choice = "implicit_upwind", gap_coupling = ConsistentGapCoupling())
             g = grounded(sim)
@@ -437,7 +437,7 @@
                 state = State(grid)
                 set_initial_conditions!(state, grid, p, sl_c, mask, fill(5e-25, nx, ny), zeros(nx, ny), zs, fill(0.01, nx, ny), fill(0.05, nx, ny),
                                         fill(1e-6, nx + 1, ny), zeros(nx, ny + 1), ieb, zeros(nx + 1, ny), zeros(nx, ny + 1))
-                Simulation(grid, state, 1, floattype(3600.0), p, "fully_implicit", String[], ConstantMeltInput(), sl_c;
+                Simulation(grid, state, 1, floattype(3600.0), p, ConstantMeltInput(), sl_c;
                            ps = PicardSolver(200, floattype(1e-6), ls, grid))
             end
             direct, lagged, stalled = lu_sim(LUDirectSolver(grid)), lu_sim(LUDirectSolver(grid; lagged = true)), lu_sim(LUDirectSolver(grid; lagged = true, itmax = 1))

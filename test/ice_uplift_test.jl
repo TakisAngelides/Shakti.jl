@@ -22,7 +22,7 @@
         dt     = 1800.0
 
         # a 3 m^3/s moulin into a 1 mm gap (200 m cells): far more water than the sheet can carry at overburden
-        function make_sim(; up = NoUplift(), cf = FilledCavities(), gap = "explicit", e_v = 0.0, mask = base_mask(), moulin = 3.0, dt = dt, iters = 500, ts = _ -> FixedTimeStep())
+        function make_sim(; up = NoUplift(), cf = FilledCavities(), gap = ExplicitGapScheme(), e_v = 0.0, mask = base_mask(), moulin = 3.0, dt = dt, iters = 500, ts = _ -> FixedTimeStep())
             A_visc = fill(5e-25, nx, ny)
             b0     = fill(1e-3, nx, ny)
             ub_x   = fill(1e-6, nx + 1, ny); ub_y = zeros(nx, ny + 1)
@@ -31,7 +31,7 @@
             state = State(grid)
             set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b0, G, ub_x, ub_y, ieb, taub_x, taub_y)
             ls = CholeskyDirectSolver(grid)
-            return Simulation(grid, state, 1, floattype(dt), p, gap, String[], ConstantMeltInput(), sl; k_face_choice = "upwind", cavity_filling = cf, uplift = up,
+            return Simulation(grid, state, 1, floattype(dt), p, ConstantMeltInput(), sl; gap_scheme = gap, k_face_choice = "upwind", cavity_filling = cf, uplift = up,
                               ps = PicardSolver(iters, floattype(1e-12), ls, grid), timestep_scheme = ts(state))
         end
         grounded(s) = Array(s.mask) .== GROUNDED
@@ -182,7 +182,7 @@
 
         @testset "parabolic scheme (e_v > 0): pw <= po" begin
             # e_v = 1e-4: the englacial storage below the overburden (e_v*p_o/(rho_w g), 5 cm) fills within the first steps
-            sim = make_sim(; up = IceUplift(), e_v = 1e-4, gap = "fully_implicit")
+            sim = make_sim(; up = IceUplift(), e_v = 1e-4, gap = FullyImplicitGapScheme())
             s = sim.state
             for _ in 1:4
                 step!(sim)

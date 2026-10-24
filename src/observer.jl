@@ -52,7 +52,7 @@ abstract type AbstractObserver end
 """
 $(TYPEDSIGNATURES)
 
-Records nothing. Used when `tracked_obs` is empty (see `Simulation`'s constructor).
+Records nothing: the default `observer` of [`Simulation`](@ref).
 """
 struct NoObserver <: AbstractObserver end
 

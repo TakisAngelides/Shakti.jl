@@ -400,7 +400,7 @@
             taub_x4 = zeros(5, 4)
             taub_y4 = zeros(4, 5)
 
-            function build(gap_scheme_choice)
+            function build(gap_scheme)
                 state = State(grid)
                 p4 = ModelParameters(e_v = 0.0)
                 set_initial_conditions!(state, grid, p4, sl, mask4, A_visc4, zb4, zs4, b04, G4, ub_x4, ub_y4, ieb4, taub_x4, taub_y4)
@@ -408,11 +408,11 @@
                 ls_h = CholeskyDirectSolver(grid)
                 ps = PicardSolver(50, floattype(1e-6), ls_h, grid)
                 ls_b = CholeskyDirectSolver(grid)
-                return Simulation(grid, state, 1, floattype(3600.0), p4, gap_scheme_choice, String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps, diffusion_scheme = WithDiffusion(ls_b))
+                return Simulation(grid, state, 1, floattype(3600.0), p4, ConstantMeltInput(), sl; gap_scheme, cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps, diffusion_scheme = WithDiffusion(ls_b))
             end
 
-            sim_explicit = build("explicit")
-            sim_fully_implicit = build("fully_implicit")
+            sim_explicit = build(ExplicitGapScheme())
+            sim_fully_implicit = build(FullyImplicitGapScheme())
 
             step_b!(sim_explicit)
             step_b!(sim_fully_implicit)
@@ -442,7 +442,7 @@
             state = State(grid)
             set_initial_conditions!(state, grid, p, sl, mask, fill(2.4e-24, nx, ny), zb, zb .+ H, fill(1e-3, nx, ny), fill(0.06, nx, ny),
                                     fill(30.0 / (365 * 86400), nx + 1, ny), zeros(nx, ny + 1), ieb, zeros(nx + 1, ny), zeros(nx, ny + 1))
-            return Simulation(grid, state, 3, floattype(dt), p, "fully_implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(),
+            return Simulation(grid, state, 3, floattype(dt), p, ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(),
                               ps = PicardSolver(500, floattype(1e-9), CholeskyDirectSolver(grid), grid),
                               diffusion_scheme = WithDiffusion(CholeskyDirectSolver(grid)), gap_coupling = gc, kw...)
         end
@@ -535,7 +535,7 @@
         p = ModelParameters(rho_i = 917.0, omega = 1e-3, br = 0.0, lr = 2.0, ct = 0.0, mdot_includes_sensible = false)
         dt = 86400.0
         function helheim_budget(gc)
-            sim = Simulation(grid, deepcopy(m.state), 2, floattype(dt), p, "fully_implicit", String[], m.mi, m.sl; cavity_filling = FilledCavities(), uplift = NoUplift(),
+            sim = Simulation(grid, deepcopy(m.state), 2, floattype(dt), p, m.mi, m.sl; cavity_filling = FilledCavities(), uplift = NoUplift(),
                              ps = PicardSolver(500, floattype(1e-6), CholeskyDirectSolver(grid), grid),
                              diffusion_scheme = WithDiffusion(CholeskyDirectSolver(grid)), gap_coupling = gc)
             worst = 0.0

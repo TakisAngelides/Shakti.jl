@@ -149,7 +149,7 @@
 
             ls = CholeskyDirectSolver(grid)
             ps = PicardSolver(50, floattype(1e-6), ls, grid)
-            sim_cutoff = Simulation(grid, state_cutoff, 1, floattype(3600.0), p_cutoff, "fully_implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps)
+            sim_cutoff = Simulation(grid, state_cutoff, 1, floattype(3600.0), p_cutoff, ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps)
             @test sim_cutoff.cls isa CreepCutoff
 
             p_std = ModelParameters(e_v = 0.0) # b_c defaults to 0.0
@@ -160,7 +160,7 @@
 
             ls2 = CholeskyDirectSolver(grid)
             ps2 = PicardSolver(50, floattype(1e-6), ls2, grid)
-            sim_std = Simulation(grid, state_std, 1, floattype(3600.0), p_std, "fully_implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps2)
+            sim_std = Simulation(grid, state_std, 1, floattype(3600.0), p_std, ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps2)
             @test sim_std.cls isa StandardCreep
         end
 
@@ -171,7 +171,7 @@
 
             ls = CholeskyDirectSolver(grid)
             ps = PicardSolver(50, floattype(1e-6), ls, grid)
-            sim = Simulation(grid, state, 3, floattype(3600.0), p, "fully_implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps)
+            sim = Simulation(grid, state, 3, floattype(3600.0), p, ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps)
 
             @test sim.cls isa CreepCutoff
             @test sim.gs isa FullyImplicitGapScheme
@@ -186,13 +186,14 @@
             @test all(isfinite, Array(sim.state.N))
         end
 
-        @testset "gap_scheme keyword: FullyImplicitGapScheme by default, same run as the string form" begin
+        @testset "gap_scheme keyword: FullyImplicitGapScheme by default, same run as the deprecated string form" begin
             p = ModelParameters(e_v = 0.0, b_c = 0.05)
             function build(args...; kw...)
                 state = State(grid)
                 set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b0, G, ub_x, ub_y, ieb, taub_x, taub_y)
                 ps = PicardSolver(50, floattype(1e-6), CholeskyDirectSolver(grid), grid)
-                return Simulation(grid, state, 3, floattype(3600.0), p, args..., String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps, kw...)
+                legacy = isempty(args) ? () : (args..., String[]) # the deprecated form: the gap scheme by name, then tracked_obs
+                return Simulation(grid, state, 3, floattype(3600.0), p, legacy..., ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps, kw...)
             end
             sim_kw = build()
             sim_str = build("fully_implicit")

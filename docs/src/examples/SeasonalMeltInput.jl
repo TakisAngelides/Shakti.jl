@@ -46,8 +46,8 @@ mi = SeasonalMeltInput()
 dt, nsteps = 86400.0, 365
 path = joinpath(mktempdir(), "seasonal.nc")
 ps = PicardSolver(200, 1e-6, LUDirectSolver(grid), grid)
-sim = Simulation(grid, state, nsteps, floattype(dt), p, "fully_implicit", ["N", "b", "Re", "ieb"], mi, sl;
-                 ps = ps, which_observer = "IO", which_file_writer = "NetCDF", tracked_times = 0:nsteps, path = path)
+sim = Simulation(grid, state, nsteps, floattype(dt), p, mi, sl;
+                 ps = ps, observer = IOObserver(["N", "b", "Re", "ieb"], 0:nsteps, NetCDFFileWriter(), path))
 run!(sim)
 sim.hs.ps.converged
 

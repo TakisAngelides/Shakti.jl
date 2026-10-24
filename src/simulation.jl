@@ -215,6 +215,72 @@ k_face_scheme(name::AbstractString) =
     error("Unknown k_face_choice: \"$name\" (expected \"arithmetic\", \"harmonic\", \"upwind\" or \"implicit_upwind\")")
 k_face_name(kfs::AbstractKFaceScheme) = kfs isa ImplicitUpwind ? "implicit_upwind" : lowercase(string(nameof(typeof(kfs))))
 
+sheet_name(o) = "$(nameof(typeof(o.cf)))/$(nameof(typeof(o.up)))"
+
+"""
+The combinations of [`Simulation`](@ref)'s options that are refused (`:error`) or warned about (`:warn`; `:warn_once`
+warns once per session), one row `(applies, level, message)` each. `applies` and `message` take the resolved options
+`o`: `cf`, `up`, `free_surface` (`cf isa UnfilledCavities || up isa IceUplift`), `kfs`, `k_face_default` (no
+`k_face_choice` passed), `ps`, `ds` (the diffusion scheme), `cnc` (the cell N clamping), `p` and `gs`.
+`check_options` walks it once every default is resolved.
+"""
+const OPTION_RULES = (
+    # An averaged face lets an unfilled cell's outflow outgrow its water: the arithmetic mean gives a dry cell half its
+    # neighbour's conductance, and the water it then delivers is created by the W >= 0 floor of update_water_budget!
+    # (Thwaites 2 km, uplift, dt = 1 h: 1.7e7 m^3/s after 12 h against 500 m^3/s of melt, lifting the ice by hundreds of
+    # metres). The harmonic mean closes every face of a dry cell, so it never wets again.
+    (o -> o.free_surface && (o.kfs isa Arithmetic || o.kfs isa Harmonic), :error,
+     o -> "k_face_choice = \"$(k_face_name(o.kfs))\" with $(sheet_name(o)) does not conserve water: " *
+          (o.kfs isa Arithmetic ? "a dry cell discharges through half its neighbour's conductance and the water it lacks is created. " :
+                                  "a dry cell's faces have no conductance, so it never refills. ") *
+          "Use \"implicit_upwind\" (the default), or cavity_filling = FilledCavities(), uplift = NoUplift() for SHAKTI's original filled sheet."),
+    # "upwind" lags the water depth: correct, but stable only for dt < dx*W/(3|q|), minutes at 100 m (at 3 h a non-finite
+    # gap in step 1 without uplift, 500 Picard iterations and b = 1.7 m with it); it is kept, with a warning, as the only
+    # free-surface face for the symmetric solvers (Cholesky, CG, matrix-free).
+    (o -> o.free_surface && o.kfs isa Upwind && !o.k_face_default, :warn,
+     o -> "k_face_choice = \"upwind\" with $(sheet_name(o)) lags the water depth: stable only for dt < dx*W/(3|q|) (minutes at 100 m), " *
+          "above which the gap overshoots or the Picard iteration cycles. Use \"implicit_upwind\" (the default) at longer dt."),
+    # The Newton terms of the donors' water depths make the head matrix non-symmetric (add_water_depth_newton!).
+    (o -> o.kfs isa ImplicitUpwind && !(hasproperty(o.ps, :ls) && supports_nonsymmetric(o.ps.ls)), :error,
+     o -> "k_face_choice = \"implicit_upwind\"" * (o.k_face_default ? " (the default with $(sheet_name(o)))" : "") *
+          " assembles a non-symmetric head matrix: it needs a PicardSolver with LUDirectSolver(grid), CUDSSDirectSolver(grid) " *
+          "(structure = :general) or, for fields on the GPU, BiCGStabIterativeSolver(grid) as its linear solver, got $(nameof(typeof(o.ps)))" *
+          (hasproperty(o.ps, :ls) ? " with $(nameof(typeof(o.ps.ls)))" : "") *
+          (o.k_face_default ? ". Alternatively pass k_face_choice = \"upwind\" (stable only at short dt), or cavity_filling = FilledCavities(), " *
+                              "uplift = NoUplift() for SHAKTI's original filled sheet." : "")),
+    # A gap solver without a method for the gap system: refused here rather than at the first step (a MethodError deep
+    # inside the Picard loop).
+    (o -> o.ds isa WithDiffusion && !hasmethod(solve_b_diffusion!, Tuple{typeof(o.ds.ls), State, Grid, ModelParameters, Any}), :error,
+     o -> "WithDiffusion's gap solve has no method for $(nameof(typeof(o.ds.ls))): use CholeskyDirectSolver(grid), " *
+          "CUDSSDirectSolver(grid; structure = :spd) or CGIterativeSolver (the gap system is symmetric positive definite)"),
+    # N clamps tighter than [0, Inf) contradict the free-surface rows: the uplifted row assumes N = 0 and the unfilled row
+    # N = po while the gap closes at the clamped N, the difference stays in the water W (or is created by its floor W >= 0),
+    # and the N handed to an ice model is no longer po - pw. Under those sheets N is in [0, po] by construction.
+    (o -> o.free_surface && (max(first(N_clamp_range(o.cnc)), o.p.N_min) > 0 || min(last(N_clamp_range(o.cnc)), o.p.N_max) < Inf), :error,
+     o -> "N_min > 0, N_max < Inf or a CellNClamping bound tighter than [0, Inf) with $(sheet_name(o)) contradicts the unfilled " *
+          "(N = po) and uplifted (N = 0) head rows. These sheets bound N by po - pw already; for a floor on N use IceUplift " *
+          "(water above the overburden lifts the ice), or use the filled sheet (FilledCavities(), NoUplift())."),
+    (o -> o.gs isa ImplicitGapScheme, :warn_once,
+     o -> "ImplicitGapScheme is deprecated and will be removed: FullyImplicitGapScheme (the default) costs the same and is " *
+          "stable at any dt (ImplicitGapScheme's lagged opening is not)"),
+)
+
+"""
+$(TYPEDSIGNATURES)
+
+Errors on the first row of `Shakti.OPTION_RULES` at level `:error` that applies to the resolved
+options `o`, and warns on every warning row that applies.
+"""
+function check_options(o)
+    for (i, (applies, level, message)) in enumerate(OPTION_RULES)
+        applies(o) || continue
+        level === :error && error(message(o))
+        level === :warn && @warn message(o) _id = (:option_rule, i)
+        level === :warn_once && @warn message(o) _id = (:option_rule, i) maxlog = 1
+    end
+    return nothing
+end
+
 """
 $(TYPEDSIGNATURES)
 
@@ -307,11 +373,9 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
   `hydraulic_potential = SheetTopPotential()`, are the sheet of GlaDS-2 (Wells et al. 2026), with the pressure bounded
   by `0 <= p_w <= p_o` (the range a coupled ice model's sliding law expects). Pass `sheet = ShaktiSheet()` for SHAKTI's
   sheet (`ShaktiSheet(original = true)` for its original equations bit for bit).
-- Observer: [`NoObserver`](@ref) if `tracked_obs` is empty; otherwise `which_observer` must be
-  `"IO"` (writes to `path` via `which_file_writer`, one of `"NetCDF"`/`"HDF5"`/`"JLD2"`/`"CSV"`,
-  at `tracked_times`) or `"Live"` (keeps `tracked_times` in memory instead of writing to disk).
-  Or pass the observer itself as `observer` (with `tracked_obs` empty), e.g.
-  `observer = IOObserver(["h", "b"], times, NetCDFFileWriter(), path)`.
+- `observer`: [`NoObserver`](@ref) (default), `IOObserver(obs, times, NetCDFFileWriter(), path)` (writes the
+  `State` fields named in `obs` at the steps `times`; also `HDF5FileWriter()`, `JLD2FileWriter()`, `CSVFileWriter()`)
+  or `LiveObserver(obs, times)` (keeps them in memory).
 - `gap_coupling`: [`ExplicitGapCoupling`](@ref) (legacy: the head rows assume the gap changes by `dt*rate(N, b_old)`) or
   [`ConsistentGapCoupling`](@ref) (they assume the change the gap scheme itself makes, so the head equation and the gap update
   store the same water at any `dt`; needed with the implicit and fully implicit gap schemes when `dt*A*|N|^(n-1)*N` is not
@@ -328,8 +392,16 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
 - `head_extrapolation_order`: degree of the time extrapolation of the head used as each step's
   initial guess ([`HeadExtrapolation`](@ref); default `1`, linear). `0` starts every solve from the
   previous step's head.
+
+# Combinations
+
+Which options go together is decided in one place, `Shakti.OPTION_RULES`, checked once all
+defaults are resolved. Refused (an error): an averaged face (`Arithmetic`, `Harmonic`) under a free surface
+(`UnfilledCavities` or `IceUplift`); `ImplicitUpwind` without a solver for non-symmetric matrices; a `WithDiffusion`
+gap solver without a gap-system method; `N` clamps tighter than `[0, Inf)` under a free surface. Warned: `Upwind` chosen
+under a free surface, and `ImplicitGapScheme`.
 """
-function Simulation(grid, state, tsteps, dt, p, tracked_obs::Vector{String}, mi::AbstractMeltInput, sl::AbstractSlidingLaw; gap_scheme::AbstractGapScheme = FullyImplicitGapScheme(), ps = nothing, which_observer = nothing, which_file_writer = nothing, tracked_times = nothing, path = nothing, k_face_choice = nothing, verbose = false, cell_N_clamping::AbstractCellNClamping = NoCellNClamping(), timestep_scheme::AbstractTimeStepScheme = FixedTimeStep(), diffusion_scheme::AbstractDiffusionScheme = NoDiffusion(), head_extrapolation_order::Int = 1, sheet::Sheet = GlaDS2Sheet(), cavity_filling::Union{Nothing, AbstractCavityFilling} = nothing, hydraulic_potential::Union{Nothing, AbstractHydraulicPotential} = nothing, uplift::Union{Nothing, AbstractIceUplift} = nothing, gap_coupling::Union{Nothing, AbstractGapCoupling} = nothing, observer::Union{Nothing, AbstractObserver} = nothing)
+function Simulation(grid, state, tsteps, dt, p, mi::AbstractMeltInput, sl::AbstractSlidingLaw; gap_scheme::AbstractGapScheme = FullyImplicitGapScheme(), ps = nothing, k_face_choice = nothing, verbose = false, cell_N_clamping::AbstractCellNClamping = NoCellNClamping(), timestep_scheme::AbstractTimeStepScheme = FixedTimeStep(), diffusion_scheme::AbstractDiffusionScheme = NoDiffusion(), head_extrapolation_order::Int = 1, sheet::Sheet = GlaDS2Sheet(), cavity_filling::Union{Nothing, AbstractCavityFilling} = nothing, hydraulic_potential::Union{Nothing, AbstractHydraulicPotential} = nothing, uplift::Union{Nothing, AbstractIceUplift} = nothing, gap_coupling::Union{Nothing, AbstractGapCoupling} = nothing, observer::AbstractObserver = NoObserver())
 
     # The sheet, field by field: a keyword overrides the preset.
     cavity_filling = something(cavity_filling, sheet.cf)
@@ -337,15 +409,8 @@ function Simulation(grid, state, tsteps, dt, p, tracked_obs::Vector{String}, mi:
     hydraulic_potential = something(hydraulic_potential, sheet.hp)
     gap_coupling = something(gap_coupling, sheet.gcp)
 
-    # An observer passed as an object names its own observables.
-    if observer !== nothing
-        isempty(tracked_obs) && which_observer === nothing ||
-            error("pass either observer (an object) or tracked_obs with which_observer, not both")
-        tracked_obs = observer isa NoObserver ? String[] : observer.tracked_obs
-    end
-
     # Check that all tracked observables are valid State fields
-    for name in tracked_obs
+    for name in (observer isa NoObserver ? String[] : observer.tracked_obs)
         hasfield(typeof(state), Symbol(name)) || name in DERIVED_OBSERVABLES || error("Unknown tracked observable: \"$name\" is not a field of State")
     end
 
@@ -353,10 +418,7 @@ function Simulation(grid, state, tsteps, dt, p, tracked_obs::Vector{String}, mi:
     ps isa PicardSolver || error("ps (a PicardSolver) must be provided")
     p.e_v >= 0 || error("e_v must be >= 0 (got $(p.e_v))")
     hs = PicardHeadScheme(ps)
-
     gs = gap_scheme
-    gs isa ImplicitGapScheme &&
-        @warn "ImplicitGapScheme is deprecated and will be removed: FullyImplicitGapScheme (the default) costs the same and is stable at any dt (ImplicitGapScheme's lagged opening is not)" maxlog = 1
 
     # Melt-rate terms setup: each flag decided directly by its own ModelParameters field (see
     # MeltTerms, melt_rate.jl) -- no longer inferred from ct/cw being zero.
@@ -372,80 +434,12 @@ function Simulation(grid, state, tsteps, dt, p, tracked_obs::Vector{String}, mi:
 
     # K-face averaging scheme setup. Unfilled cavities need the donor-cell (upwind) face conductance, see Upwind
     # (k_face_scheme.jl): with an average, a nearly empty cell discharges through its neighbour's much larger conductance.
-    # Under a free surface the implicit water depth is the default; averaged faces are refused there (below).
+    # Under a free surface the implicit water depth is the default; averaged faces are refused there (OPTION_RULES).
     free_surface = cavity_filling isa UnfilledCavities || uplift isa IceUplift
     k_face_default = k_face_choice === nothing
     kfs = k_face_scheme(k_face_default ? (free_surface ? ImplicitUpwind() : Arithmetic()) : k_face_choice)
-    k_face_choice = k_face_name(kfs)
-    # An averaged face lets an unfilled cell's outflow outgrow its water: the arithmetic mean gives a dry cell half its
-    # neighbour's conductance, and the water it then delivers is created by the W >= 0 floor of update_water_budget!
-    # (Thwaites 2 km, uplift, dt = 1 h: 1.7e7 m^3/s after 12 h against 500 m^3/s of melt, lifting the ice by hundreds of
-    # metres). The harmonic mean closes every face of a dry cell, so it never wets again. Both are refused under a free
-    # surface. "upwind" lags the water depth: correct, but stable only for dt < dx*W/(3|q|), minutes at 100 m (at 3 h a
-    # non-finite gap in step 1 without uplift, 500 Picard iterations and b = 1.7 m with it); it is kept, with a warning,
-    # as the only free-surface face for the symmetric solvers (Cholesky, CG, matrix-free).
-    if free_surface && (kfs isa Arithmetic || kfs isa Harmonic)
-        error("k_face_choice = \"$k_face_choice\" with $(nameof(typeof(cavity_filling)))/$(nameof(typeof(uplift))) does not conserve water: " *
-              (kfs isa Arithmetic ? "a dry cell discharges through half its neighbour's conductance and the water it lacks is created. " :
-                                    "a dry cell's faces have no conductance, so it never refills. ") *
-              "Use \"implicit_upwind\" (the default), or cavity_filling = FilledCavities(), uplift = NoUplift() for SHAKTI's original filled sheet.")
-    end
-    free_surface && kfs isa Upwind && !k_face_default &&
-        @warn "k_face_choice = \"upwind\" with $(nameof(typeof(cavity_filling)))/$(nameof(typeof(uplift))) lags the water depth: stable only for " *
-              "dt < dx*W/(3|q|) (minutes at 100 m), above which the gap overshoots or the Picard iteration cycles. Use \"implicit_upwind\" (the default) at longer dt."
-    if kfs isa ImplicitUpwind
-        # The Newton terms of the donors' water depths make the head matrix non-symmetric (add_water_depth_newton!).
-        solver = hs.ps
-        hasproperty(solver, :ls) && supports_nonsymmetric(solver.ls) ||
-            error("k_face_choice = \"implicit_upwind\"" * (k_face_default ? " (the default with $(nameof(typeof(cavity_filling)))/$(nameof(typeof(uplift))))" : "") *
-                  " assembles a non-symmetric head matrix: it needs a PicardSolver " *
-                  "with LUDirectSolver(grid), CUDSSDirectSolver(grid) (structure = :general) or, for fields on the GPU, BiCGStabIterativeSolver(grid) as its linear solver, got $(nameof(typeof(solver)))" *
-                  (hasproperty(solver, :ls) ? " with $(nameof(typeof(solver.ls)))" : "") *
-                  (k_face_default ? ". Alternatively pass k_face_choice = \"upwind\" (stable only at short dt), or cavity_filling = FilledCavities(), " *
-                                    "uplift = NoUplift() for SHAKTI's original filled sheet." : ""))
-    end
 
-    # A gap solver without a method for the gap system: refused here rather than at the first step (a MethodError deep
-    # inside the Picard loop).
-    diffusion_scheme isa WithDiffusion &&
-        !hasmethod(solve_b_diffusion!, Tuple{typeof(diffusion_scheme.ls), State, Grid, ModelParameters, Any}) &&
-        error("WithDiffusion's gap solve has no method for $(nameof(typeof(diffusion_scheme.ls))): use CholeskyDirectSolver(grid), CUDSSDirectSolver(grid; structure = :spd) or CGIterativeSolver (the gap system is symmetric positive definite)")
-
-    # Observer setup
-    if observer !== nothing
-    elseif isempty(tracked_obs)
-        observer = NoObserver()
-    elseif which_observer === nothing
-        error("which_observer should be specified as \"IO\" or \"Live\" when tracked_obs is not empty.")
-    elseif which_observer == "IO"
-        if which_file_writer === nothing
-            error("which_file_writer should be specified as \"NetCDF\", \"HDF5\", \"JLD2\", or \"CSV\" when which_observer is \"IO\".")
-        elseif which_file_writer == "NetCDF"
-            fr = NetCDFFileWriter()
-        elseif which_file_writer == "HDF5"
-            fr = HDF5FileWriter()
-        elseif which_file_writer == "JLD2"
-            fr = JLD2FileWriter()
-        elseif which_file_writer == "CSV"
-            fr = CSVFileWriter()
-        else
-            error("Unknown which_file_writer: \"$which_file_writer\" (expected \"NetCDF\", \"HDF5\", \"JLD2\", or \"CSV\")")
-        end
-        if tracked_times === nothing
-            error("tracked_times should be specified when which_observer is \"IO\".")
-        end
-        if path === nothing
-            error("path should be specified when which_observer is \"IO\".")
-        end
-        observer = IOObserver(tracked_obs, tracked_times, fr, path)
-    elseif which_observer == "Live"
-        if tracked_times === nothing
-            error("tracked_times should be specified when which_observer is \"Live\".")
-        end
-        observer = LiveObserver(tracked_obs, tracked_times)
-    else
-        error("Unknown which_observer: \"$which_observer\" (expected \"IO\" or \"Live\")")
-    end
+    check_options((; cf = cavity_filling, up = uplift, free_surface, kfs, k_face_default, ps, ds = diffusion_scheme, cnc = cell_N_clamping, p, gs))
 
     head_extrapolation_order >= 0 || error("head_extrapolation_order must be >= 0 (got $head_extrapolation_order)")
     he = head_extrapolation_order == 0 ? NoHeadExtrapolation() : HeadExtrapolation(grid; order = head_extrapolation_order)
@@ -457,44 +451,70 @@ function Simulation(grid, state, tsteps, dt, p, tracked_obs::Vector{String}, mi:
     # steps) a gap of 1e269 m in one step, where the consistent coupling keeps it at metres (check_gap_height, run.jl); on
     # Helheim at 500 m (filled, NoDiffusion) the explicit gap reaches 1e10 m with 5-day steps, the consistent one 7 m, for
     # 1 to 2 times the Picard iterations and about the same time per step at 1-day steps.
-    # N clamps tighter than [0, Inf) contradict the free-surface rows: the uplifted row assumes N = 0 and the unfilled row
-    # N = po while the gap closes at the clamped N, the difference stays in the water W (or is created by its floor W >= 0), and the N handed to
-    # an ice model is no longer po - pw. Under those sheets N is in [0, po] (IceUplift and UnfilledCavities) by construction.
-    if free_surface
-        lo, hi = N_clamp_range(cell_N_clamping)
-        (max(lo, p.N_min) > 0 || min(hi, p.N_max) < Inf) &&
-            error("N_min > 0, N_max < Inf or a CellNClamping bound tighter than [0, Inf) with $(nameof(typeof(cavity_filling)))/$(nameof(typeof(uplift))) " *
-                  "contradicts the unfilled (N = po) and uplifted (N = 0) head rows. These sheets bound N by po - pw already; for a floor " *
-                  "on N use IceUplift (water above the overburden lifts the ice), or use the filled sheet (FilledCavities(), NoUplift()).")
-    end
-
     sim = Simulation(tsteps, Ref(dt), p, hs, gs, mt, oss, cls, diffusion_scheme, observer, grid, state, mi, kfs, sl, verbose, Ref(zero(dt)), cell_N_clamping, timestep_scheme, he, cavity_filling, hydraulic_potential, uplift, gap_coupling, WaterBudget(state))
     return refresh_state!(sim) # the derived fields with this simulation's options (set_initial_conditions! knows none of them)
 
 end
 
+# The observer of the deprecated keywords: which_observer ("IO" or "Live") with which_file_writer, tracked_times and path.
+function legacy_observer(tracked_obs, which_observer, which_file_writer, tracked_times, path)
+    isempty(tracked_obs) && return NoObserver()
+    which_observer === nothing && error("which_observer should be specified as \"IO\" or \"Live\" when tracked_obs is not empty.")
+    which_observer in ("IO", "Live") || error("Unknown which_observer: \"$which_observer\" (expected \"IO\" or \"Live\")")
+    tracked_times === nothing && error("tracked_times should be specified when which_observer is \"$which_observer\".")
+    which_observer == "Live" && return LiveObserver(tracked_obs, tracked_times)
+    fr = which_file_writer == "NetCDF" ? NetCDFFileWriter() :
+         which_file_writer == "HDF5"   ? HDF5FileWriter() :
+         which_file_writer == "JLD2"   ? JLD2FileWriter() :
+         which_file_writer == "CSV"    ? CSVFileWriter() :
+         error("which_file_writer should be \"NetCDF\", \"HDF5\", \"JLD2\", or \"CSV\" when which_observer is \"IO\" (got $(repr(which_file_writer))).")
+    path === nothing && error("path should be specified when which_observer is \"IO\".")
+    return IOObserver(tracked_obs, tracked_times, fr, path)
+end
+
+function legacy_gap_scheme(gap_scheme_choice::AbstractString)
+    gap_scheme_choice == "explicit"       && return ExplicitGapScheme()
+    gap_scheme_choice == "implicit"       && return ImplicitGapScheme()
+    gap_scheme_choice == "fully_implicit" && return FullyImplicitGapScheme()
+    error("Unknown gap_scheme_choice: \"$gap_scheme_choice\" (expected \"explicit\", \"implicit\", or \"fully_implicit\")")
+end
+
+# The observer keyword that replaces the deprecated ones, for the deprecation message ("" for none).
+legacy_observer_expr(tracked_obs, which_observer, which_file_writer) =
+    isempty(tracked_obs) ? "" :
+    which_observer == "Live" ? "observer = LiveObserver($(repr(tracked_obs)), tracked_times)" :
+    "observer = IOObserver($(repr(tracked_obs)), tracked_times, $(which_file_writer)FileWriter(), path)"
+
 """
 $(TYPEDSIGNATURES)
 
-The same [`Simulation`](@ref), with the gap scheme named by a string in the position before `tracked_obs`:
-`"fully_implicit"` ([`FullyImplicitGapScheme`](@ref)), `"explicit"` ([`ExplicitGapScheme`](@ref)) or `"implicit"`
-([`ImplicitGapScheme`](@ref), deprecated). Kept so that existing drivers run unchanged; the keyword `gap_scheme`
-is the preferred form.
+Deprecated: the same [`Simulation`](@ref) with the observables `tracked_obs` positional and the observer named by the
+keywords `which_observer` (`"IO"` or `"Live"`), `which_file_writer` (`"NetCDF"`, `"HDF5"`, `"JLD2"`, `"CSV"`),
+`tracked_times` and `path`. Pass `observer = IOObserver(tracked_obs, tracked_times, NetCDFFileWriter(), path)` or
+`LiveObserver(tracked_obs, tracked_times)` instead.
 """
-function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice::AbstractString, tracked_obs::Vector{String}, mi::AbstractMeltInput, sl::AbstractSlidingLaw; kwargs...)
-    gs = gap_scheme_choice == "explicit"       ? ExplicitGapScheme() :
-         gap_scheme_choice == "implicit"       ? ImplicitGapScheme() :
-         gap_scheme_choice == "fully_implicit" ? FullyImplicitGapScheme() :
-         error("Unknown gap_scheme_choice: \"$gap_scheme_choice\" (expected \"explicit\", \"implicit\", or \"fully_implicit\")")
-    return Simulation(grid, state, tsteps, dt, p, tracked_obs, mi, sl; gap_scheme = gs, kwargs...)
+function Simulation(grid, state, tsteps, dt, p, tracked_obs::Vector{String}, mi::AbstractMeltInput, sl::AbstractSlidingLaw; which_observer = nothing, which_file_writer = nothing, tracked_times = nothing, path = nothing, kwargs...)
+    haskey(kwargs, :observer) && error("pass either observer (an object) or tracked_obs with which_observer, not both")
+    observer = legacy_observer(tracked_obs, which_observer, which_file_writer, tracked_times, path)
+    obs = legacy_observer_expr(tracked_obs, which_observer, which_file_writer)
+    Base.depwarn("Simulation(grid, state, tsteps, dt, p, tracked_obs, mi, sl; which_observer, ...) is deprecated, use " *
+                 "Simulation(grid, state, tsteps, dt, p, mi, sl" * (isempty(obs) ? "" : "; " * obs) * ")", :Simulation)
+    return Simulation(grid, state, tsteps, dt, p, mi, sl; observer, kwargs...)
 end
 
 """
 $(TYPEDSIGNATURES)
 
-The same [`Simulation`](@ref) without `tracked_obs`: the output is the `observer` keyword's object
-(`IOObserver(obs, times, NetCDFFileWriter(), path)`, `LiveObserver(obs, times)`; [`NoObserver`](@ref) by default),
-and the model is the `sheet` keyword's ([`GlaDS2Sheet`](@ref) by default, or [`ShaktiSheet`](@ref)). The preferred form.
+Deprecated: the same [`Simulation`](@ref) with the gap scheme named by a string before `tracked_obs`: `"fully_implicit"`
+([`FullyImplicitGapScheme`](@ref), the default), `"explicit"` ([`ExplicitGapScheme`](@ref)) or `"implicit"`
+([`ImplicitGapScheme`](@ref)). Pass `gap_scheme` as a keyword instead, and the observer as an object.
 """
-Simulation(grid, state, tsteps, dt, p, mi::AbstractMeltInput, sl::AbstractSlidingLaw; kwargs...) =
-    Simulation(grid, state, tsteps, dt, p, String[], mi, sl; kwargs...)
+function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice::AbstractString, tracked_obs::Vector{String}, mi::AbstractMeltInput, sl::AbstractSlidingLaw; which_observer = nothing, which_file_writer = nothing, tracked_times = nothing, path = nothing, kwargs...)
+    haskey(kwargs, :observer) && error("pass either observer (an object) or tracked_obs with which_observer, not both")
+    gs = legacy_gap_scheme(gap_scheme_choice)
+    observer = legacy_observer(tracked_obs, which_observer, which_file_writer, tracked_times, path)
+    Base.depwarn("Simulation(grid, state, tsteps, dt, p, \"$gap_scheme_choice\", tracked_obs, mi, sl; ...) is deprecated, use " *
+                 "Simulation(grid, state, tsteps, dt, p, mi, sl; " *
+                 join(filter(!isempty, ["gap_scheme = $(nameof(typeof(gs)))()", legacy_observer_expr(tracked_obs, which_observer, which_file_writer)]), ", ") * ")", :Simulation)
+    return Simulation(grid, state, tsteps, dt, p, mi, sl; gap_scheme = gs, observer, kwargs...)
+end
