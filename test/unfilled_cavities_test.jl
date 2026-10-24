@@ -244,6 +244,12 @@
             end
         end
 
+        @testset "stuck cells, filled, no storage: the unconverged step warns with the water it lost" begin
+            sim = make_sim(FilledCavities(); gap = "fully_implicit", gcp = ConsistentGapCoupling())
+            @test_logs (:warn, r"did not converge.*lost\).*IceUplift\(\) or e_v > 0") match_mode = :any step!(sim)
+            @test !first(Shakti.picard_status(sim.hs)) && sim.wb.created[] < -0.9 * sim.wb.input[] # N would have to reach ~ -1e9 Pa
+        end
+
         @testset "gap held at b_max: opening blocked, empty volume bounded, budget exact" begin
             A_visc = fill(1e-30, nx, ny); b0 = fill(1e-6, nx, ny)
             ub_x = fill(3e-7, nx + 1, ny); ub_y = zeros(nx, ny + 1)

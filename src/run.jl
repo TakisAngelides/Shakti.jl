@@ -154,7 +154,8 @@ Advances `sim` by one timestep: recomputes `sim.dt[]` if `sim.ts` is adaptive
 inputs up to date and sets its initial guess (`prepare_head_solve!`), solves for the new
 head ([`step_h!`](@ref)), under [`AdaptiveTimeStep`](@ref) retrying it at half the `dt` while it does not converge
 (`retry_step!`), records it for the next step's extrapolation (`sim.he`), evolves the gap height and the
-water `W` ([`step_b!`](@ref)), checks the gap (`check_gap_height`) and lets an adaptive `dt` grow (`control_dt!`).
+water `W` ([`step_b!`](@ref)), checks the gap (`check_gap_height`) and the head solve's convergence
+(`check_convergence`) and lets an adaptive `dt` grow (`control_dt!`).
 `sim.dt[]` is the step taken.
 """
 function step!(sim::Simulation)
@@ -171,6 +172,7 @@ function step!(sim::Simulation)
     record_head!(sim.he, sim.state, sim.dt[], first(picard_status(sim.hs)))
     step_b!(sim)
     check_gap_height(sim)
+    check_convergence(sim)
     control_dt!(sim, sim.ts)
     return sim
 end
@@ -217,6 +219,28 @@ gap_runaway_hint(::AbstractGapCoupling) = "ConsistentGapCoupling() (the head row
                                           "IceUplift() (water above the overburden lifts the ice instead), a finite b_max, or a smaller dt"
 gap_runaway_hint(::ConsistentGapCoupling) = "a smaller dt (check that the head solve converged), IceUplift() (water above the overburden " *
                                             "lifts the ice instead), or a finite b_max"
+# An unconverged step is taken as it is (under AdaptiveTimeStep, once dt reaches dt_min), and its head rows and gap then
+# disagree: the step creates or loses water (sim.wb). On a filled sheet without uplift or englacial storage, melt the gap
+# cannot take up has nowhere else to go but creep opening, which on stiff ice needs N far below zero whatever dt is (the
+# stuck-cells fixture, A = 1e-30 and a 3 m^3/s moulin: N ~ -1e9 Pa at dt = 3 h, still falling past -4e9 at dt = 1 s), so
+# the first steps end unconverged and lose almost all of the moulin's water; IceUplift or e_v > 0 converge in a few
+# iterations there.
+no_storage_hint(sim::Simulation) = sim.cf isa FilledCavities && sim.up isa NoUplift && iszero(sim.p.e_v) ?
+    " A filled sheet without uplift or englacial storage takes up melt only by creep opening at N < 0: use IceUplift() or e_v > 0." :
+    " Raise the iteration cap or use a smaller dt (AdaptiveTimeStep)."
+@noinline _warn_unconverged(sim, iters) =
+    @warn "step!: the head solve did not converge in $iters Picard iterations; the step is taken as it is and created " *
+          "$(round(sim.wb.created[], sigdigits = 3)) m^3 of water beyond its sources and fluxes (input $(round(sim.wb.input[], sigdigits = 3)) m^3; " *
+          "negative: lost)." * no_storage_hint(sim) maxlog = 1
+
+"""
+$(TYPEDSIGNATURES)
+
+Warns (once per session) when the step's head solve ended unconverged, with the water the step created or lost
+([`WaterBudget`](@ref)) and the usual remedy.
+"""
+check_convergence(sim::Simulation) = ((converged, iters) = picard_status(sim.hs); converged || _warn_unconverged(sim, iters); nothing)
+
 @noinline _gap_not_finite(gcp) = error("step!: the gap height b is not finite in a GROUNDED cell. The usual cause is a gap runaway at N < 0: use " * gap_runaway_hint(gcp) * ".")
 @noinline _warn_gap_thicker_than_ice(gcp) =
     @warn "step!: the gap height b exceeds the ice thickness in a GROUNDED cell, likely a gap runaway at N < 0; consider " * gap_runaway_hint(gcp) maxlog = 1

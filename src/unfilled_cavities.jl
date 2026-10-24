@@ -261,7 +261,10 @@ unconverged after 500 iterations. Tested: `|N|/4` to `3|N|/4` and `po/10` to `po
 fails on Thwaites at `dt = 24 h`. On the negative side (`N < 0`, head above the overburden, which a filled thick-ice cell
 without uplift can reach only transiently) the relative cap would let `N` run away geometrically (`-5e6`, `-6e7`,
 `-6.5e8`, ...), so there `N` may fall at most `po/4` below `min(N_prev, 0)` per iteration: without that, the first raw
-iterate of the stuck-cells fixture (`N` around `-1e16`) made the exponential branch of `relax_update` overflow. This bound
+iterate of the stuck-cells fixture (`N` around `-1e16`) made the exponential branch of `relax_update` overflow. That
+fixture's first two steps stay unconverged (500 iterations), since its solution needs `N` near `-1e9` Pa: a bound that
+doubles while the iterate keeps falling reaches it in 96 iterations, but then leaves steps 2 to 6 unconverged where the
+linear bound converges from step 3, and no `dt` helps (`check_convergence`, `run.jl`). This bound
 applies on the filled sheet only (no cavity or uplift storage): the unfilled sheet without uplift reaches `N` near `-6e8`
 on the same fixture in 66 iterations, and the linear bound left that step unconverged after 500. Under
 [`ImplicitUpwind`](@ref) with the dry floor and no cap the head matrix went singular at step 1 of that fixture.
