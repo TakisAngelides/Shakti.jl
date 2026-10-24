@@ -456,14 +456,19 @@
             @test stalled.hs.ps.ls.refactorizations[] == solves
 
             # BiCGStabIterativeSolver, the matrix-free (GPU-resident) solver: its stencil carries the same water-depth
-            # Newton terms as the assembled matrix, so it takes the direct solver's Picard iterations to its heads.
+            # Newton terms as the assembled matrix, so it takes the direct solver's Picard iterations to its heads, with
+            # the multigrid preconditioner (the default) or Jacobi.
             mf = lu_sim(BiCGStabIterativeSolver(grid; rtol = 1e-10, atol = 0.0))
+            jac = lu_sim(BiCGStabIterativeSolver(grid; multigrid = false, rtol = 1e-10, atol = 0.0))
             direct = lu_sim(LUDirectSolver(grid))
             for _ in 1:10
-                foreach(step!, (direct, mf))
-                @test mf.hs.ps.last_iter == direct.hs.ps.last_iter && first(Shakti.picard_status(mf.hs))
-                @test maximum(abs, Array(mf.state.h) .- Array(direct.state.h)) < 1e-12 * maximum(abs, Array(direct.state.h))
-                @test maximum(abs, Array(mf.state.W) .- Array(direct.state.W)) < 1e-10 * maximum(abs, Array(direct.state.W))
+                foreach(step!, (direct, mf, jac))
+                for sim in (mf, jac)
+                    @test sim.hs.ps.last_iter == direct.hs.ps.last_iter && first(Shakti.picard_status(sim.hs))
+                    @test maximum(abs, Array(sim.state.h) .- Array(direct.state.h)) < 1e-12 * maximum(abs, Array(direct.state.h))
+                    @test maximum(abs, Array(sim.state.W) .- Array(direct.state.W)) < 1e-10 * maximum(abs, Array(direct.state.W))
+                end
+                @test mf.hs.ps.ls.ws.stats.niter < 20 < jac.hs.ps.ls.ws.stats.niter
             end
             s, gc = mf.state, Shakti.gap_coupling_terms(mf)
             sals, mfls = SparseAssembledLinearSystem(grid), MatrixFreeLinearSystem(grid)
@@ -473,6 +478,24 @@
             x = randn(nx * ny)
             @test Array(mul!(similar(mfls.rhs), Shakti.StencilOperator(mfls), x)) ≈ sals.M * x rtol = 1e-14
             @test Array(mfls.rhs) == sals.rhs
+
+            # Each multigrid level is the Galerkin product P'*A*P of the one above, P aggregating 2 x 2 cells of the rows
+            # with neighbour couplings (an aggregate with none gets an identity row)
+            mg = AggregationMultigrid(mfls)
+            Shakti.update_multigrid!(mg)
+            @test length(mg.levels) > 2
+            A = sals.M
+            for l in 1:length(mg.levels)-1
+                f, c = mg.levels[l], mg.levels[l+1]
+                (nxf, nyf), (nxc, nyc) = size(f.aP), size(c.aP)
+                w, cf = vec(Array(f.w)), LinearIndices((nxc, nyc))
+                Pr = sparse(1:nxf*nyf, [cf[cld(i, 2), cld(j, 2)] for i in 1:nxf, j in 1:nyf][:], w, nxf * nyf, nxc * nyc)
+                Ac = Pr' * A * Pr
+                Ac += Diagonal(vec(sum(Pr; dims = 1)) .== 0)
+                xc = randn(nxc * nyc)
+                @test Array(mul!(similar(c.b, nxc * nyc), Shakti.StencilOperator(c.aP, c.aE, c.aW, c.aN, c.aS, nxc, nyc), xc)) ≈ Ac * xc rtol = 1e-12
+                A = Ac
+            end
         end
 
     end

@@ -1708,26 +1708,29 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Matrix-free BiCGStab (Krylov.jl's `bicgstab!`) with a Jacobi preconditioner over a [`MatrixFreeLinearSystem`](@ref): the
-GPU-resident solver for the non-symmetric head matrix of [`ImplicitUpwind`](@ref) (the default sheet), which
-[`CGIterativeSolver`](@ref) cannot solve. Every array lives on the active backend and the solve warm-starts from the
-current head.
+Matrix-free BiCGStab (Krylov.jl's `bicgstab!`) over a [`MatrixFreeLinearSystem`](@ref), preconditioned by an
+[`AggregationMultigrid`](@ref) V-cycle (or Jacobi with `multigrid = false`): the GPU-resident solver for the
+non-symmetric head matrix of [`ImplicitUpwind`](@ref) (the default sheet), which [`CGIterativeSolver`](@ref) cannot
+solve. Every array lives on the active backend and the solve warm-starts from the current head.
 
 # Notes
 
 BiCGStab rather than GMRES: on the default sheet's head matrix GMRES with Jacobi needed 6-10 times BiCGStab's
 iterations even with 100 vectors kept, and its memory grows with the restart length. Jacobi leaves the iteration count
-growing with the grid (about 750 at 400 x 100 cells, 1600-1900 at 800 x 200), and on a GPU each iteration costs about
-0.5 ms of kernel launches and reductions whatever the grid size. So it is slow: on an A100 a quiet 800 x 200 step took
-3 s, against 2.4 s for [`LUDirectSolver`](@ref) on the CPU and 0.12 s for `CUDSSDirectSolver` (fields on the CPU, the
-factorization on the GPU). Use it where the fields must stay on the GPU. `rtol`/`atol` are the relative and absolute
-residual tolerances, `itmax` the iteration cap (`0`: Krylov.jl's default, twice the number of cells). A solve that
+growing with the grid (about 750 at 400 x 100 cells, 1500-1900 at 800 x 200), and on a GPU each iteration costs about
+0.5 ms of kernel launches and reductions whatever the grid size, so a quiet 800 x 200 step took 3 s on an A100. The
+multigrid V-cycle holds the count at 5-12 from 80 x 20 to 1600 x 400 cells (8-11 on Helheim, against Jacobi's 290) for
+about 1.5 ms per application: on an A100 a quiet step took 0.16 s at 800 x 200 and 0.19 s at 1600 x 400, against 2.4 s
+for [`LUDirectSolver`](@ref) on the CPU at 800 x 200 and 0.12 s / 0.45 s for `CUDSSDirectSolver` (fields on the CPU,
+the factorization on the GPU). `nsmooth` and `coarse_scale` are passed to [`AggregationMultigrid`](@ref); the defaults
+(2 sweeps, scale 2) gave the fewest iterations. `rtol`/`atol` are the relative and absolute residual tolerances,
+`itmax` the iteration cap (`0`: Krylov.jl's default, twice the number of cells). A solve that
 stops before its tolerance warns, as [`CGIterativeSolver`](@ref)'s does.
 """
-struct BiCGStabIterativeSolver{LSy <: MatrixFreeLinearSystem, WS, V <: AbstractVector, F <: AbstractFloat} <: AbstractIterativeSolver
+struct BiCGStabIterativeSolver{LSy <: MatrixFreeLinearSystem, WS, P, F <: AbstractFloat} <: AbstractIterativeSolver
     lsy::LSy
     ws::WS
-    precond_diag::V # Jacobi diagonal, refreshed every solve
+    precond::P # AggregationMultigrid (the default) or a Jacobi Diagonal, refreshed every solve
     rtol::F
     atol::F
     itmax::Int
@@ -1738,12 +1741,15 @@ $(TYPEDSIGNATURES)
 
 Builds a [`BiCGStabIterativeSolver`](@ref) on grid `g`, every array on the active backend.
 """
-function BiCGStabIterativeSolver(g::Grid{F}, ::Type{MatrixFreeLinearSystem} = MatrixFreeLinearSystem; rtol = sqrt(eps(F)), atol = sqrt(eps(F)), itmax::Int = 0) where F
+function BiCGStabIterativeSolver(g::Grid{F}, ::Type{MatrixFreeLinearSystem} = MatrixFreeLinearSystem; multigrid::Bool = true, nsmooth::Int = 2, coarse_scale = 2.0, rtol = sqrt(eps(F)), atol = sqrt(eps(F)), itmax::Int = 0) where F
     itmax >= 0 || error("itmax must be >= 0 (0: Krylov.jl's default), got $itmax")
     mfls = MatrixFreeLinearSystem(g)
     ws = BicgstabWorkspace(g.nx * g.ny, g.nx * g.ny, typeof(mfls.rhs))
-    return BiCGStabIterativeSolver(mfls, ws, @zeros(g.nx * g.ny), F(rtol), F(atol), itmax)
+    precond = multigrid ? AggregationMultigrid(mfls; nsmooth, coarse_scale) : Diagonal(@zeros(g.nx * g.ny))
+    return BiCGStabIterativeSolver(mfls, ws, precond, F(rtol), F(atol), itmax)
 end
+
+refresh_precond!(P::Diagonal, mfls::MatrixFreeLinearSystem) = update_diag_precond!(P.diag, mfls)
 
 supports_nonsymmetric(::BiCGStabIterativeSolver) = true
 
@@ -1757,9 +1763,9 @@ method: rebuilds the stencil coefficients (with the water-depth Newton terms und
 function solve_elliptic_linear_system!(ls::BiCGStabIterativeSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), dt = 0, h_old = s.h)
 
     update_MFLS_elliptic!(ls.lsy, s, g, p, kfs, ds, gc, dt, h_old)
-    update_diag_precond!(ls.precond_diag, ls.lsy)
+    refresh_precond!(ls.precond, ls.lsy)
 
-    bicgstab!(ls.ws, StencilOperator(ls.lsy), ls.lsy.rhs, vec(s.h); M = Diagonal(ls.precond_diag), ldiv = true, rtol = ls.rtol, atol = ls.atol, itmax = ls.itmax)
+    bicgstab!(ls.ws, StencilOperator(ls.lsy), ls.lsy.rhs, vec(s.h); M = ls.precond, ldiv = true, rtol = ls.rtol, atol = ls.atol, itmax = ls.itmax)
     check_krylov_converged(ls.ws)
 
     s.h .= reshape(ls.ws.x, g.nx, g.ny)

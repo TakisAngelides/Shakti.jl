@@ -100,6 +100,7 @@ include("melt_input.jl")
 include("k_face_scheme.jl")
 include("preconditioner.jl")
 include("linear_solver.jl")
+include("multigrid.jl") # AggregationMultigrid, the GPU-capable preconditioner for MatrixFreeLinearSystem
 @static if use_cudss
     include("gpu_direct_solver.jl") # CUDSSDirectSolver -- requires CUDA/CUDSS to be loaded (CUDA backend, or Threads backend with the `cudss` preference); NOT available under Metal
 else
@@ -157,7 +158,7 @@ export AbstractKFaceScheme, Arithmetic, Harmonic, Upwind, ImplicitUpwind, comput
 # iterative solver constructors, e.g. CGIterativeSolver(g, MatrixFreeLinearSystem))
 export AbstractLinearSolver, AbstractDirectSolver, AbstractIterativeSolver
 export AbstractLinearSystem, SparseAssembledLinearSystem, MatrixFreeLinearSystem
-export CholeskyDirectSolver, LUDirectSolver, CGIterativeSolver, BiCGStabIterativeSolver
+export CholeskyDirectSolver, LUDirectSolver, CGIterativeSolver, BiCGStabIterativeSolver, AggregationMultigrid
 @static if backend != "Metal"
     export CUDSSDirectSolver
 end
