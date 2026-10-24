@@ -101,7 +101,7 @@ geo
 * `omega = 1e-3`  laminar-turbulent transition (Sommers et al. 2018, Table 2)
 * `br = 0.1`, `lr = 2.0`  bed-bump height and spacing [m]; `br = 0` switches opening by sliding off
 * `ct = 7.5e-8`  pressure-melting coefficient; `0` drops the sensible-heat term (as ISSM's SHAKTI does)
-* `b_min = 1e-6`  lower clamp of `b`; keep it well below the initial `b`, or every cell can sit on the clamp
+* `b_min = 1e-6`  minimum gap height. On the default (unfilled) sheet it is a minimum cavity size, not only a numerical floor: where the melt cannot fill a gap of `b_min`, the gap stays partly empty at `p_w = 0` and `N = p_o`. Drang Drung drains this way at `b_min = 1e-3` (mean `N` 2.38 MPa against 0.63 MPa at `1e-6`), from a cold start and from the wet `1e-6` state alike. Keep it well below the initial `b`
 * `b_max = Inf`  upper clamp; ISSM's SHAKTI uses `1.0`. A finite value hides a gap runaway, `Inf` lets `check_gap_height` report it
 * `N_min = -Inf`, `N_max = Inf`  clamps of `N`; off, `IceUplift` (step 7) is the physical bound
 * `e_v = 0`  englacial void ratio; `0` elliptic head equation, `> 0` parabolic (the head stores englacial water, see the [Parabolic scheme](@ref ParabolicScheme) page)
