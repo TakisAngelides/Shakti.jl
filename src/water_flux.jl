@@ -246,7 +246,7 @@ $(TYPEDSIGNATURES)
 Polishes the frozen face donors of [`ImplicitUpwind`](@ref) at a converged head and returns the number of faces changed
 (0 for every other K-face scheme): a face frozen on its downstream side is refrozen on its upwind side, and one that
 was refrozen and reversed again takes the conductance of its thinner cell (see the notes above `MAX_DONOR_FLIPS`).
-The Picard loops ([`Picard_loop!`](@ref), [`Parabolic_loop!`](@ref)) iterate the head again while this changes
+The Picard loop ([`Picard_loop!`](@ref)) iterates the head again while this changes
 faces, up to `MAX_DONOR_POLISH_ROUNDS` times per step.
 """
 polish_donors!(::AbstractKFaceScheme, s::State) = 0

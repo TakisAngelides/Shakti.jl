@@ -388,8 +388,8 @@
 
         # ---- parabolic head scheme (p.e_v != 0) and Newton-Krylov solver ------------------------------
 
-        # total water per area V = b + g(h - zb), g = e_v*x filled / x unfilled (see cavity_parabolic_terms)
-        gfun(x, e_v) = x >= 0 ? e_v * x : x
+        # englacial water per area, e_v*max(x, 0) with x = h - zb (an unfilled cell's empty depth is in W, see englacial_storage_terms)
+        efun(x, e_v) = e_v * max(x, 0)
         function par_sim(cf; e_v = 1e-7, stuck = true, kface = nothing, mask = base_mask(), pres = 1e-12)
             A_visc = fill(stuck ? 1e-30 : 5e-25, nx, ny)
             b0     = stuck ? fill(1e-6, nx, ny) : [0.01 + 0.004 * sin(i + 2j) for i in 1:nx, j in 1:ny]
@@ -397,8 +397,8 @@
             p = ModelParameters(e_v = e_v, b_min = 1e-6)
             state = State(grid)
             set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b0, G, ub_x, zeros(nx, ny + 1), ieb, taub_x, taub_y)
-            pps = ParabolicPicardSolver(500, floattype(pres), CholeskyDirectSolver(grid), grid)
-            return Simulation(grid, state, 1, floattype(dt), p, "explicit", String[], ConstantMeltInput(), sl; uplift = NoUplift(), pps = pps, cavity_filling = cf, k_face_choice = something(kface, cf isa UnfilledCavities ? "upwind" : "arithmetic"),
+            ps = PicardSolver(500, floattype(pres), CholeskyDirectSolver(grid), grid)
+            return Simulation(grid, state, 1, floattype(dt), p, "explicit", String[], ConstantMeltInput(), sl; uplift = NoUplift(), ps = ps, cavity_filling = cf, k_face_choice = something(kface, cf isa UnfilledCavities ? "upwind" : "arithmetic"),
                               hydraulic_potential = BedPotential()) # as above
         end
 
@@ -412,23 +412,28 @@
             @test Array(sims[2].state.h) ≈ Array(sims[1].state.h) rtol = 1e-12 atol = 1e-9
         end
 
-        @testset "parabolic: stuck cells keep pw >= 0 and the total water budget is exact" begin
+        @testset "parabolic: stuck cells keep pw >= 0, the head rows store the budget's water" begin
             fi = par_sim(FilledCavities()); step!(fi)
             @test minimum(Array(fi.state.pw)[grounded(fi.state)]) < 0 # e_v this small: englacial storage does not save the stuck cells
             sim = par_sim(UnfilledCavities())
             s, p = sim.state, sim.p
-            h_old, b_old = copy(Array(s.h)), copy(Array(s.b))
+            h_old, W_old = copy(Array(s.h)), copy(Array(s.W))
             step!(sim)
             g = grounded(s)
             @test first(Shakti.picard_status(sim.hs))
             @test minimum(Array(s.pw)[g]) >= 0
             @test any(Array(empty_gap(s))[g] .> 0)
+            # the budget: the sheet's water W and the englacial water together take what the fluxes and sources leave
             xo, xn = h_old .- Array(s.zb), Array(s.h) .- Array(s.zb)
             qx, qy = Array(s.q_x), Array(s.q_y)
             div = [(qx[i+1, j] - qx[i, j]) / grid.dx + (qy[i, j+1] - qy[i, j]) / grid.dy for i in 1:nx, j in 1:ny]
-            res = ((Array(s.b) .- b_old) .+ (gfun.(xn, p.e_v) .- gfun.(xo, p.e_v))) ./ dt .+ div .- (Array(s.mdot) ./ p.rho_w .+ Array(s.ieb))
-            scale = maximum(abs, Array(s.mdot) ./ p.rho_w .+ Array(s.ieb)) + maximum(Array(s.beta) .* Array(s.abs_ub))
-            @test maximum(abs, res[g]) < 1e-6 * scale
+            src = Array(s.mdot) ./ p.rho_w .+ Array(s.ieb)
+            res = ((Array(s.W) .- W_old) .+ (efun.(xn, p.e_v) .- efun.(xo, p.e_v))) ./ dt .+ div .- src
+            scale = maximum(abs, src) + maximum(Array(s.beta) .* Array(s.abs_ub))
+            @test maximum(abs, res[g]) < 1e-9 * scale
+            # and the head rows stored that water: the gap less the empty depth below the bed
+            Wh = max.(Array(s.b) .- max.(0, .-xn), 0)
+            @test maximum(abs, (Array(s.W) .- Wh)[g]) < 1e-6 * maximum(Array(s.b)[g])
         end
 
     end

@@ -130,7 +130,6 @@ LUDirectSolver
 CUDSSDirectSolver
 CGIterativeSolver
 solve_elliptic_linear_system!
-solve_parabolic_linear_system!
 ```
 
 ## Preconditioners
@@ -143,7 +142,7 @@ AMGPreconditioner
 update_amg!
 ```
 
-## Elliptic (Picard) solver
+## Head (Picard) solver
 
 ```@docs
 AbstractHeadRelaxation
@@ -159,21 +158,11 @@ refresh_head_dependents!
 refresh_state!
 ```
 
-## Parabolic solver
-
-```@docs
-ParabolicPicardSolver
-parabolic_solver!
-Parabolic_loop!
-Parabolic_iteration!
-```
-
 ## Simulation
 
 ```@docs
 AbstractHeadScheme
-ParabolicHeadScheme
-EllipticHeadScheme
+PicardHeadScheme
 AbstractGapScheme
 ExplicitGapScheme
 ImplicitGapScheme

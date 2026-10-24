@@ -239,7 +239,7 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Limits a head iterate, after each linear solve of the head ([`Picard_iteration!`](@ref), [`Parabolic_iteration!`](@ref))
+Limits a head iterate, after each linear solve of the head ([`Picard_iteration!`](@ref))
 and on the extrapolated guess of a step ([`limit_head_guess!`](@ref)), as the [`PicardGuard`](@ref) `guard` says (a no-op
 when it is inactive). Every limit protects a kink of the head rows, so each is switched on by what makes the kink, not by
 the K-face scheme. A converged head is a fixed point of the limited iteration, so the solution is unchanged (within the
@@ -300,17 +300,20 @@ limit_head_step!(guard::PicardGuard, s::State, h_prev, p::ModelParameters; fille
     guard.active ? (@parallel limit_head_step_kernel!(s.h, h_prev, s.dh_it, s.b, s.zb, s.po, s.stor, s.stor_up, p.rho_w, p.g, filled_cap, s.mask, guard.outflow_land, guard.outflow_ocean); s) : s
 
 # Per GROUNDED cell: the head row's end-of-step water minus the water the fluxes and sources leave, W + dt (mdot/rho_w
-# + ieb - div q), as update_water_budget! takes it (water_converged, elliptic_solver.jl). The row's water is that of
+# + ieb - div q) less the change of its englacial water (e_v > 0, from the head h_old at the start of the step), as
+# update_water_budget! takes it (water_converged, elliptic_solver.jl). The row's water is that of
 # compute_b_w_iterate! but with the current melt rate: s.b_w takes the gap's melt opening from the start of the step (mdot0).
 # With `relative`, divided by the sum of the magnitudes of the cell's terms, the scale of its round-off.
-@parallel_indices (ix, iy) function water_budget_residual_kernel!(r, relative, mask, Wo, q_x, q_y, mdot, ieb, dx, dy, dt, rho_w, b, h, zb, po, N, stor, stor_up, b_min, b_max, ggrav, gc, beta, abs_ub, A_visc, rho_i, n_minus_1, bump, b_next)
+@parallel_indices (ix, iy) function water_budget_residual_kernel!(r, relative, mask, Wo, q_x, q_y, mdot, ieb, dx, dy, dt, rho_w, b, h, zb, po, N, stor, stor_up, b_min, b_max, ggrav, gc, beta, abs_ub, A_visc, rho_i, n_minus_1, bump, b_next, h_old, e_v)
     if ix <= size(r, 1) && iy <= size(r, 2)
         if mask[ix, iy] == GROUNDED
             div = (q_x[ix+1, iy] - q_x[ix, iy]) / dx + (q_y[ix, iy+1] - q_y[ix, iy]) / dy
             W, _ = iterate_water(iterate_gap(gc, bump[ix, iy], b_next[ix, iy], zero(dt), false), b[ix, iy], Wo[ix, iy], h[ix, iy], zb[ix, iy], po[ix, iy], N[ix, iy], stor[ix, iy], stor_up[ix, iy],
                                  b_min, b_max, rho_w, ggrav, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], rho_i, n_minus_1)
-            res = W - (Wo[ix, iy] + dt * (mdot[ix, iy] / rho_w + ieb[ix, iy] - div))
-            scale = W + abs(Wo[ix, iy]) + dt * (abs(mdot[ix, iy] / rho_w) + abs(ieb[ix, iy]) + (abs(q_x[ix+1, iy]) + abs(q_x[ix, iy])) / dx + (abs(q_y[ix, iy+1]) + abs(q_y[ix, iy])) / dy)
+            dE = englacial_water(e_v, h[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], stor_up[ix, iy], rho_w, ggrav) -
+                 englacial_water(e_v, h_old[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], stor_up[ix, iy], rho_w, ggrav)
+            res = W + dE - (Wo[ix, iy] + dt * (mdot[ix, iy] / rho_w + ieb[ix, iy] - div))
+            scale = W + abs(dE) + abs(Wo[ix, iy]) + dt * (abs(mdot[ix, iy] / rho_w) + abs(ieb[ix, iy]) + (abs(q_x[ix+1, iy]) + abs(q_x[ix, iy])) / dx + (abs(q_y[ix, iy+1]) + abs(q_y[ix, iy])) / dy)
             r[ix, iy] = relative ? res / (scale + floatmin(scale)) : res
         else
             r[ix, iy] = zero(dt)
@@ -319,11 +322,13 @@ limit_head_step!(guard::PicardGuard, s::State, h_prev, p::ModelParameters; fille
     return
 end
 
-@parallel_indices (ix, iy) function update_water_budget_kernel!(W, mask, b, q_x, q_y, mdot, ieb, dx, dy, dt, rho_w)
+@parallel_indices (ix, iy) function update_water_budget_kernel!(W, mask, b, q_x, q_y, mdot, ieb, dx, dy, dt, rho_w, h, h_old, zb, po, stor, stor_up, e_v, ggrav)
     if ix <= size(W, 1) && iy <= size(W, 2)
         if mask[ix, iy] == GROUNDED
             div = (q_x[ix+1, iy] - q_x[ix, iy]) / dx + (q_y[ix, iy+1] - q_y[ix, iy]) / dy
-            W[ix, iy] = max(zero(dt), W[ix, iy] + dt * (mdot[ix, iy] / rho_w + ieb[ix, iy] - div))
+            dE = englacial_water(e_v, h[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], stor_up[ix, iy], rho_w, ggrav) -
+                 englacial_water(e_v, h_old[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], stor_up[ix, iy], rho_w, ggrav)
+            W[ix, iy] = max(zero(dt), W[ix, iy] + dt * (mdot[ix, iy] / rho_w + ieb[ix, iy] - div) - dE)
         else
             W[ix, iy] = b[ix, iy]
         end
@@ -335,20 +340,22 @@ end
 $(TYPEDSIGNATURES)
 
 Advances the water `s.W` by one step from the water budget on `GROUNDED` cells, `W = max(0, W + dt*(mdot/rho_w + ieb -
-div(q)))` with the step's converged fluxes (what the solve actually delivered, so the budget closes for every cell and
-every gap scheme), and sets it to the gap `b` elsewhere. Where the gap update and the head equation disagree (the
+div(q)) - dE)` with the step's converged fluxes (what the solve actually delivered, so the budget closes for every cell and
+every gap scheme), `dE` the change of the englacial water over the step (`p.e_v > 0`: `e_v (h - zb)` between the bed and
+the overburden head, from the head `h_old` at its start to `s.h`; see `englacial_storage_terms`), and sets it to the gap `b`
+elsewhere. Where the gap update and the head equation disagree (the
 implicit gap schemes change the gap by a different amount than the head equation assumed, a held `b_max`/`b_min`, ...)
 the difference stays in `W - b`: an empty part of the gap where `W < b`, water above the gap where `W > b` (the uplift
 layer where the ice is lifted, see [`IceUplift`](@ref); otherwise released as a source the next step). The floor
-`W >= 0` is the only water it can still create. Called by [`step_b!`](@ref) under the elliptic scheme with
+`W >= 0` is the only water it can still create. Called by [`step_b!`](@ref) under
 [`UnfilledCavities`](@ref) (`water_is_budgeted`), right after the gap update and before `compute_beta!` reads the
 uplift layer.
 """
-update_water_budget!(s::State, g::Grid, p::ModelParameters, dt) =
-    (@parallel update_water_budget_kernel!(s.W, s.mask, s.b, s.q_x, s.q_y, s.mdot, s.ieb, g.dx, g.dy, dt, p.rho_w); s)
+update_water_budget!(s::State, g::Grid, p::ModelParameters, dt, h_old = s.h) =
+    (@parallel update_water_budget_kernel!(s.W, s.mask, s.b, s.q_x, s.q_y, s.mdot, s.ieb, g.dx, g.dy, dt, p.rho_w, s.h, h_old, s.zb, s.po, s.stor, s.stor_up, p.e_v, p.g); s)
 
 # The water a GROUNDED cell's head row stored under the sheets whose water is not budgeted (water_is_budgeted, run.jl):
-# the new gap less the empty depth below the bed (UnfilledCavities on the parabolic scheme), plus the uplift layer above
+# the new gap less the empty depth below the bed (UnfilledCavities, budgeted in a Simulation), plus the uplift layer above
 # the overburden head (IceUplift). Off GROUNDED the gap.
 @parallel_indices (ix, iy) function water_from_head_kernel!(W, mask, b, h, zb, po, rho_wg, unfilled, uplift)
     if ix <= size(W, 1) && iy <= size(W, 2)
@@ -368,8 +375,8 @@ end
 $(TYPEDSIGNATURES)
 
 Sets the water `s.W` from the new gap and the solved head, for the sheets whose water is not budgeted: `W = max(b -
-max(0, zb - h), 0) + max(0, h - h_o)` on `GROUNDED` cells, the first term under [`UnfilledCavities`](@ref) (the
-parabolic scheme, whose storage terms are not in the water budget) and the second under [`IceUplift`](@ref), `h_o = zb +
+max(0, zb - h), 0) + max(0, h - h_o)` on `GROUNDED` cells, the first term under [`UnfilledCavities`](@ref) (whose
+water a [`Simulation`](@ref) takes from the budget instead, [`update_water_budget!`](@ref)) and the second under [`IceUplift`](@ref), `h_o = zb +
 po/(rho_w g)`; `W = b` elsewhere and under SHAKTI's original sheet. Under ConsistentGapCoupling this is the water the
 head row stores, which closes the budget to the Picard tolerance once the step converges.
 """

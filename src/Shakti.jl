@@ -95,7 +95,7 @@ include("model_parameters.jl")
 include("grid.jl")
 include("state.jl")
 include("mask.jl")
-include("cell_N_clamping.jl") # must precede elliptic_solver.jl/parabolic_solver.jl/pressure.jl, which reference AbstractCellNClamping in their own signatures
+include("cell_N_clamping.jl") # must precede elliptic_solver.jl/pressure.jl, which reference AbstractCellNClamping in their own signatures
 include("melt_input.jl")
 include("k_face_scheme.jl")
 include("preconditioner.jl")
@@ -109,7 +109,6 @@ include("observer.jl")
 include("sliding_law.jl")
 include("melt_rate.jl")
 include("elliptic_solver.jl")
-include("parabolic_solver.jl")
 include("gap_height.jl")
 include("unfilled_cavities.jl") # must precede simulation.jl: Simulation type-annotates its `cf` field with AbstractCavityFilling
 include("hydraulic_potential.jl") # must precede simulation.jl (the `hp` field), after mask.jl (GROUNDED)
@@ -162,7 +161,7 @@ export CholeskyDirectSolver, LUDirectSolver, CGIterativeSolver
 @static if backend != "Metal"
     export CUDSSDirectSolver
 end
-export solve_elliptic_linear_system!, solve_parabolic_linear_system!
+export solve_elliptic_linear_system!
 export AbstractGapCoupling, ExplicitGapCoupling, ConsistentGapCoupling
 export AbstractDiffusionScheme, NoDiffusion, WithDiffusion
 export solve_b_diffusion!
@@ -194,17 +193,12 @@ export relax_h!
 export PicardSolver
 export elliptic_solver!, Picard_loop!, Picard_iteration!, refresh_head_dependents!, refresh_state!
 
-# parabolic_solver.jl
-export parabolic_solver!
-export ParabolicPicardSolver
-export Parabolic_loop!, Parabolic_iteration!
-
 # gap_height.jl
 export AbstractOpenBySlidingScheme, WithOpenBySliding, NoOpenBySliding
 export AbstractCreepLengthScheme, StandardCreep, CreepCutoff
 
 # simulation.jl
-export AbstractHeadScheme, ParabolicHeadScheme, EllipticHeadScheme
+export AbstractHeadScheme, PicardHeadScheme
 export AbstractGapScheme, ExplicitGapScheme, ImplicitGapScheme, FullyImplicitGapScheme
 export AbstractTimeStepScheme, FixedTimeStep, AdaptiveTimeStep, target_time
 export AbstractCellNClamping, NoCellNClamping, CellNClamping, apply_cell_N_clamping!

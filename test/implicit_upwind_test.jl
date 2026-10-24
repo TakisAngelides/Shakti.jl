@@ -23,9 +23,9 @@
                                     fill(ub, nx + 1, ny), zeros(nx, ny + 1), fill(m_mmd / 1000 / 86400, nx, ny), zeros(nx + 1, ny), zeros(nx, ny + 1))
             solver === :auto && (solver = kface == "implicit_upwind" ? :lu : :cholesky)
             ls = solver === :lu ? LUDirectSolver(grid) : CholeskyDirectSolver(grid)
-            kw = e_v == 0 ? (; ps = PicardSolver(200, floattype(1e-11), ls, grid; atol)) : (; pps = ParabolicPicardSolver(200, floattype(1e-11), ls, grid; atol))
             return Simulation(grid, state, 1, floattype(dt), p, gap, String[], ConstantMeltInput(), sl;
-                              k_face_choice = kface, cavity_filling = cf, uplift = up, hydraulic_potential = hp, gap_coupling = gc, kw...)
+                              k_face_choice = kface, cavity_filling = cf, uplift = up, hydraulic_potential = hp, gap_coupling = gc,
+                              ps = PicardSolver(200, floattype(1e-11), ls, grid; atol))
         end
         grounded(sim) = Array(sim.state.mask) .== GROUNDED
         unfilled(sim) = grounded(sim) .& (Array(sim.state.h) .< Array(sim.state.zb))
@@ -352,7 +352,7 @@
             @test Shakti.head_converged(1e-4, 4500.0, 1e-12, 1e-3) && !Shakti.head_converged(2e-3, 4500.0, 1.0, 1e-3) # atol > 0 replaces it
             for e_v in (0.0, 1e-4)
                 a, b = ramp(dt = 86400.0, e_v = e_v), ramp(dt = 86400.0, e_v = e_v, atol = 1e-4)
-                sa, sb = e_v == 0 ? (a.hs.ps, b.hs.ps) : (a.hs.pps, b.hs.pps)
+                sa, sb = a.hs.ps, b.hs.ps
                 @test sa.atol == 0 && sb.atol == 1e-4
                 step!(a); step!(b)
                 @test sb.converged && sb.last_iter < sa.last_iter                  # 1e-4 m is looser than 1e-11 of the head

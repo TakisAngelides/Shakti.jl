@@ -37,8 +37,8 @@
 #
 # Architecturally mirrors CholeskyDirectSolver otherwise: same SparseAssembledLinearSystem-based
 # assembly, same "factorize once, refactorize every solve reusing the symbolic analysis" discipline,
-# just kept on the GPU throughout. Solves the elliptic and parabolic head systems and SUHMO's gap
-# system (solve_b_diffusion!): all three assemble values into the same fixed pattern of sals.M,
+# just kept on the GPU throughout. Solves the head system and SUHMO's gap
+# system (solve_b_diffusion!): both assemble values into the same fixed pattern of sals.M,
 # so one vals_perm and one symbolic analysis serve them (cudss_solve!).
 
 """
@@ -118,21 +118,8 @@ Solves the elliptic head equation's linear system under [`CUDSSDirectSolver`](@r
 matrix in place, refactorizes on the GPU reusing the symbolic analysis, solves, and copies the
 result back into `s.h`.
 """
-function solve_elliptic_linear_system!(ls::CUDSSDirectSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
-    update_SALS_elliptic!(ls.sals, s, g, p, kfs, ds, gc) # refresh sals.M/rhs on CPU
-    cudss_solve!(ls)
-    s.h .= reshape(ls.h_vec, g.nx, g.ny)
-    return s
-end
-
-"""
-$(TYPEDSIGNATURES)
-
-Solves the backward-Euler parabolic equation for `h` (`p.e_v != 0`) under [`CUDSSDirectSolver`](@ref): assembled by
-`update_SALS_parabolic!` (`h_old` as for [`CholeskyDirectSolver`](@ref)), then solved as the elliptic method.
-"""
-function solve_parabolic_linear_system!(ls::CUDSSDirectSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, dt, h_old, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling())
-    update_SALS_parabolic!(ls.sals, s, g, p, kfs, dt, h_old, ds, gc)
+function solve_elliptic_linear_system!(ls::CUDSSDirectSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), dt = 0, h_old = s.h)
+    update_SALS_elliptic!(ls.sals, s, g, p, kfs, ds, gc, dt, h_old) # refresh sals.M/rhs on CPU
     cudss_solve!(ls)
     s.h .= reshape(ls.h_vec, g.nx, g.ny)
     return s

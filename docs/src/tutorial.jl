@@ -104,7 +104,7 @@ geo
 * `b_min = 1e-6`  lower clamp of `b`; keep it well below the initial `b`, or every cell can sit on the clamp
 * `b_max = Inf`  upper clamp; ISSM's SHAKTI uses `1.0`. A finite value hides a gap runaway, `Inf` lets `check_gap_height` report it
 * `N_min = -Inf`, `N_max = Inf`  clamps of `N`; off, `IceUplift` (step 7) is the physical bound
-* `e_v = 0`  englacial void ratio; `0` elliptic head equation, `> 0` parabolic (needs `pps`, step 8)
+* `e_v = 0`  englacial void ratio; `0` elliptic head equation, `> 0` parabolic (the head stores englacial water, see the [Parabolic scheme](@ref ParabolicScheme) page)
 * `outflow_only_land = true`, `outflow_only_ocean = true`  outlets let water out, never in; `false` for tidal intrusion
 * `b_c = 0`  creep cutoff length (SUHMO); non-zero selects `CreepCutoff`. Dataset-dependent runaways: opt in with care
 =#
@@ -154,10 +154,8 @@ Which to choose:
 
 #=
 ## 8. Solvers
-Head solve, `ps` for `e_v = 0`:
+Head solve, `ps`, for any `e_v`:
 * `PicardSolver(iters, tol, ls, grid; alpha = nothing, atol = 0)`  fixed-point iteration; `alpha < 1` under-relaxes a stalling solve, `atol > 0` [m] replaces the relative test
-
-and `pps = ParabolicPicardSolver(...)` for `e_v > 0` (see the [Parabolic scheme](@ref ParabolicScheme) page).
 
 Linear solver `ls`:
 * `LUDirectSolver(grid)`  UMFPACK LU, CPU; the default sheet's matrix is non-symmetric

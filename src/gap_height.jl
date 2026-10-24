@@ -3,7 +3,7 @@
 # =============================================================================
 # Runs once per time step, after the Picard loop has converged on h. compute_beta! and
 # compute_lc! are then refreshed from the new b, ready to be read by the next time step
-# (the next compute_b! call reads beta; the elliptic/parabolic RHS assembly kernels,
+# (the next compute_b! call reads beta; the head assembly kernels,
 # linear_solver.jl, read lc). compute_b_x!/compute_b_y! are refreshed too, but the Picard
 # loop no longer reads b_x/b_y (the face conductances take the water depth b_w,
 # compute_face_flux!); they are kept as face diagnostics.
@@ -97,7 +97,7 @@ idiom as [`AbstractOpenBySlidingScheme`](@ref)/[`MeltTerms`](@ref). `s.lc` (not 
 what the creep-closure term reads everywhere downstream: `compute_b_implicit_kernel!`/
 `compute_b_explicit_kernel!`/`compute_b_fully_implicit_kernel!` (this file, which additionally need
 `cls`/`p.b_c` directly since they solve for the *new* `b`, so can't just read the lagged `s.lc`) and
-the elliptic/parabolic RHS assembly kernels (`linear_solver.jl`, which read the lagged `s.lc`
+the head assembly kernels (`linear_solver.jl`, which read the lagged `s.lc`
 exactly like they read `s.beta` -- both refreshed once per timestep by `step_b!`, ready for the
 next timestep's Picard loop).
 """

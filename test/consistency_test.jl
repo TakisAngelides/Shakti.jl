@@ -134,13 +134,19 @@
             @test he.count == 2
             Shakti.record_head!(he, sims[1].state, 3600.0, false)
             @test he.count == 0
-            # disabled under the parabolic scheme
+            # with englacial storage too: the storage takes the head at the start of the step, kept before the guess
             p_ev = ModelParameters(e_v = 1e-4)
             st = State(grid)
             set_initial_conditions!(st, grid, p_ev, sl, mask, A_visc, zb, zs, b0, G, ub_x, ub_y, ieb, taub_x, taub_y)
-            pps = ParabolicPicardSolver(50, floattype(1e-6), CholeskyDirectSolver(grid), grid)
-            sim_par = Simulation(grid, st, 2, floattype(3600.0), p_ev, "fully_implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), pps = pps)
-            @test sim_par.he isa NoHeadExtrapolation
+            ps_ev = PicardSolver(50, floattype(1e-6), CholeskyDirectSolver(grid), grid)
+            sim_par = Simulation(grid, st, 2, floattype(3600.0), p_ev, "fully_implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps_ev)
+            @test sim_par.he isa HeadExtrapolation
+            for _ in 1:3
+                step!(sim_par)
+            end
+            h_start = copy(Array(st.h))
+            Shakti.prepare_head_solve!(sim_par)
+            @test Array(ps_ev.h_old) == h_start && Array(st.h) != h_start # the guess moved s.h, not the storage's old head
         end
 
         @testset "overburden follows the evolving gap height" begin

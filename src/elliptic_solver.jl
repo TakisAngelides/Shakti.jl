@@ -7,7 +7,7 @@ boundary faces ([`picard_guard`](@ref), `run.jl`), each from the kink of the hea
 - `active`: any limit at all, and the oscillation damping. On under [`UnfilledCavities`](@ref) or [`IceUplift`](@ref)
   (the regime boundaries), [`ConsistentGapCoupling`](@ref), outflow-only faces, and [`ImplicitUpwind`](@ref) (whose
   face donors flip); off for SHAKTI's original filled sheet with [`ExplicitGapCoupling`](@ref) and averaged faces.
-- `filled_cap`: the `|dN|` cap of a filled cell, under [`ConsistentGapCoupling`](@ref) (not for the parabolic scheme on
+- `filled_cap`: the `|dN|` cap of a filled cell, under [`ConsistentGapCoupling`](@ref) (not with englacial storage on
   the filled sheet, see [`picard_guard`](@ref)).
 - `outflow_land`, `outflow_ocean`: the stops at the head of an outflow-only face (`ModelParameters.outflow_only_land`,
   `outflow_only_ocean`).
@@ -253,9 +253,10 @@ raw_update_max(hr::AndersonHeadRelaxation, delta_h) = mapreduce(abs, max, hr.fk;
 """
 $(TYPEDSIGNATURES)
 
-Drives the Picard iteration used to solve the nonlinear elliptic equation for hydraulic head:
-holds the linear solver (`ls`), optional head relaxation (`hr`), iteration/tolerance settings,
-and the scratch fields (`h_prev`, `delta_h`) the convergence check needs. Build one with the
+Drives the Picard iteration used to solve the nonlinear equation for hydraulic head, elliptic for `p.e_v = 0` and
+parabolic (englacial storage, Sommers et al. 2018 Eq. 13) otherwise: holds the linear solver (`ls`), optional head
+relaxation (`hr`), iteration/tolerance settings, the scratch fields (`h_prev`, `delta_h`) the convergence check needs,
+and the head at the start of the step (`h_old`) the englacial storage and the water test are taken from. Build one with the
 keyword-free constructor below; `converged`/`last_iter` are updated in place by
 [`Picard_loop!`](@ref) each time it's called. It is a mutable struct to be able to change the
 iter and converged fields, but also gives the flexibility to be changing the linear solver along the
@@ -269,6 +270,7 @@ mutable struct PicardSolver{F <: AbstractFloat, LS <: AbstractLinearSolver, HR <
     last_iter::Int # at which iteration the Picard loop stopped at any given time step
     hr::HR # head relaxation
     h_prev::A     # previous-iteration head, for the Picard convergence check and under-relaxation
+    h_old::A      # head at the start of the time step, held for all its iterations: the old value of the englacial storage (p.e_v > 0) and of the water test
     delta_h::A    # change in head between iterations, for the Picard convergence check
     check_every::Int # convergence check forces a GPU->CPU sync (the reduction result has to reach the host for the `if`); only check every this many iterations rather than every one, trading a few possible extra (cheap, async) Picard iterations for fewer syncs -- see below
     atol::F # absolute tolerance on max|delta_h| [m]: > 0 replaces the relative check (head_converged), 0 = off (the default)
@@ -318,9 +320,10 @@ function PicardSolver(iters, tol, ls::AbstractLinearSolver, g::Grid; alpha = not
     end
 
     h_prev  = initialize_center_field(g)
+    h_old   = initialize_center_field(g)
     delta_h = initialize_center_field(g)
 
-    return PicardSolver(iters, floattype(tol), ls, false, 0, hr, h_prev, delta_h, check_every, floattype(atol))
+    return PicardSolver(iters, floattype(tol), ls, false, 0, hr, h_prev, h_old, delta_h, check_every, floattype(atol))
 end
 
 """
@@ -334,7 +337,7 @@ place.
 
 `state`/`grid`/`p`/`mt` are taken as separate arguments (rather than a bundled `sim::Simulation`)
 so this file doesn't need `Simulation` to already be defined -- it can be included, and
-`PicardSolver`'s struct fully written, before `simulation.jl`, letting `EllipticHeadScheme{PS}`
+`PicardSolver`'s struct fully written, before `simulation.jl`, letting `PicardHeadScheme{PS}`
 (`simulation.jl`) use a proper `PS <: PicardSolver` bound instead of leaving `PS` unbounded. The `mt`
 (a [`MeltTerms`](@ref)) chooses which terms of Eq. 7 in https://doi.org/10.1017/jog.2023.39 to include
 in the melt rate -- e.g. its `Sensible` flag is the last term, accounting for changes in the
@@ -346,8 +349,8 @@ regularized Coulomb law, linear law, or prescribed by the user. The `ds` keyword
 channel-wall diffusion coefficient `D` is refreshed every Picard iteration ([`WithDiffusion`](@ref) recomputes it
 from the current `q`/`∇h`/`∇P_w`; `NoDiffusion` skips it entirely).
 """
-function elliptic_solver!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), wdt = 0, guard::PicardGuard = PicardGuard())
-    Picard_loop!(ps, state, grid, p, mt, kfs, sl; cnc, ds, gc, wdt, guard)
+function elliptic_solver!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), dt = 0, h_old_set::Bool = false, wdt = 0, guard::PicardGuard = PicardGuard())
+    Picard_loop!(ps, state, grid, p, mt, kfs, sl; cnc, ds, gc, dt, h_old_set, wdt, guard)
 end
 
 # Stall damping of the Picard loops: when the largest head update has not fallen below its smallest value so far for
@@ -367,7 +370,8 @@ $(TYPEDSIGNATURES)
 
 Second convergence test of [`Picard_loop!`](@ref), on the water instead of the head: every `GROUNDED` cell's end-of-step
 water depth from its head row ([`compute_b_w_iterate!`](@ref)'s, with the current melt rate) must match the water its fluxes and sources
-leave it, `W + dt (mdot/rho_w + ieb - div q)` (`W` the water at the start of the step) ([`update_water_budget!`](@ref)), to `tol` times the sum of the
+leave it, `W + dt (mdot/rho_w + ieb - div q)` (`W` the water at the start of the step) less the change of its englacial water
+(`p.e_v > 0`, from `ps.h_old`) ([`update_water_budget!`](@ref)), to `tol` times the sum of the
 magnitudes of the cell's terms (its water then and before, and `dt` times its sources and face fluxes: the scale of the
 balance's round-off) but no less than `WATER_TOL_FLOOR` = 1e-2, or to `atol` metres of water when `atol > 0`. `wdt` is the time step, 0 to skip the test: it applies
 where the head rows conserve exactly `b_w` ([`ImplicitUpwind`](@ref), [`ConsistentGapCoupling`](@ref),
@@ -383,7 +387,7 @@ const WATER_TOL_FLOOR = 1e-2
 function water_converged(ps::PicardSolver, s::State, g::Grid, p::ModelParameters, gc::AbstractGapCoupling, wdt)
     wdt > 0 || return true
     @parallel water_budget_residual_kernel!(ps.delta_h, ps.atol == 0, s.mask, s.W, s.q_x, s.q_y, s.mdot, s.ieb, g.dx, g.dy, floattype(wdt), p.rho_w, s.b, s.h, s.zb, s.po, s.N,
-                                            s.stor, s.stor_up, p.b_min, p.b_max, p.g, gc, s.beta, s.abs_ub, s.A_visc, p.rho_i, p.n_minus_1_exp, s.bump, s.b_next)
+                                            s.stor, s.stor_up, p.b_min, p.b_max, p.g, gc, s.beta, s.abs_ub, s.A_visc, p.rho_i, p.n_minus_1_exp, s.bump, s.b_next, ps.h_old, p.e_v)
     r_max = mapreduce(abs, max, ps.delta_h; init = zero(eltype(ps.delta_h)))
     return ps.atol > 0 ? r_max < ps.atol : r_max < max(ps.tol, WATER_TOL_FLOOR, 100 * eps(eltype(ps.delta_h)))
 end
@@ -395,11 +399,15 @@ Repeatedly calls [`Picard_iteration!`](@ref) (up to `ps.iters` times; a donor po
 after the head converged adds up to `ps.check_every` more, so a polish on the last iteration is still re-solved), checking convergence every
 `ps.check_every` iterations via a relative max-norm on the head update
 (`max|delta_h| / (max|h| + eps) < ps.tol`, or `max|delta_h| < ps.atol` when `ps.atol > 0`, see
-`head_converged`), and sets `ps.converged`/`ps.last_iter` accordingly.
+`head_converged`), and sets `ps.converged`/`ps.last_iter` accordingly. With `p.e_v > 0` the rows store englacial water
+over the time step `dt` (required then) from the head at the start of the step, `ps.h_old`: taken from `state.h` here,
+unless `h_old_set` says the caller stored it before replacing `state.h` by an initial guess ([`step!`](@ref) does).
 """
-function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), wdt = 0, guard::PicardGuard = PicardGuard())
+function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), dt = 0, h_old_set::Bool = false, wdt = 0, guard::PicardGuard = PicardGuard())
 
     s = state
+    p.e_v > 0 && !(dt > 0) && error("Picard_loop!: p.e_v > 0 needs the time step dt > 0 of its englacial storage")
+    h_old_set || (@. ps.h_old = s.h)
 
     # Initialize PicardSolver state
     ps.converged = false
@@ -417,7 +425,7 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
         # Store previous head for convergence check
         @. ps.h_prev = s.h
 
-        Picard_iteration!(ps.ls, ps.hr, state, grid, p, mt, kfs, sl, ps.h_prev; cnc, ds, gc, ω, guard) # run one linear solve to update h and the relevant fields
+        Picard_iteration!(ps.ls, ps.hr, state, grid, p, mt, kfs, sl, ps.h_prev; cnc, ds, gc, ω, guard, dt, h_old = ps.h_old) # run one linear solve to update h and the relevant fields
 
         @. ps.delta_h = s.h - ps.h_prev
 
@@ -457,9 +465,7 @@ $(TYPEDSIGNATURES)
 
 Refreshes every state field that depends on the just-solved `h` (`pw`, `N`, `q`/`Re`, `taub`,
 `mdot`, `K`, and -- under [`WithDiffusion`](@ref) -- `D`) -- the tail shared by one elliptic Picard
-iteration ([`Picard_iteration!`](@ref)) and one parabolic backward-Euler iteration
-([`Parabolic_iteration!`](@ref), `parabolic_solver.jl`), once each has updated `h` by its own
-linear solve. The water depth `b` is left untouched here in either case until we step out of the
+iteration ([`Picard_iteration!`](@ref)), once it has updated `h` by its linear solve. The water depth `b` is left untouched here in either case until we step out of the
 head solve entirely and update `b` following Eq. 2 of
 https://gmd.copernicus.org/articles/11/2955/2018/.
 """
@@ -493,13 +499,14 @@ end
 """
 $(TYPEDSIGNATURES)
 
-One Picard iteration: solves the linearized system for a new `h` ([`solve_elliptic_linear_system!`](@ref)),
+One Picard iteration: solves the linearized system for a new `h` ([`solve_elliptic_linear_system!`](@ref), with the
+englacial storage over `dt` from `h_old` when `p.e_v > 0`),
 optionally relaxes it ([`relax_h!`](@ref)), then refreshes every field that depends on the new `h`
 via [`refresh_head_dependents!`](@ref) so the next iteration's linearization is consistent.
 """
-function Picard_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation, s::State, g::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, h_prev; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), ω = 1, guard::PicardGuard = PicardGuard())
+function Picard_iteration!(ls::AbstractLinearSolver, hr::AbstractHeadRelaxation, s::State, g::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw, h_prev; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), ω = 1, guard::PicardGuard = PicardGuard(), dt = 0, h_old = s.h)
 
-    solve_elliptic_linear_system!(ls, s, g, p, kfs, ds, gc) # update the h field, including the -div(D*grad(b)) source term under WithDiffusion (ExplicitGapCoupling)
+    solve_elliptic_linear_system!(ls, s, g, p, kfs, ds, gc, dt, h_old) # update the h field, including the -div(D*grad(b)) source term under WithDiffusion (ExplicitGapCoupling) and the englacial storage over dt from h_old (p.e_v > 0)
     relax_h!(hr, s, h_prev) # update the h field again according to the relaxation parameter, damp the raw Picard update before anything downstream of h is recomputed, so the next iteration's coefficients are consistent with the relaxed h
     ω < 1 && (@. s.h = h_prev + ω * (s.h - h_prev)) # stall damping of Picard_loop!, 1 unless the iteration stopped making progress; before the limits, so that a stop at a regime boundary stays exact
     limit_head_step!(guard, s, h_prev, p) # the filled |dN| cap, regime and outflow stops, oscillation damping, as the guard says (unfilled_cavities.jl)

@@ -141,13 +141,9 @@ end
 $(TYPEDSIGNATURES)
 
 Returns `(converged, last_iter)` for `hs`'s iterative solve at the current timestep -- dispatched
-(rather than an `isa` check) so this stays correct if another `AbstractHeadScheme` is ever added:
-`EllipticHeadScheme` reports on its `PicardSolver`, `ParabolicHeadScheme` on its
-[`ParabolicPicardSolver`](@ref) (see `step_h!` below) -- both are genuine within-timestep
-iterations now, so both have real convergence info to report.
+(rather than a field read) so this stays correct if another `AbstractHeadScheme` is ever added.
 """
-picard_status(hs::EllipticHeadScheme) = (hs.ps.converged, hs.ps.last_iter)
-picard_status(hs::ParabolicHeadScheme) = (hs.pps.converged, hs.pps.last_iter)
+picard_status(hs::PicardHeadScheme) = (hs.ps.converged, hs.ps.last_iter)
 
 """
 $(TYPEDSIGNATURES)
@@ -170,16 +166,17 @@ function step!(sim::Simulation)
     check_gap_height(sim)
 end
 
-# The water W (GAP-5) is evolved from the budget under the elliptic scheme with UnfilledCavities (update_water_budget!).
+# The water W (GAP-5) is evolved from the budget with UnfilledCavities (update_water_budget!, less the change of the
+# englacial water under e_v > 0).
 # Elsewhere it is the water the head row stores: the gap scheme's water under the dry floor (compute_b_dry_floor!, set
 # with the gap), otherwise the gap less the empty depth below the bed plus the uplift layer above the overburden head
 # (water_from_head!). Under ConsistentGapCoupling that closes the budget to the Picard tolerance (1e-7 to
 # 1e-6 of W on a moulin fixture) once the step converges, and stays bounded where it does not (the budget's W then holds
 # the water the unconverged fluxes create: 0.8 m from a 0.03 m moulin input in one step of a stuck filled sheet); under
-# ExplicitGapCoupling it does not close (2 % of W on that fixture); the parabolic scheme's storage terms are not in the budget.
-water_is_budgeted(sim::Simulation) = sim.hs isa EllipticHeadScheme && sim.cf isa UnfilledCavities
+# ExplicitGapCoupling it does not close (2 % of W on that fixture).
+water_is_budgeted(sim::Simulation) = sim.cf isa UnfilledCavities
 function update_water!(sim::Simulation)
-    water_is_budgeted(sim) && return update_water_budget!(sim.state, sim.grid, sim.p, sim.dt[])
+    water_is_budgeted(sim) && return update_water_budget!(sim.state, sim.grid, sim.p, sim.dt[], sim.hs.ps.h_old)
     dry_floor(sim) && return sim.state # compute_b! set it
     return water_from_head!(sim.state, sim.p, sim.cf, sim.up)
 end
@@ -226,7 +223,8 @@ has just been evolved by the previous [`step_b!`](@ref), and an ice-flow model m
    elementwise kernels, negligible next to one linear solve. Under [`SheetTopPotential`](@ref) also
    the gap jumps across faces ([`update_gap_jumps!`](@ref)) from the same `b`, so that the flux is
    driven by `h + b` throughout the step.
-2. The initial head guess ([`extrapolate_head!`](@ref), per `sim.he`; a no-op under
+2. The initial head guess ([`extrapolate_head!`](@ref), per `sim.he`, after the head at the start of the step is kept
+   in the solver's `h_old`; a no-op under
    [`NoHeadExtrapolation`](@ref) or until two converged heads exist).
 3. Every field derived from `h` and `b` ([`refresh_head_dependents!`](@ref): `pw`, `N`, face
    transmissivities/`q`/`Re`, `taub`, `mdot`, `K`, `D`). The first linear solve of the step
@@ -238,6 +236,7 @@ has just been evolved by the previous [`step_b!`](@ref), and an ice-flow model m
 function prepare_head_solve!(sim::Simulation)
     s = sim.state
     prepare_step_inputs!(sim)
+    copyto!(sim.hs.ps.h_old, s.h) # the head at the start of the step, for the englacial storage and the water test, before the guess replaces it
     extrapolate_head!(sim.he, s, sim.dt[])
     fill!(s.dh_it, 0) # the oscillation damping of the guess limiter must not see the previous step's last head step (14 % fewer iterations at 6 h steps)
     limit_head_guess!(picard_guard(sim), sim.he, s, sim.p) # the extrapolated head obeys the regime and outflow stops of the iteration
@@ -320,13 +319,13 @@ limit_head_guess!(guard::PicardGuard, he::HeadExtrapolation, s::State, p::ModelP
 $(TYPEDSIGNATURES)
 
 The [`PicardGuard`](@ref) of `sim`: the limits of the head iterate that its sheet, gap coupling, face scheme and boundary
-faces need ([`limit_head_step!`](@ref)). The filled cap is left out under the parabolic scheme on SHAKTI's filled sheet
+faces need ([`limit_head_step!`](@ref)). The filled cap is left out with englacial storage (`p.e_v > 0`) on SHAKTI's filled sheet
 ([`FilledCavities`](@ref), [`NoUplift`](@ref)): the englacial storage keeps the filled rows steep in `N`, and with the
 cap the stuck-cells fixture of the tests took 251 iterations per step instead of 4 at `e_v = 1e-4` (same solution).
 """
 function picard_guard(sim::Simulation)
     p = sim.p
-    filled_cap = sim.gcp isa ConsistentGapCoupling && !(sim.hs isa ParabolicHeadScheme && sim.cf isa FilledCavities && sim.up isa NoUplift)
+    filled_cap = sim.gcp isa ConsistentGapCoupling && !(p.e_v > 0 && sim.cf isa FilledCavities && sim.up isa NoUplift)
     active = sim.cf isa UnfilledCavities || sim.up isa IceUplift || filled_cap || p.outflow_only_land || p.outflow_only_ocean || sim.kfs isa ImplicitUpwind
     return PicardGuard(active, filled_cap, p.outflow_only_land, p.outflow_only_ocean)
 end
@@ -403,11 +402,13 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Solves for the new hydraulic head under [`EllipticHeadScheme`](@ref): runs the Picard/elliptic
-solve (`sim.mi`'s melt input for the current time was already refreshed by [`step!`](@ref)).
+Solves for the new hydraulic head: runs the Picard loop ([`elliptic_solver!`](@ref)) with the englacial storage over
+`sim.dt[]` from the head at the start of the step that [`prepare_head_solve!`](@ref) stored in `hs.ps.h_old` (`sim.mi`'s
+melt input for the current time was already refreshed by [`step!`](@ref)).
 """
-function step_h!(hs::EllipticHeadScheme, sim::Simulation)
-    elliptic_solver!(hs.ps, sim.state, sim.grid, sim.p, sim.mt, sim.kfs, sim.sl; cnc = sim.cnc, ds = sim.ds, gc = gap_coupling_terms(sim), wdt = water_check_dt(sim), guard = picard_guard(sim))
+function step_h!(hs::PicardHeadScheme, sim::Simulation)
+    elliptic_solver!(hs.ps, sim.state, sim.grid, sim.p, sim.mt, sim.kfs, sim.sl; cnc = sim.cnc, ds = sim.ds, gc = gap_coupling_terms(sim), dt = sim.dt[], h_old_set = true,
+                     wdt = water_check_dt(sim), guard = picard_guard(sim))
 end
 
 # The time step for the water test of the Picard loop (water_converged, elliptic_solver.jl), 0 where it does not apply: the
@@ -420,16 +421,6 @@ function N_clamps_inactive(sim::Simulation)
     lo, hi = N_clamp_range(sim.cnc)
     lo, hi = max(lo, sim.p.N_min), min(hi, sim.p.N_max)
     return hi == Inf && (sim.up isa IceUplift ? lo <= 0 : lo == -Inf)
-end
-
-"""
-$(TYPEDSIGNATURES)
-
-Solves for the new hydraulic head under [`ParabolicHeadScheme`](@ref): repeats the backward-Euler
-linear solve to nonlinear convergence within this timestep ([`Parabolic_loop!`](@ref)).
-"""
-function step_h!(hs::ParabolicHeadScheme, sim::Simulation)
-    Parabolic_loop!(hs.pps, sim.state, sim.grid, sim.p, sim.mt, sim.kfs, sim.sl, sim.dt[]; cnc = sim.cnc, ds = sim.ds, gc = gap_coupling_terms(sim), guard = picard_guard(sim))
 end
 
 """

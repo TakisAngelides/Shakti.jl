@@ -1,37 +1,19 @@
 """
 $(TYPEDSIGNATURES)
 
-How the hydraulic head is advanced each timestep -- multiple dispatch on the concrete subtype
-(see [`step_h!`](@ref) in `run.jl`) picks between [`EllipticHeadScheme`](@ref) (Picard iteration,
-used when `p.e_v == 0`) and [`ParabolicHeadScheme`](@ref) (backward-Euler, iterated to nonlinear
-convergence within each timestep, used when `p.e_v != 0`).
+How the hydraulic head is advanced each timestep -- multiple dispatch on the concrete subtype (see [`step_h!`](@ref) in
+`run.jl`). [`PicardHeadScheme`](@ref) is the one there is.
 """
 abstract type AbstractHeadScheme end
 
 """
 $(TYPEDSIGNATURES)
 
-Head scheme for `p.e_v != 0` (nonzero englacial storage void ratio, Sommers et al. 2018 Eq. 13's
-`∂(e_v(h-zb))/∂t` storage term): each timestep, [`Parabolic_loop!`](@ref) (`pps`, a
-[`ParabolicPicardSolver`](@ref)) repeats the backward-Euler linear solve (see
-[`solve_parabolic_linear_system!`](@ref)), refreshing every nonlinear coefficient (`K`, `N`,
-`A_visc`, `b`, `mdot`, `beta`, `abs_ub`) against the newly-updated `h` each time, until the head
-update converges (or `pps.iters` is exhausted) -- the parabolic counterpart of
-[`EllipticHeadScheme`](@ref)'s Picard loop, needed because a *single* backward-Euler solve leaves
-those coefficients lagged at the start-of-timestep state (see [`parabolic_solver!`](@ref)'s
-docstring for where that lag causes real, demonstrated error at large `dt`). Pass a
-`ParabolicPicardSolver` built with `iters = 1` to recover that old, non-iterating behavior exactly.
+Head scheme of every [`Simulation`](@ref): each timestep, the [`PicardSolver`](@ref) `ps` is run to convergence
+([`Picard_loop!`](@ref)). The head equation is elliptic for `p.e_v == 0` and parabolic otherwise: the rows then also store
+englacial water, `e_v (h - zb)` (Sommers et al. 2018 Eq. 13), backward Euler from the head at the start of the step.
 """
-struct ParabolicHeadScheme{PPS <: ParabolicPicardSolver} <: AbstractHeadScheme
-    pps::PPS
-end
-
-"""
-$(TYPEDSIGNATURES)
-
-Head scheme used when `p.e_v == 0`: each timestep, the [`PicardSolver`](@ref) `ps` is run to convergence.
-"""
-struct EllipticHeadScheme{PS <: PicardSolver} <: AbstractHeadScheme
+struct PicardHeadScheme{PS <: PicardSolver} <: AbstractHeadScheme
     ps::PS
 end
 
@@ -222,9 +204,8 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
 
 # Notes
 
-- Head scheme: [`EllipticHeadScheme`](@ref) if `p.e_v == 0` (requires `ps`, a
-  [`PicardSolver`](@ref)), else [`ParabolicHeadScheme`](@ref) (requires `pps`, a
-  [`ParabolicPicardSolver`](@ref)).
+- Head scheme: [`PicardHeadScheme`](@ref) (requires `ps`, a [`PicardSolver`](@ref)); with `p.e_v > 0` its rows store
+  englacial water (the parabolic head equation).
 - `gap_scheme`: [`FullyImplicitGapScheme`](@ref) (default), [`ExplicitGapScheme`](@ref) (a reference, stable only at
   short `dt`), or [`ImplicitGapScheme`](@ref) (deprecated); see [`AbstractGapScheme`](@ref). Ignored under
   [`WithDiffusion`](@ref), whose gap solve has a single scheme of its own (`solve_b_diffusion!`).
@@ -247,7 +228,7 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
   wave in it, `q ~ K(W)*grad(zb)`; with `W` lagged to the start of the step a face mean is unstable (explicit central
   advection) at any `dt`, and `"upwind"` is stable only for `dt < dx*W/(3|q|)` (minutes at 100 m).
   `"implicit_upwind"` ([`ImplicitUpwind`](@ref)) takes `W` at the end of the step and is stable at any `dt`; it needs
-  a Picard solver with [`LUDirectSolver`](@ref) or `CUDSSDirectSolver(grid)` (`structure = :general`, the default) in `ps`/`pps`, and
+  a Picard solver with [`LUDirectSolver`](@ref) or `CUDSSDirectSolver(grid)` (`structure = :general`, the default) in `ps`, and
   `Simulation` errors otherwise. `"upwind"` is the faster opt-out at short steps.
 - `cell_N_clamping`: [`NoCellNClamping`](@ref) (default, no-op) or a [`CellNClamping`](@ref)
   overriding specific cells' `N_min`/`N_max` on top of `p`'s global values (see
@@ -275,9 +256,7 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
 - `gap_coupling`: [`ExplicitGapCoupling`](@ref) (legacy: the head rows assume the gap changes by `dt*rate(N, b_old)`) or
   [`ConsistentGapCoupling`](@ref) (they assume the change the gap scheme itself makes, so the head equation and the gap update
   store the same water at any `dt`; needed with the implicit and fully implicit gap schemes when `dt*A*|N|^(n-1)*N` is not
-  small, and with [`UnfilledCavities`](@ref)/[`IceUplift`](@ref) at large `dt`). Default: `ConsistentGapCoupling()`. The
-  parabolic scheme with [`WithDiffusion`](@ref) has no consistent coupling: there `gap_coupling = ExplicitGapCoupling()` must
-  be passed explicitly (an error otherwise, rather than a silent change of the gap bookkeeping). Pass `ExplicitGapCoupling()` to reproduce results from before this default. With
+  small, and with [`UnfilledCavities`](@ref)/[`IceUplift`](@ref) at large `dt`). Default: `ConsistentGapCoupling()`. Pass `ExplicitGapCoupling()` to reproduce results from before this default. With
   `"implicit_upwind"` the conductance then also takes the end-of-step gap, so the head-gap step is implicit throughout.
   With [`WithDiffusion`](@ref) (SUHMO) `ConsistentGapCoupling()` solves the coupled gap system at every Picard iteration
   (`DiffusiveGapUpdate`), one extra linear solve per iteration (two with `"implicit_upwind"`), with any cavity
@@ -289,9 +268,9 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
   since the true step count isn't known in advance.
 - `head_extrapolation_order`: degree of the time extrapolation of the head used as each step's
   initial guess ([`HeadExtrapolation`](@ref); default `1`, linear). `0` starts every solve from the
-  previous step's head. Ignored (always `0`) under [`ParabolicHeadScheme`](@ref).
+  previous step's head.
 """
-function Simulation(grid, state, tsteps, dt, p, tracked_obs::Vector{String}, mi::AbstractMeltInput, sl::AbstractSlidingLaw; gap_scheme::AbstractGapScheme = FullyImplicitGapScheme(), ps = nothing, pps = nothing, which_observer = nothing, which_file_writer = nothing, tracked_times = nothing, path = nothing, k_face_choice = nothing, verbose = false, cell_N_clamping::AbstractCellNClamping = NoCellNClamping(), timestep_scheme::AbstractTimeStepScheme = FixedTimeStep(), diffusion_scheme::AbstractDiffusionScheme = NoDiffusion(), head_extrapolation_order::Int = 1, cavity_filling::AbstractCavityFilling = UnfilledCavities(), hydraulic_potential::AbstractHydraulicPotential = SheetTopPotential(), uplift::AbstractIceUplift = IceUplift(), gap_coupling::Union{Nothing, AbstractGapCoupling} = nothing)
+function Simulation(grid, state, tsteps, dt, p, tracked_obs::Vector{String}, mi::AbstractMeltInput, sl::AbstractSlidingLaw; gap_scheme::AbstractGapScheme = FullyImplicitGapScheme(), ps = nothing, which_observer = nothing, which_file_writer = nothing, tracked_times = nothing, path = nothing, k_face_choice = nothing, verbose = false, cell_N_clamping::AbstractCellNClamping = NoCellNClamping(), timestep_scheme::AbstractTimeStepScheme = FixedTimeStep(), diffusion_scheme::AbstractDiffusionScheme = NoDiffusion(), head_extrapolation_order::Int = 1, cavity_filling::AbstractCavityFilling = UnfilledCavities(), hydraulic_potential::AbstractHydraulicPotential = SheetTopPotential(), uplift::AbstractIceUplift = IceUplift(), gap_coupling::Union{Nothing, AbstractGapCoupling} = nothing)
 
     # Check that all tracked observables are valid State fields
     for name in tracked_obs
@@ -299,13 +278,9 @@ function Simulation(grid, state, tsteps, dt, p, tracked_obs::Vector{String}, mi:
     end
 
     # Head scheme setup
-    if iszero(p.e_v) # elliptic head scheme
-        ps === nothing && error("ps (a PicardSolver) must be provided when p.e_v == 0 (elliptic head scheme)")
-        hs = EllipticHeadScheme(ps)
-    else # parabolic head scheme
-        pps === nothing && error("pps (a ParabolicPicardSolver) must be provided when p.e_v != 0 (parabolic head scheme)")
-        hs = ParabolicHeadScheme(pps)
-    end
+    ps isa PicardSolver || error("ps (a PicardSolver) must be provided")
+    p.e_v >= 0 || error("e_v must be >= 0 (got $(p.e_v))")
+    hs = PicardHeadScheme(ps)
 
     gs = gap_scheme
     gs isa ImplicitGapScheme &&
@@ -358,22 +333,18 @@ function Simulation(grid, state, tsteps, dt, p, tracked_obs::Vector{String}, mi:
               "dt < dx*W/(3|q|) (minutes at 100 m), above which the gap overshoots or the Picard iteration cycles. Use \"implicit_upwind\" (the default) at longer dt."
     if kfs isa ImplicitUpwind
         # The Newton terms of the donors' water depths make the head matrix non-symmetric (add_water_depth_newton!).
-        solver = hs isa EllipticHeadScheme ? hs.ps : hs.pps
+        solver = hs.ps
         hasproperty(solver, :ls) && supports_nonsymmetric(solver.ls) ||
             error("k_face_choice = \"implicit_upwind\"" * (k_face_default ? " (the default with $(nameof(typeof(cavity_filling)))/$(nameof(typeof(uplift))))" : "") *
-                  " assembles a non-symmetric head matrix: it needs a Picard solver (PicardSolver/ParabolicPicardSolver) " *
+                  " assembles a non-symmetric head matrix: it needs a PicardSolver " *
                   "with LUDirectSolver(grid) or CUDSSDirectSolver(grid) (structure = :general) as its linear solver, got $(nameof(typeof(solver)))" *
                   (hasproperty(solver, :ls) ? " with $(nameof(typeof(solver.ls)))" : "") *
                   (k_face_default ? ". Alternatively pass k_face_choice = \"upwind\" (stable only at short dt), or cavity_filling = FilledCavities(), " *
                                     "uplift = NoUplift() for SHAKTI's original filled sheet." : ""))
     end
 
-    # Linear solvers without a method for the equation they will be asked to solve: refused here rather than at the first
-    # step (a MethodError deep inside the Picard loop). Every solver in the package has both methods; this catches a
-    # user-defined solver that lacks one.
-    hs isa ParabolicHeadScheme &&
-        !hasmethod(solve_parabolic_linear_system!, Tuple{typeof(hs.pps.ls), State, Grid, ModelParameters, AbstractKFaceScheme, Any, Any}) &&
-        error("The parabolic head scheme has no solve with $(nameof(typeof(hs.pps.ls))): use CholeskyDirectSolver, LUDirectSolver, CUDSSDirectSolver or CGIterativeSolver in the ParabolicPicardSolver")
+    # A gap solver without a method for the gap system: refused here rather than at the first step (a MethodError deep
+    # inside the Picard loop).
     diffusion_scheme isa WithDiffusion &&
         !hasmethod(solve_b_diffusion!, Tuple{typeof(diffusion_scheme.ls), State, Grid, ModelParameters, Any}) &&
         error("WithDiffusion's gap solve has no method for $(nameof(typeof(diffusion_scheme.ls))): use CholeskyDirectSolver(grid), CUDSSDirectSolver(grid; structure = :spd) or CGIterativeSolver (the gap system is symmetric positive definite)")
@@ -414,7 +385,7 @@ function Simulation(grid, state, tsteps, dt, p, tracked_obs::Vector{String}, mi:
     end
 
     head_extrapolation_order >= 0 || error("head_extrapolation_order must be >= 0 (got $head_extrapolation_order)")
-    he = (head_extrapolation_order == 0 || hs isa ParabolicHeadScheme) ? NoHeadExtrapolation() : HeadExtrapolation(grid; order = head_extrapolation_order)
+    he = head_extrapolation_order == 0 ? NoHeadExtrapolation() : HeadExtrapolation(grid; order = head_extrapolation_order)
 
     # Gap coupling: by default the consistent one wherever it is available. The explicit coupling's head rows assume linear
     # gap growth while the implicit gap schemes apply their own update, so the two store different water: up to 1.8 times
@@ -433,14 +404,7 @@ function Simulation(grid, state, tsteps, dt, p, tracked_obs::Vector{String}, mi:
                   "contradicts the unfilled (N = po) and uplifted (N = 0) head rows. These sheets bound N by po - pw already; for a floor " *
                   "on N use IceUplift (water above the overburden lifts the ice), or use the filled sheet (FilledCavities(), NoUplift()).")
     end
-    parabolic_diffusion = diffusion_scheme isa WithDiffusion && hs isa ParabolicHeadScheme
-    if gap_coupling === nothing
-        parabolic_diffusion && error("The parabolic head scheme with WithDiffusion has no consistent gap coupling (the default): " *
-                                     "pass gap_coupling = ExplicitGapCoupling() to run it with SHAKTI's explicit coupling")
-        gap_coupling = ConsistentGapCoupling()
-    end
-    gap_coupling isa ConsistentGapCoupling && parabolic_diffusion &&
-        error("gap_coupling = ConsistentGapCoupling() with WithDiffusion is available only with the elliptic head scheme")
+    gap_coupling === nothing && (gap_coupling = ConsistentGapCoupling())
 
     sim = Simulation(tsteps, Ref(dt), p, hs, gs, mt, oss, cls, diffusion_scheme, observer, grid, state, mi, kfs, sl, verbose, Ref(zero(dt)), cell_N_clamping, timestep_scheme, he, cavity_filling, hydraulic_potential, uplift, gap_coupling)
     return refresh_state!(sim) # the derived fields with this simulation's options (set_initial_conditions! knows none of them)

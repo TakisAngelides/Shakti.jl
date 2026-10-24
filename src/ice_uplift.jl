@@ -26,7 +26,7 @@
 # State.stor_up = 1/dt marks cells where uplift is allowed (GROUNDED under IceUplift, 0 otherwise: the
 # legacy rows, bit for bit). The uplift layer is the water above the gap, W - b, in a cell whose head is above h_o
 # (uplift_layer, gap_height.jl): W is set from the head after the solve (water_from_head!) and, with unfilled
-# cavities on the elliptic scheme, from the water budget (update_water_budget!, unfilled_cavities.jl).
+# cavities, from the water budget (update_water_budget!, unfilled_cavities.jl).
 
 """
 $(TYPEDSIGNATURES)

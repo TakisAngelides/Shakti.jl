@@ -35,8 +35,8 @@ moves).
 - Only `GROUNDED` cells are extrapolated: Dirichlet (`OCEAN`/`LAND`) heads are fixed, and
   `OTHER_BASIN`/`FROZEN_BED` rows hold their current value, which extrapolation would make drift.
 - Memory: `order + 1` head-sized arrays. Cost per step: `order + 1` fused broadcasts.
-- Not used under [`ParabolicHeadScheme`](@ref): its storage term needs the unextrapolated head of
-  the previous step as its `h_old`, which it reads from `s.h` at the start of the solve.
+- The englacial storage (`p.e_v > 0`) and the water test take the head at the start of the step, which
+  [`prepare_head_solve!`](@ref) keeps in the solver's `h_old` before the guess replaces `s.h`.
 """
 mutable struct HeadExtrapolation{A <: AbstractArray} <: AbstractHeadExtrapolation
     order::Int

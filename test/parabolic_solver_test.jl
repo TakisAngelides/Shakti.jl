@@ -1,4 +1,4 @@
-    @testset "ParabolicHeadScheme" begin
+    @testset "Parabolic head equation (englacial storage, e_v > 0)" begin
 
         # Same nontrivial mask/state as the linear-solver testsets above.
         nx, ny = 6, 6
@@ -22,31 +22,34 @@
         taub_x = zeros(nx + 1, ny)
         taub_y = zeros(nx, ny + 1)
 
-        @testset "Simulation constructor requires pps (not ps) when e_v != 0" begin
+        @testset "one PicardSolver for both head equations" begin
             p_parabolic = ModelParameters(e_v = 1e-3)
             state = State(grid)
             set_initial_conditions!(state, grid, p_parabolic, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
 
             @test_throws ErrorException Simulation(grid, state, 1, floattype(60.0), p_parabolic, "fully_implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift())
 
-            ls = CholeskyDirectSolver(grid)
-            pps = ParabolicPicardSolver(50, 1e-6, ls, grid)
-            sim = Simulation(grid, state, 1, floattype(60.0), p_parabolic, "fully_implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), pps = pps)
-            @test sim.hs isa ParabolicHeadScheme
+            ps = PicardSolver(50, 1e-6, CholeskyDirectSolver(grid), grid)
+            sim = Simulation(grid, state, 1, floattype(60.0), p_parabolic, "fully_implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps)
+            @test sim.hs isa PicardHeadScheme && sim.he isa HeadExtrapolation
+            @test_throws ErrorException Simulation(grid, state, 1, floattype(60.0), ModelParameters(e_v = -1e-3), "fully_implicit", String[], ConstantMeltInput(), sl;
+                                                   cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps)
         end
 
-        @testset "parabolic_solver! updates h and keeps every derived field finite" begin
+        @testset "the Picard loop with englacial storage updates h and keeps every derived field finite" begin
             p = ModelParameters(e_v = 1e-3)
             state = State(grid)
             set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
 
             h_before = copy(Array(state.h))
 
-            ls = CholeskyDirectSolver(grid)
+            ps = PicardSolver(50, 1e-9, CholeskyDirectSolver(grid), grid)
             mt = MeltTerms{p.mdot_includes_G, p.mdot_includes_frictional, p.mdot_includes_potential, p.mdot_includes_sensible, p.mdot_includes_qT}()
-            dt = 60.0
-            Shakti.parabolic_solver!(ls, state, grid, p, mt, Arithmetic(), sl, dt)
+            @test_throws ErrorException elliptic_solver!(ps, state, grid, p, mt, Arithmetic(), sl) # the storage needs its time step
+            elliptic_solver!(ps, state, grid, p, mt, Arithmetic(), sl; dt = 60.0)
 
+            @test ps.converged
+            @test Array(ps.h_old) == h_before # the head at the start of the step, taken by the loop
             @test !(Array(state.h) ≈ h_before) # the moulin input should actually move h
             @test all(isfinite, Array(state.h))
             @test all(isfinite, Array(state.N))
@@ -55,7 +58,7 @@
             @test all(isfinite, Array(state.K))
         end
 
-        @testset "Steady state matches EllipticHeadScheme's (p.e_v -> 0 limit)" begin
+        @testset "Steady state matches the elliptic one (p.e_v -> 0 limit)" begin
 
             # e_v only sets how fast h relaxes toward the steady balance of diffusion vs.
             # sources (Sommers et al. 2018 Eq. 13's e_v*dh/dt storage term vanishes once
@@ -78,8 +81,8 @@
             run!(sim_elliptic)
 
             ls_parabolic = CholeskyDirectSolver(grid)
-            pps_parabolic = ParabolicPicardSolver(50, 1e-6, ls_parabolic, grid)
-            sim_parabolic = Simulation(grid, state_parabolic, tsteps, floattype(dt), p_parabolic, "fully_implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), pps = pps_parabolic)
+            ps_parabolic = PicardSolver(50, 1e-6, ls_parabolic, grid)
+            sim_parabolic = Simulation(grid, state_parabolic, tsteps, floattype(dt), p_parabolic, "fully_implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps_parabolic)
             run!(sim_parabolic)
 
             # Empirically ~3e-7 relative -- rtol here leaves ample margin rather than pinning the exact residual.
@@ -88,22 +91,20 @@
 
         end
 
-        @testset "run! completes under ParabolicHeadScheme" begin
+        @testset "run! completes with englacial storage" begin
             p = ModelParameters(e_v = 1e-3)
             state = State(grid)
             set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
 
             ls = CholeskyDirectSolver(grid)
-            pps = ParabolicPicardSolver(50, 1e-6, ls, grid)
+            ps = PicardSolver(50, 1e-6, ls, grid)
             sim = Simulation(grid, state, 5, floattype(60.0), p, "fully_implicit", ["h", "b"], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(),
-                             pps = pps, which_observer = "Live", tracked_times = 0:5)
+                             ps = ps, which_observer = "Live", tracked_times = 0:5)
             run!(sim)
 
             @test all(isfinite, Array(sim.state.h))
             @test all(isfinite, Array(sim.state.b))
 
-            # ParabolicHeadScheme now iterates to nonlinear convergence within each timestep too
-            # (ParabolicPicardSolver), so this reports real convergence info, not missing/missing.
             converged, last_iter = Shakti.picard_status(sim.hs)
             @test converged isa Bool
             @test converged # trivial 6x6 fixture, well within 50 iterations
@@ -113,10 +114,9 @@
         @testset "run! with a FROZEN_BED cell present keeps it pinned" begin
             # Closes the one gap in the tests above: none of them exercise FROZEN_BED, the
             # biggest architectural addition since this file was last touched. Mirrors
-            # frozen_bed_test.jl's own elliptic-path check, but under ParabolicHeadScheme
-            # (update_SALS_parabolic_kernel!/update_MFLS_parabolic_kernel! -- see
-            # linear_solver.jl -- already branch on FROZEN_BED the same way the elliptic
-            # kernels do; this confirms that branch is actually exercised end-to-end).
+            # frozen_bed_test.jl's own elliptic-path check, but with englacial storage
+            # (the storage terms are added to GROUNDED rows only; this confirms the frozen
+            # row is untouched end-to-end).
             mask_frozen = copy(mask) # copy, not mutate: `mask` is shared with the other testsets above
             mask_frozen[3, 3] = FROZEN_BED
 
@@ -127,15 +127,56 @@
             h_before = state.h[3, 3]
 
             ls = CholeskyDirectSolver(grid)
-            pps = ParabolicPicardSolver(50, 1e-6, ls, grid)
-            sim = Simulation(grid, state, 5, floattype(60.0), p, "fully_implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), pps = pps)
+            ps = PicardSolver(50, 1e-6, ls, grid)
+            sim = Simulation(grid, state, 5, floattype(60.0), p, "fully_implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps)
             run!(sim)
 
             @test all(isfinite, Array(sim.state.h))
             @test all(isfinite, Array(sim.state.N))
-            @test sim.state.h[3, 3] == h_before # frozen row: h held exactly fixed through every backward-Euler solve
+            @test sim.state.h[3, 3] == h_before # frozen row: h held exactly fixed through every solve
             @test sim.state.b[3, 3] == 0.0      # step_b! never touches a non-GROUNDED cell
             @test sim.state.N[3, 3] ≈ sim.state.po[3, 3] # still reads as full overburden throughout
+        end
+
+        @testset "GlaDS-2 sheet: the budget holds the sheet and englacial water, and the water test applies" begin
+            # unfilled cavities, uplift, implicit upwind and the consistent coupling (the defaults): W is budgeted less the
+            # change of the englacial water e_v*clamp(h - zb, 0, h_o - zb), and the head rows store W
+            p = ModelParameters(e_v = 1e-3, b_min = 1e-6)
+            state = State(grid)
+            set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, fill(1e-3, nx, ny), G, ub_x, ub_y, ieb, taub_x, taub_y)
+            dt = 3600.0
+            sim = Simulation(grid, state, 1, floattype(dt), p, "fully_implicit", String[], ConstantMeltInput(), sl; ps = PicardSolver(500, floattype(1e-10), LUDirectSolver(grid), grid))
+            @test Shakti.water_check_dt(sim) == dt
+            s = sim.state
+            g = Array(s.mask) .== GROUNDED
+            E(h) = p.e_v .* clamp.(h .- Array(s.zb), 0, Array(s.po) ./ (p.rho_w * p.g))
+            for _ in 1:3
+                W_old, h_old = copy(Array(s.W)), copy(Array(s.h))
+                step!(sim)
+                @test first(Shakti.picard_status(sim.hs))
+                qx, qy = Array(s.q_x), Array(s.q_y)
+                dv = [(qx[i+1, j] - qx[i, j]) / grid.dx + (qy[i, j+1] - qy[i, j]) / grid.dy for i in 1:nx, j in 1:ny]
+                src = Array(s.mdot) ./ p.rho_w .+ Array(s.ieb)
+                res = (Array(s.W) .- W_old .+ E(Array(s.h)) .- E(h_old)) ./ dt .+ dv .- src
+                @test maximum(abs, res[g]) < 1e-9 * maximum(abs, src[g])
+                @test any(E(Array(s.h))[g] .> 0)
+            end
+            N = Array(s.N)[g]
+            @test all(0 .<= N .<= Array(s.po)[g] .* (1 + 1e-9))
+        end
+
+        @testset "SUHMO's coupled gap (WithDiffusion) with the consistent coupling" begin
+            p = ModelParameters(e_v = 1e-3)
+            state = State(grid)
+            set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
+            sim = Simulation(grid, state, 3, floattype(3600.0), p, "fully_implicit", String[], ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(),
+                             ps = PicardSolver(200, floattype(1e-9), CholeskyDirectSolver(grid), grid), diffusion_scheme = WithDiffusion(CholeskyDirectSolver(grid)))
+            @test sim.gcp isa ConsistentGapCoupling
+            for _ in 1:3
+                step!(sim)
+                @test first(Shakti.picard_status(sim.hs))
+            end
+            @test all(isfinite, Array(sim.state.h)) && all(isfinite, Array(sim.state.b))
         end
 
     end
