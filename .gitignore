@@ -22,6 +22,8 @@
 !/test/diffusion_test.jl
 !/test/consistency_test.jl
 !/test/sheet_test.jl
+!/test/ieb_external_test.jl
+!/test/cairomakie_ext_test.jl
 !/test/helheim_setup.jl
 
 # OS junk
