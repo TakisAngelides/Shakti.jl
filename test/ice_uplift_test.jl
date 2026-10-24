@@ -172,11 +172,11 @@
             # the controller is checkpointed with the state
             mktempdir() do dir
                 ck = joinpath(dir, "ck.jld2")
-                ts.dt_ctrl[] = 1234.0; ts.fast_count[] = 2
+                ts.dt_ctrl[] = 1234.0; ts.fast_count[] = 2; ts.rejected[] = 7
                 Shakti.save_checkpoint(ck, sim, 1)
                 other = make_sim(; up = IceUplift(), cf = UnfilledCavities(), ts = adaptive)
                 Shakti.load_checkpoint!(other, ck)
-                @test other.ts.dt_ctrl[] == 1234.0 && other.ts.fast_count[] == 2
+                @test other.ts.dt_ctrl[] == 1234.0 && other.ts.fast_count[] == 2 && other.ts.rejected[] == 7
             end
         end
 

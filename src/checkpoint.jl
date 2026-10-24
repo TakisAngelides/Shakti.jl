@@ -65,13 +65,15 @@ function checkpoint_water(file)
 end
 
 # AdaptiveTimeStep's controller: the step it asks for and its count of fast steps, so a resumed run chooses the steps an
-# uninterrupted one would. A checkpoint without them restarts the controller from the loaded dt.
+# uninterrupted one would, and its count of rejected steps, which continues like the water budget's totals. A checkpoint
+# without them restarts the controller from the loaded dt.
 save_timestep_control(file, ::AbstractTimeStepScheme) = nothing
-save_timestep_control(file, ts::AdaptiveTimeStep) = (file["dt_ctrl"] = ts.dt_ctrl[]; file["fast_count"] = ts.fast_count[]; nothing)
+save_timestep_control(file, ts::AdaptiveTimeStep) = (file["dt_ctrl"] = ts.dt_ctrl[]; file["fast_count"] = ts.fast_count[]; file["rejected"] = ts.rejected[]; nothing)
 load_timestep_control!(::AbstractTimeStepScheme, file) = nothing
 function load_timestep_control!(ts::AdaptiveTimeStep, file)
     ts.dt_ctrl[] = haskey(file, "dt_ctrl") ? file["dt_ctrl"] : NaN
     ts.fast_count[] = haskey(file, "fast_count") ? file["fast_count"] : 0
+    ts.rejected[] = haskey(file, "rejected") ? file["rejected"] : 0
     return nothing
 end
 
