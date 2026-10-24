@@ -57,8 +57,9 @@ Columns: ISSM, the ISSM reproduction (SHAKTI equations) and the defaults.
   `0.004 m³/s`. With that little water the gap stays below 1.2 mm everywhere, no channel forms and
   the flow is laminar.
 
-!!! warning "b_min at the initial gap"
-    With filled cavities and the default `ConsistentGapCoupling`, setting `b_min` equal to the initial
-    gap (here both `1e-3`) pins every cell at `b_min` within about ten days: `p_w` drops to about
-    `-3 p_o`, mean `N` to 8.9 MPa, and the correlation with ISSM to 0.69. Use `ExplicitGapCoupling`
-    to reproduce ISSM, or keep `b_min` well below the initial gap (the default `b_min = 1e-6`).
+!!! note "Filled cavities with the default ConsistentGapCoupling"
+    The ISSM setup with the default `ConsistentGapCoupling` in place of `ExplicitGapCoupling` closes
+    the water budget (the water created per step is about `1e-12` of the input) and gives mean `N`
+    0.65 MPa, a laminar sheet and a correlation of 0.80 with ISSM. `b_min` makes no difference
+    here: `1e-3` and `1e-6` give the same run, because the conductance is built from the water and
+    not from the clamped gap. To reproduce ISSM itself, use `ExplicitGapCoupling`.
