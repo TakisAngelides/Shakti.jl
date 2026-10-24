@@ -207,7 +207,9 @@ sim = Simulation(grid, state, nsteps, floattype(dt), p,
 #=
 ## 11. Run and check
 `run!` warns once if the gap grows taller than the ice (`check_gap_height`), the sign of a gap
-runaway. `verbose = true` in `Simulation` prints each step's Picard iterations.
+runaway. Under `FilledCavities` it also warns once when cells reach `p_w < 0` or a step creates water
+(`check_filled_sheet`): a full gap has no other way to meet a closure its inflow cannot supply, and
+`UnfilledCavities` lets it part-empty instead. `verbose = true` in `Simulation` prints each step's Picard iterations.
 =#
 run!(sim)
 
