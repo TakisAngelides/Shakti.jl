@@ -235,6 +235,7 @@ export save_checkpoint, load_checkpoint!
 
 # run.jl
 export run!, step!, step_h!, step_b!
+export WaterBudget, water_created
 export freeze_on_capacity!
 
 # animation.jl

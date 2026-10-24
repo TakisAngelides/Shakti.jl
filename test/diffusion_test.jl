@@ -459,6 +459,10 @@
                 src = Array(s.mdot) ./ p.rho_w .+ Array(s.ieb)
                 res = (Array(s.b) .- b0) ./ dt .+ dv .- src
                 worst = max(worst, sum(abs, res[g]) / sum(abs, src[g]))
+                # GAP-2: the step's water budget (the filled sheet's water is b)
+                wc = water_created(sim)
+                @test wc.created ≈ sum(res[g]) * dt * grid.dx * grid.dy atol = 1e-9 * wc.input
+                @test wc.input ≈ sum(src[g]) * dt * grid.dx * grid.dy
             end
             return worst
         end
@@ -507,11 +511,16 @@
                 src = Array(s.mdot) ./ p.rho_w .+ Array(s.ieb)
                 W = W_old .+ dt .* (src .- dv)
                 worst = max(worst, sum(max.(0, .-W[g])) / dt / sum(abs, src[g]))
+                # GAP-2: water_created reports what the floor created
+                @test water_created(sim).created ≈ sum(max.(0, .-W[g])) * grid.dx * grid.dy atol = 1e-12 * water_created(sim).input
             end
             return worst
         end
         unf = (; cavity_filling = UnfilledCavities(), uplift = IceUplift(), k_face_choice = "implicit_upwind", ps = PicardSolver(500, floattype(1e-9), LUDirectSolver(grid), grid))
-        @test worst_created(moulin_sim(ExplicitGapCoupling(); unf...)) > 1e-3
+        ex = moulin_sim(ExplicitGapCoupling(); unf...)
+        @test worst_created(ex) > 1e-3
+        wc = water_created(ex)
+        @test wc.total_created > 1e-3 * wc.total_input && wc.total_input > 2 * wc.input # summed over the three steps
         @test worst_created(moulin_sim(ConsistentGapCoupling(); unf...)) < 1e-12
     end
 
@@ -540,6 +549,10 @@
                 src = Array(s.mdot) ./ p.rho_w .+ Array(s.ieb)
                 res = (Array(s.b) .- b0) ./ dt .+ dv .- src
                 worst = max(worst, sum(abs, res[g]) / sum(abs, src[g]))
+                # GAP-2: the step's water budget (the filled sheet's water is b)
+                wc = water_created(sim)
+                @test wc.created ≈ sum(res[g]) * dt * grid.dx * grid.dy atol = 1e-9 * wc.input
+                @test wc.input ≈ sum(src[g]) * dt * grid.dx * grid.dy
             end
             return worst
         end

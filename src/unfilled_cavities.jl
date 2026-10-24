@@ -347,12 +347,70 @@ elsewhere. Where the gap update and the head equation disagree (the
 implicit gap schemes change the gap by a different amount than the head equation assumed, a held `b_max`/`b_min`, ...)
 the difference stays in `W - b`: an empty part of the gap where `W < b`, water above the gap where `W > b` (the uplift
 layer where the ice is lifted, see [`IceUplift`](@ref); otherwise released as a source the next step). The floor
-`W >= 0` is the only water it can still create. Called by [`step_b!`](@ref) under
+`W >= 0` is the only water it can still create; a `Simulation` reports it per step ([`water_created`](@ref)). Called by [`step_b!`](@ref) under
 [`UnfilledCavities`](@ref) (`water_is_budgeted`), right after the gap update and before `compute_beta!` reads the
 uplift layer.
 """
 update_water_budget!(s::State, g::Grid, p::ModelParameters, dt, h_old = s.h) =
     (@parallel update_water_budget_kernel!(s.W, s.mask, s.b, s.q_x, s.q_y, s.mdot, s.ieb, g.dx, g.dy, dt, p.rho_w, s.h, h_old, s.zb, s.po, s.stor, s.stor_up, p.e_v, p.g); s)
+
+"""
+$(TYPEDSIGNATURES)
+
+The water budget of a [`Simulation`](@ref)'s steps (`sim.wb`), for every sheet: per step, the water the step created
+on `GROUNDED` cells beyond what its sources and fluxes deliver, `created = sum(W_new + dE - (W_old + dt*(mdot/rho_w +
+ieb - div(q)))) * dx*dy` [m^3] (`dE` the change of the englacial water, `p.e_v > 0`), and that step's grounded input
+`dt*sum(mdot/rho_w + ieb) * dx*dy` [m^3]; `total_created`/`total_input` since the `Simulation` was built (not
+checkpointed). Read them with [`water_created`](@ref).
+
+Under [`UnfilledCavities`](@ref) (the default sheet) `created` is the water the floor `W >= 0` of
+[`update_water_budget!`](@ref) creates, about the Picard tolerance times the input once the steps converge. Under
+[`FilledCavities`](@ref) it is what the head rows and the gap update disagree on: about the Picard tolerance under
+[`ConsistentGapCoupling`](@ref), percents of the input or more under [`ExplicitGapCoupling`](@ref). A negative value is
+water lost. Mask changes are not part of it (their water is the `discarded_b` of [`set_mask!`](@ref)/[`update_frozen_bed!`](@ref)).
+"""
+struct WaterBudget{F <: AbstractFloat, A <: AbstractArray{F}}
+    expected::A # per cell, the water the budget leaves, W_old + dt*(mdot/rho_w + ieb - div q) - dE, then the step's excess over it
+    src::A      # per cell, the step's input dt*(mdot/rho_w + ieb)
+    created::Base.RefValue{F}
+    input::Base.RefValue{F}
+    total_created::Base.RefValue{F}
+    total_input::Base.RefValue{F}
+end
+WaterBudget(s::State) = (z = zero(eltype(s.W)); WaterBudget(similar(s.W), similar(s.W), Ref(z), Ref(z), Ref(z), Ref(z)))
+
+# Before the gap update: expected <- the budget's water, src <- the grounded input (both per cell, zero off GROUNDED).
+@parallel_indices (ix, iy) function expected_water_kernel!(Wx, src, mask, W, q_x, q_y, mdot, ieb, dx, dy, dt, rho_w, h, h_old, zb, po, stor, stor_up, e_v, ggrav)
+    if ix <= size(Wx, 1) && iy <= size(Wx, 2)
+        if mask[ix, iy] == GROUNDED
+            div = (q_x[ix+1, iy] - q_x[ix, iy]) / dx + (q_y[ix, iy+1] - q_y[ix, iy]) / dy
+            dE = englacial_water(e_v, h[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], stor_up[ix, iy], rho_w, ggrav) -
+                 englacial_water(e_v, h_old[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], stor_up[ix, iy], rho_w, ggrav)
+            src[ix, iy] = dt * (mdot[ix, iy] / rho_w + ieb[ix, iy])
+            Wx[ix, iy] = W[ix, iy] + src[ix, iy] - dt * div - dE
+        else
+            src[ix, iy] = zero(dt)
+            Wx[ix, iy] = zero(dt)
+        end
+    end
+    return
+end
+
+# After the water update: expected <- W - expected on GROUNDED cells, the water the step created there.
+@parallel_indices (ix, iy) function excess_water_kernel!(Wx, mask, W)
+    if ix <= size(Wx, 1) && iy <= size(Wx, 2)
+        Wx[ix, iy] = mask[ix, iy] == GROUNDED ? W[ix, iy] - Wx[ix, iy] : zero(eltype(Wx))
+    end
+    return
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+The water budget of `sim`'s last step and of all its steps (see [`WaterBudget`](@ref)), in m^3: `(created, input,
+total_created, total_input)`. `created/input` is the fraction of the step's grounded input the step created.
+"""
+water_created(wb::WaterBudget) = (created = wb.created[], input = wb.input[], total_created = wb.total_created[], total_input = wb.total_input[])
 
 # The water a GROUNDED cell's head row stored under the sheets whose water is not budgeted (water_is_budgeted, run.jl):
 # the new gap less the empty depth below the bed (UnfilledCavities, budgeted in a Simulation), plus the uplift layer above

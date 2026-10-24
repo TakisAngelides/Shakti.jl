@@ -83,6 +83,8 @@ compute_b_w!
 compute_b_w_iterate!
 set_cavity_storage!
 update_water_budget!
+WaterBudget
+water_created
 water_from_head!
 empty_gap
 water_above_gap

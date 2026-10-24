@@ -179,7 +179,7 @@ and every "which scheme/law" choice (head, gap, melt-rate terms, K-face, melt-in
 bundled together with the observer that records output. Build one with the keyword constructor
 below (not this positional one directly), then call [`run!`](@ref).
 """
-struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHeadScheme, GS <: AbstractGapScheme, MT <: MeltTerms, OSS <: AbstractOpenBySlidingScheme, CLS <: AbstractCreepLengthScheme, DS <: AbstractDiffusionScheme, O <: AbstractObserver, G <: Grid, S <: State, MI <: AbstractMeltInput, KFS <: AbstractKFaceScheme, SL <: AbstractSlidingLaw, CNC <: AbstractCellNClamping, TS <: AbstractTimeStepScheme, HE <: AbstractHeadExtrapolation, CF <: AbstractCavityFilling, HP <: AbstractHydraulicPotential, UP <: AbstractIceUplift, GCP <: AbstractGapCoupling}
+struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHeadScheme, GS <: AbstractGapScheme, MT <: MeltTerms, OSS <: AbstractOpenBySlidingScheme, CLS <: AbstractCreepLengthScheme, DS <: AbstractDiffusionScheme, O <: AbstractObserver, G <: Grid, S <: State, MI <: AbstractMeltInput, KFS <: AbstractKFaceScheme, SL <: AbstractSlidingLaw, CNC <: AbstractCellNClamping, TS <: AbstractTimeStepScheme, HE <: AbstractHeadExtrapolation, CF <: AbstractCavityFilling, HP <: AbstractHydraulicPotential, UP <: AbstractIceUplift, GCP <: AbstractGapCoupling, WB <: WaterBudget{F}}
     tsteps::Int
     dt::Base.RefValue{F} # a Ref so AdaptiveTimeStep can update it in place each step, same reason total_time is a Ref despite Simulation itself being immutable
     p::P
@@ -204,6 +204,7 @@ struct Simulation{F <: AbstractFloat, P <: ModelParameters{F}, HS <: AbstractHea
     hp::HP # AbstractHydraulicPotential: SheetTopPotential() (q = -K grad(h + b)) by default, BedPotential() for the legacy flux, see hydraulic_potential.jl
     up::UP # AbstractIceUplift: IceUplift() by default (NoUplift(): SHAKTI's, pw may exceed po), see ice_uplift.jl
     gcp::GCP # AbstractGapCoupling: ConsistentGapCoupling() by default where available, see the constructor and linear_solver.jl
+    wb::WB # WaterBudget: the water each step created beyond its sources and fluxes (water_created), see unfilled_cavities.jl
 end
 
 """
@@ -416,7 +417,7 @@ function Simulation(grid, state, tsteps, dt, p, tracked_obs::Vector{String}, mi:
     end
     gap_coupling === nothing && (gap_coupling = ConsistentGapCoupling())
 
-    sim = Simulation(tsteps, Ref(dt), p, hs, gs, mt, oss, cls, diffusion_scheme, observer, grid, state, mi, kfs, sl, verbose, Ref(zero(dt)), cell_N_clamping, timestep_scheme, he, cavity_filling, hydraulic_potential, uplift, gap_coupling)
+    sim = Simulation(tsteps, Ref(dt), p, hs, gs, mt, oss, cls, diffusion_scheme, observer, grid, state, mi, kfs, sl, verbose, Ref(zero(dt)), cell_N_clamping, timestep_scheme, he, cavity_filling, hydraulic_potential, uplift, gap_coupling, WaterBudget(state))
     return refresh_state!(sim) # the derived fields with this simulation's options (set_initial_conditions! knows none of them)
 
 end

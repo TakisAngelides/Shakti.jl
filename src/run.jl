@@ -100,7 +100,7 @@ function run!(sim::Simulation; checkpoint_every::Union{Nothing, Int} = nothing, 
 
         if sim.verbose
             converged, last_iter = picard_status(sim.hs)
-            println("$t / $(sim.tsteps) completed in $(round(step_time; digits = 4))s. head solve converged: $converged in $last_iter iterations.$(timestep_report(sim.ts, sim))")
+            println("$t / $(sim.tsteps) completed in $(round(step_time; digits = 4))s. head solve converged: $converged in $last_iter iterations.$(timestep_report(sim.ts, sim))$(water_report(sim.wb))")
             s = sim.state
             Narr = Array(s.N)
             if converged === false
@@ -184,6 +184,24 @@ end
 # the water the unconverged fluxes create: 0.8 m from a 0.03 m moulin input in one step of a stuck filled sheet); under
 # ExplicitGapCoupling it does not close (2 % of W on that fixture).
 water_is_budgeted(sim::Simulation) = sim.cf isa UnfilledCavities
+# GAP-2: every sheet's water budget, per step (WaterBudget, unfilled_cavities.jl). expect_water! runs before compute_b!,
+# which sets W under the dry floor.
+function expect_water!(sim::Simulation)
+    s, p, g, wb = sim.state, sim.p, sim.grid, sim.wb
+    @parallel expected_water_kernel!(wb.expected, wb.src, s.mask, s.W, s.q_x, s.q_y, s.mdot, s.ieb, g.dx, g.dy, sim.dt[], p.rho_w, s.h, sim.hs.ps.h_old, s.zb, s.po, s.stor, s.stor_up, p.e_v, p.g)
+    return sim
+end
+function account_water!(sim::Simulation)
+    wb, area = sim.wb, sim.grid.dx * sim.grid.dy
+    @parallel excess_water_kernel!(wb.expected, sim.state.mask, sim.state.W)
+    wb.created[] = sum(wb.expected) * area
+    wb.input[] = sum(wb.src) * area
+    wb.total_created[] += wb.created[]
+    wb.total_input[] += wb.input[]
+    return sim
+end
+water_created(sim::Simulation) = water_created(sim.wb)
+
 function update_water!(sim::Simulation)
     water_is_budgeted(sim) && return update_water_budget!(sim.state, sim.grid, sim.p, sim.dt[], sim.hs.ps.h_old)
     dry_floor(sim) && return sim.state # compute_b! set it
@@ -423,6 +441,9 @@ end
 # A fresh run! starts the controller from the Simulation's dt again.
 reset_timestep!(::FixedTimeStep) = nothing
 reset_timestep!(ts::AdaptiveTimeStep) = (ts.dt_ctrl[] = NaN; ts.fast_count[] = 0; ts.rejected[] = 0; nothing)
+
+# The water budget part of run!'s verbose line (WaterBudget): the water the step created, against its grounded input.
+water_report(wb::WaterBudget) = " water created: $(round(wb.created[], sigdigits = 3)) m^3 ($(round(wb.created[] / wb.input[], sigdigits = 3)) of the input)."
 
 # The timestep part of run!'s verbose line.
 timestep_report(::FixedTimeStep, sim) = ""
@@ -694,8 +715,10 @@ function step_b!(sim::Simulation)
 
     s, p = sim.state, sim.p
 
+    expect_water!(sim)       # the water the step's sources and fluxes leave, from the water W at its start
     compute_b!(sim)          # updates b based on the new state variables (GROUNDED cells only)
     update_water!(sim)       # the water W for the new gap, before compute_beta! reads it
+    account_water!(sim)      # the water the step created beyond that (water_created)
 
     compute_beta!(s, p, sim.oss) # opening-by-sliding parameter depends on the new b
     compute_lc!(s, p, sim.cls)   # ice-creep length scale depends on the new b
