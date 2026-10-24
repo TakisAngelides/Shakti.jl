@@ -180,14 +180,11 @@ end
 #
 # abs_ub is reused rather than re-derived locally from ub_x/ub_y: it's
 # already the correct cell-centered ‖v_b‖ (compute_abs_ub_kernel!), and valid
-# by construction here since it's computed right before these calls (see
-# initial_conditions.jl and elliptic_solver.jl). This currently holds for an
-# entire run because ub_x/ub_y are set once in set_initial_conditions! and
-# never reassigned afterward -- NOTE: once ice-velocity coupling starts
-# updating ub_x/ub_y mid-run (every timestep, or every few timesteps under a
-# frozen-ice-velocity assumption), compute_abs_ub! must be re-invoked
-# whenever ub_x/ub_y change, before the next compute_taub_x!/_y!/_xy! call,
-# or abs_ub (and therefore taub) will silently go stale.
+# by construction here: set_initial_conditions!, refresh_state! and every
+# step! (run.jl) recompute it from ub_x/ub_y before the head solve, so a
+# coupler that writes new ub_x/ub_y between steps is picked up. Code that
+# changes ub_x/ub_y and calls compute_taub_x!/_y!/_xy! outside step! must call
+# compute_abs_ub! first, or abs_ub (and therefore taub) is stale.
 @parallel_indices (ix, iy) function compute_taub_x_kernel!(taub_x, mask, N, ub_x, abs_ub, lambda, C, n, inv_n)
     nx1 = size(taub_x, 1) # nx + 1
     if ix <= nx1 && iy <= size(taub_x, 2)
