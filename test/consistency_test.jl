@@ -103,8 +103,13 @@
         end
 
         @testset "Picard convergence is judged on the unrelaxed update" begin
-            @test Shakti.raw_update_max(NoHeadRelaxation(), [0.0, -2e-3, 1e-3, 0.0]) == 2e-3
-            @test Shakti.raw_update_max(UnderHeadRelaxation(0.1), [0.0, -2e-3, 1e-3, 0.0]) ≈ 2e-2
+            @test Shakti.raw_update_max(NoHeadRelaxation(), [0.0, -2e-3, 1e-3, 0.0], 1.0) == 2e-3
+            @test Shakti.raw_update_max(UnderHeadRelaxation(0.1), [0.0, -2e-3, 1e-3, 0.0], 1.0) ≈ 2e-2
+            # the stall damping ω of Picard_loop! shrinks the applied update, not Anderson's residual g(x_k) - x_k
+            @test Shakti.raw_update_max(NoHeadRelaxation(), [0.0, -2e-3, 1e-3, 0.0], 0.25) ≈ 8e-3
+            @test Shakti.raw_update_max(UnderHeadRelaxation(0.1), [0.0, -2e-3, 1e-3, 0.0], 0.5) ≈ 4e-2
+            ah = AndersonHeadRelaxation(Grid(2, 2, 1.0, 1.0)); copyto!(ah.fk, [0.0, -2e-3, 1e-3, 0.0])
+            @test Shakti.raw_update_max(ah, zeros(2, 2), 0.25) == 2e-3
             # end to end: under-relaxation must not stop earlier (at a less accurate head) than no relaxation
             sim_plain = fresh_sim(; order = 0); step!(sim_plain)
             sim_relax = fresh_sim(; order = 0, alpha = 0.3); step!(sim_relax)

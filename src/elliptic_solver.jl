@@ -241,14 +241,15 @@ $(TYPEDSIGNATURES)
 
 Largest head change the linear solve itself asked for in the last iteration -- what the Picard
 convergence test must measure. `delta_h` is the change actually applied, i.e. after
-[`relax_h!`](@ref): under [`UnderHeadRelaxation`](@ref) that is `alpha` times the raw update, so
-testing it against `tol` would stop `1/alpha` times too early (and, since a damped iteration
-contracts slowly, further still from the fixed point). [`AndersonHeadRelaxation`](@ref) keeps the
-raw residual `g(x_k) - x_k` itself (`hr.fk`).
+[`relax_h!`](@ref) and the stall damping `ω` of [`Picard_loop!`](@ref): under
+[`UnderHeadRelaxation`](@ref) that is `alpha * ω` times the raw update, so testing it against `tol`
+would stop `1/(alpha ω)` times too early (and, since a damped iteration contracts slowly, further
+still from the fixed point). [`AndersonHeadRelaxation`](@ref) keeps the raw residual
+`g(x_k) - x_k` itself (`hr.fk`, taken before the stall damping), so `ω` does not enter.
 """
-raw_update_max(::AbstractHeadRelaxation, delta_h) = mapreduce(abs, max, delta_h; init = zero(eltype(delta_h)))
-raw_update_max(hr::UnderHeadRelaxation, delta_h) = mapreduce(abs, max, delta_h; init = zero(eltype(delta_h))) / hr.alpha
-raw_update_max(hr::AndersonHeadRelaxation, delta_h) = mapreduce(abs, max, hr.fk; init = zero(eltype(delta_h)))
+raw_update_max(::AbstractHeadRelaxation, delta_h, ω) = mapreduce(abs, max, delta_h; init = zero(eltype(delta_h))) / ω
+raw_update_max(hr::UnderHeadRelaxation, delta_h, ω) = mapreduce(abs, max, delta_h; init = zero(eltype(delta_h))) / (hr.alpha * ω)
+raw_update_max(hr::AndersonHeadRelaxation, delta_h, ω) = mapreduce(abs, max, hr.fk; init = zero(eltype(delta_h)))
 
 """
 $(TYPEDSIGNATURES)
@@ -436,7 +437,7 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
             # call -- confirmed via Profile.Allocs to allocate ~1.3MB/call at a ~200x400 grid, pure waste since check_every=1's own comment already establishes there's no GPU sync to
             # amortize on the Threads backend. NOT the cause of a separate, much larger long-run memory leak also found on this workload (traced instead to a Julia SparseArrays/CHOLMOD
             # ldiv! bug, JuliaSparse/SparseArrays.jl#726, unrelated to this call) -- this fix reduces allocation/GC pressure, nothing more.
-            delta_h_max = raw_update_max(ps.hr, ps.delta_h) / ω # the UNrelaxed update, see raw_update_max
+            delta_h_max = raw_update_max(ps.hr, ps.delta_h, ω) # the UNrelaxed, undamped update, see raw_update_max
             ω, best, since = stall_damping(ω, best, since, delta_h_max)
             h_max = mapreduce(abs, max, s.h; init = zero(eltype(s.h)))
             if head_converged(delta_h_max, h_max, ps.tol, ps.atol)
