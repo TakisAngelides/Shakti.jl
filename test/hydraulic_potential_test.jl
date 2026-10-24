@@ -33,23 +33,31 @@
         end
         grounded(s) = Array(s.mask) .== GROUNDED
 
-        @testset "gap jumps only between GROUNDED cells" begin
-            sim = make_sim()
-            s = sim.state
-            update_gap_jumps!(s, BedPotential())
-            @test all(iszero, Array(s.db_x)) && all(iszero, Array(s.db_y))
-            update_gap_jumps!(s, SheetTopPotential())
-            b, m = Array(s.b), Array(s.mask)
-            dbx, dby = Array(s.db_x), Array(s.db_y)
-            for j in 1:ny, i in 1:nx+1
-                expect = (1 < i <= nx && m[i-1, j] == GROUNDED && m[i, j] == GROUNDED) ? b[i, j] - b[i-1, j] : 0.0
-                @test dbx[i, j] == expect
+        # The expected jump across a face between cells 1 and 2 (2 at the higher index): b2 - b1 between two GROUNDED cells,
+        # the grounded cell's +-b on a face to an OCEAN/LAND boundary (whose side counts as 0), 0 elsewhere.
+        side(m) = m == GROUNDED || m == OCEAN || m == LAND
+        expected_jump(m1, m2, b1, b2) = side(m1) && side(m2) && (m1 == GROUNDED || m2 == GROUNDED) ?
+                                        (m2 == GROUNDED ? b2 : 0.0) - (m1 == GROUNDED ? b1 : 0.0) : 0.0
+        expected_jumps(b, m) = ([1 < i <= nx ? expected_jump(m[i-1, j], m[i, j], b[i-1, j], b[i, j]) : 0.0 for i in 1:nx+1, j in 1:ny],
+                                [1 < j <= ny ? expected_jump(m[i, j-1], m[i, j], b[i, j-1], b[i, j]) : 0.0 for i in 1:nx, j in 1:ny+1])
+
+        @testset "gap jumps between GROUNDED cells and at the outlets" begin
+            for uniform_b in (false, true)
+                sim = make_sim(; uniform_b = uniform_b)
+                s = sim.state
+                update_gap_jumps!(s, BedPotential())
+                @test all(iszero, Array(s.db_x)) && all(iszero, Array(s.db_y))
+                update_gap_jumps!(s, SheetTopPotential())
+                b, m = Array(s.b), Array(s.mask)
+                ex, ey = expected_jumps(b, m)
+                @test Array(s.db_x) == ex && Array(s.db_y) == ey
+                @test Array(s.db_x)[nx+1, 3] == 0                       # the domain edge
+                @test Array(s.db_x)[nx, 3] == -b[nx-1, 3] < 0           # grounded -> OCEAN
+                @test Array(s.db_x)[2, 3] == b[2, 3] > 0                # LAND -> grounded
+                @test all(iszero, Array(s.db_y)[:, 2])                  # OTHER_BASIN -> grounded: closed, no jump
+                uniform_b && @test all(iszero, Array(s.db_x)[3:nx-1, :]) # a uniform gap drives the outlets only
+                uniform_b || @test any(!iszero, Array(s.db_x)[3:nx-1, :]) && any(!iszero, Array(s.db_y)[:, 3:ny])
             end
-            for j in 1:ny+1, i in 1:nx
-                expect = (1 < j <= ny && m[i, j-1] == GROUNDED && m[i, j] == GROUNDED) ? b[i, j] - b[i, j-1] : 0.0
-                @test dby[i, j] == expect
-            end
-            @test any(!iszero, dbx) && any(!iszero, dby) # the fixture's b really varies
         end
 
         @testset "default is SheetTopPotential; BedPotential kept when passed" begin
@@ -62,14 +70,6 @@
             @test default.hp isa SheetTopPotential
         end
 
-        @testset "uniform gap: identical to BedPotential" begin
-            sims = [make_sim(; hp = hp, uniform_b = true) for hp in (BedPotential(), SheetTopPotential())]
-            foreach(step!, sims)
-            for f in (:h, :pw, :N, :b, :q_x, :q_y, :mdot)
-                @test Array(getproperty(sims[2].state, f)) == Array(getproperty(sims[1].state, f))
-            end
-        end
-
         @testset "flux is driven by h + b, and the solve conserves that flux" begin
             for cf in (FilledCavities(), UnfilledCavities())
                 sim = make_sim(; hp = SheetTopPotential(), cf = cf)
@@ -78,12 +78,15 @@
                 Shakti.prepare_head_solve!(sim); Shakti.step_h!(sim.hs, sim)
                 @test first(Shakti.picard_status(sim.hs))
                 h, b, m = Array(s.h), Array(s.b), Array(s.mask)
-                Kx, qx = Array(s.K_x), Array(s.q_x)
-                # interior faces between two grounded cells: q = -K*((h_i - h_{i-1}) + (b_i - b_{i-1}))/dx
+                Kx, qx, vx = Array(s.K_x), Array(s.q_x), Array(s.valid_x)
+                # every face touching a grounded cell: q = -K*((h_i - h_{i-1}) + db)/dx, db = b_i - b_{i-1} between two grounded
+                # cells and the grounded cell's +-b at the LAND (i = 2) and OCEAN (i = nx) outlets
+                ex, _ = expected_jumps(b, m)
                 for j in 2:ny, i in 2:nx
-                    (m[i-1, j] == GROUNDED && m[i, j] == GROUNDED) || continue
-                    @test qx[i, j] ≈ -Kx[i, j] * ((h[i, j] - h[i-1, j]) + (b[i, j] - b[i-1, j])) / grid.dx rtol = 1e-12
+                    (m[i-1, j] == GROUNDED || m[i, j] == GROUNDED) || continue
+                    @test qx[i, j] ≈ -Kx[i, j] * ((h[i, j] - h[i-1, j]) + ex[i, j]) / grid.dx * vx[i, j] rtol = 1e-12 # vx: an outflow-only face closed
                 end
+                @test all(vx[2, 2:ny] .== 1) && all(qx[2, 2:ny] .< 0) # the open LAND outlet drains the ice (the OCEAN faces of this fixture stay closed)
                 # the converged head satisfies the cell budgets with that same flux (gap update still to come):
                 # div(q) = mdot/rho_w + ieb - rate, rate = db/dt the head row assumed (explicit gap: exactly what step_b! applies)
                 step_b!(sim) # the elliptic scheme: W from the water budget (filled: the gap)

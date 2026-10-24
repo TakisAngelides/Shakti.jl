@@ -467,7 +467,7 @@
             return worst
         end
         @test worst_budget(moulin_sim(ExplicitGapCoupling())) > 0.1
-        @test worst_budget(moulin_sim(ConsistentGapCoupling())) < 1e-5
+        @test worst_budget(moulin_sim(ConsistentGapCoupling())) < 5e-5 # set by the Picard tolerance (1e-9 here; 4e-8 at 1e-11)
         @test moulin_sim(nothing).gcp isa ConsistentGapCoupling # the default under WithDiffusion on the Picard solver
         # Without diffusion (filled, NoUplift, b_max = Inf) the moulin drives N < 0, where creep opens the gap. The explicit
         # coupling's head rows assume linear growth, the fully implicit gap scheme grows it as exp(dt*|C|): 1e269 m in step 1,

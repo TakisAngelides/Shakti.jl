@@ -769,8 +769,8 @@ end
 # Under SheetTopPotential (hydraulic_potential.jl) the face flux is q = -K*(dh + db)/dx, with the gap
 # jump db = b[i] - b[i-1] known for the whole head solve. Its part K*db moves to the right-hand side of the
 # head row: rhs += aE*db_E - aW*db_W + aN*db_N - aS*db_S (a = K_face/dx^2, the row's own coefficients).
-# db is zero on faces to non-GROUNDED cells, so Dirichlet and frozen neighbours are unaffected; under
-# BedPotential every db is zero and rhs is left untouched (bit-for-bit).
+# On a face to an OCEAN/LAND neighbour db = +-b of this cell (the boundary's level is its fixed head), and on a
+# face to a frozen neighbour a = 0; under BedPotential every db is zero and rhs is left untouched (bit-for-bit).
 @inline function add_sheet_top_source!(rhs, row, aE, aW, aN, aS, db_x, db_y, ix, iy)
     src = aE * db_x[ix+1, iy] - aW * db_x[ix, iy] + aN * db_y[ix, iy+1] - aS * db_y[ix, iy]
     iszero(src) || (rhs[row] += src)

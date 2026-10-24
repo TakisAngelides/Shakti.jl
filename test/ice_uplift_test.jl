@@ -137,10 +137,10 @@
         end
 
         @testset "AdaptiveTimeStep: a step that does not converge is retried at half the dt, fast steps grow it" begin
-            # 100 Picard iterations: step 4 does not converge at 3 h nor at 1.5 h and is taken at 45 min, then dt grows back to 3 h
+            # 80 Picard iterations: step 2 does not converge at 3 h and is taken at 1.5 h, then dt grows back to 3 h
             day = 86400.0
             adaptive(st) = AdaptiveTimeStep(grid, st; dt_min = 600.0, dt_max = 3 * 3600.0, target_time = day, fast_iters = 40, grow_after = 1)
-            sim = make_sim(; up = IceUplift(), cf = UnfilledCavities(), dt = 3 * 3600.0, iters = 100, ts = adaptive)
+            sim = make_sim(; up = IceUplift(), cf = UnfilledCavities(), dt = 3 * 3600.0, iters = 80, ts = adaptive)
             ts = sim.ts
             dts, conv = Float64[], Bool[]
             while sim.total_time[] < day
@@ -150,7 +150,7 @@
             @test minimum(dts) < 3 * 3600.0 && maximum(dts[argmin(dts):end - 1]) == 3 * 3600.0 # halved, then grown back to dt_max
             @test sim.total_time[] == day
             # only the head was redone: the same steps at fixed dt give the same state bit for bit
-            ref = make_sim(; up = IceUplift(), cf = UnfilledCavities(), iters = 100)
+            ref = make_sim(; up = IceUplift(), cf = UnfilledCavities(), iters = 80)
             for dt_k in dts
                 ref.dt[] = dt_k; step!(ref)
             end

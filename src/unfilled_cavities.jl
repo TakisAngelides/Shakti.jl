@@ -199,7 +199,7 @@ store_start_of_step_melt!(::ImplicitUpwind, s::State) = (copyto!(s.mdot0, s.mdot
     return hn
 end
 
-@parallel_indices (ix, iy) function limit_head_step_kernel!(h, h_prev, dh_it, b, zb, po, stor, stor_up, rho_w, ggrav, filled_cap, mask, land, ocean)
+@parallel_indices (ix, iy) function limit_head_step_kernel!(h, h_prev, dh_it, b, zb, po, stor, stor_up, rho_w, ggrav, filled_cap, mask, land, ocean, db_x, db_y)
     if ix <= size(h, 1) && iy <= size(h, 2)
         hn, hp, z = h[ix, iy], h_prev[ix, iy], zb[ix, iy]
         ins = max(oftype(z, 1e-6) * b[ix, iy], 64 * eps(abs(z) + one(z))) # a step inside the new regime, keeping W ~ b
@@ -222,11 +222,11 @@ end
             hp > ho && hn < ho && (hn = ho)        # uplifted -> filled
             hp > ho && (hn = min(hn, hp + (bc + hp - ho))) # within uplifted: the water depth at most doubles per iteration
         end
-        if (land || ocean) && mask[ix, iy] == GROUNDED # outflow-only LAND/OCEAN faces (compute_face_masks!): open while h >= the boundary head
-            ix > 1          && closes_inflow(mask[ix-1, iy], land, ocean) && (hn = stop_at_boundary_head(hn, hp, h[ix-1, iy], ins))
-            ix < size(h, 1) && closes_inflow(mask[ix+1, iy], land, ocean) && (hn = stop_at_boundary_head(hn, hp, h[ix+1, iy], ins))
-            iy > 1          && closes_inflow(mask[ix, iy-1], land, ocean) && (hn = stop_at_boundary_head(hn, hp, h[ix, iy-1], ins))
-            iy < size(h, 2) && closes_inflow(mask[ix, iy+1], land, ocean) && (hn = stop_at_boundary_head(hn, hp, h[ix, iy+1], ins))
+        if (land || ocean) && mask[ix, iy] == GROUNDED # outflow-only LAND/OCEAN faces (compute_face_masks!): open while h + b >= the boundary head (b: the face's gap jump, SheetTopPotential)
+            ix > 1          && closes_inflow(mask[ix-1, iy], land, ocean) && (hn = stop_at_boundary_head(hn, hp, h[ix-1, iy] - db_x[ix, iy], ins))
+            ix < size(h, 1) && closes_inflow(mask[ix+1, iy], land, ocean) && (hn = stop_at_boundary_head(hn, hp, h[ix+1, iy] + db_x[ix+1, iy], ins))
+            iy > 1          && closes_inflow(mask[ix, iy-1], land, ocean) && (hn = stop_at_boundary_head(hn, hp, h[ix, iy-1] - db_y[ix, iy], ins))
+            iy < size(h, 2) && closes_inflow(mask[ix, iy+1], land, ocean) && (hn = stop_at_boundary_head(hn, hp, h[ix, iy+1] + db_y[ix, iy+1], ins))
         end
         d, dl = hn - hp, dh_it[ix, iy]
         d * dl < 0 && abs(d) > abs(dl) / 2 && (hn = hp + copysign(abs(dl) / 2, d)) # step reverses without contracting: at most half the previous one
@@ -286,7 +286,8 @@ Newton terms are small, can land kilometres away (seen on Drang Drung at dt = 1 
 neighbour 67 km above the overburden, then overflow).
 
 **Outflow stops** (`guard.outflow_land`, `guard.outflow_ocean`): an outflow-only face is a kink of the row like the bed,
-so an iterate that crosses the boundary head stops at it (`stop_at_boundary_head`).
+so an iterate that crosses the boundary head stops at it (`stop_at_boundary_head`); under [`SheetTopPotential`](@ref)
+at the head where the cell's water level `h + b` meets it.
 
 **Oscillation damping** (whenever the guard is active): a step that reverses the previous iteration's step of the same
 cell is at most half of it, as in reservoir simulators. Near a root Newton's steps shrink much faster than that and the
@@ -297,7 +298,7 @@ quarters of the gap, and from there refills it, every iteration; without it Gree
 previous steps (`s.dh_it`) are zeroed at the start of each step.
 """
 limit_head_step!(guard::PicardGuard, s::State, h_prev, p::ModelParameters; filled_cap::Bool = guard.filled_cap) =
-    guard.active ? (@parallel limit_head_step_kernel!(s.h, h_prev, s.dh_it, s.b, s.zb, s.po, s.stor, s.stor_up, p.rho_w, p.g, filled_cap, s.mask, guard.outflow_land, guard.outflow_ocean); s) : s
+    guard.active ? (@parallel limit_head_step_kernel!(s.h, h_prev, s.dh_it, s.b, s.zb, s.po, s.stor, s.stor_up, p.rho_w, p.g, filled_cap, s.mask, guard.outflow_land, guard.outflow_ocean, s.db_x, s.db_y); s) : s
 
 # Per GROUNDED cell: the head row's end-of-step water minus the water the fluxes and sources leave, W + dt (mdot/rho_w
 # + ieb - div q) less the change of its englacial water (e_v > 0, from the head h_old at the start of the step), as

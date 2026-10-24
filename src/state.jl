@@ -54,7 +54,7 @@ struct State{A <: AbstractArray}
 
     # XFace fields
     dhdx::A       # gradient of the head that drives the flux in x direction: of h, or of h + b under SheetTopPotential (hydraulic_potential.jl)
-    db_x::A       # jump of the gap height across the x-face, b[i] - b[i-1] [m], between two GROUNDED cells under SheetTopPotential; zero otherwise
+    db_x::A       # jump of the gap height across the x-face, b[i] - b[i-1] [m], between two GROUNDED cells, +-b of the grounded cell on a face to OCEAN/LAND, under SheetTopPotential; zero otherwise
     q_x::A        # water flux in x direction
     Re_x::A       # Reynolds number in x direction
     b_x::A        # water depth in x direction
