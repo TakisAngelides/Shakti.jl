@@ -39,7 +39,7 @@ function moulin_run(diffusion)
     mi = GaussianMoulinMeltInput(grid, 15000.0, 5000.0, 500.0, 20.0, 30 * 86400.0)
     ps = PicardSolver(200, 1e-6, LUDirectSolver(grid), grid)
     ds = diffusion ? WithDiffusion(CholeskyDirectSolver(grid)) : NoDiffusion()
-    sim = Simulation(grid, state, 60, floattype(86400.0), ModelParameters(), "fully_implicit", String[], mi, sl;
+    sim = Simulation(grid, state, 60, floattype(86400.0), ModelParameters(), mi, sl;
                      ps = ps, diffusion_scheme = ds)
     run!(sim)
     return (converged = sim.hs.ps.converged, b = Array(state.b), D = Array(state.D_x))

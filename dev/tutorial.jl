@@ -178,7 +178,7 @@ ps = PicardSolver(200, 1e-6, LUDirectSolver(grid), grid)
 * `ExplicitGapScheme()`  forward Euler; small steps only
 
 Older drivers name it by a string before the tracked observables (`"fully_implicit"`, `"implicit"`,
-`"explicit"`); that form still works.
+`"explicit"`); that form still runs, with a deprecation warning.
 
 Under `WithDiffusion` the choice is ignored: the diffusive gap solve has its own scheme.
 
@@ -190,19 +190,22 @@ dt, nsteps = 86400.0, 365
 
 #=
 ## 10. Output
-* `which_observer = "IO"` with `which_file_writer = "NetCDF"` (or `"HDF5"`, `"JLD2"`)  fields written at `tracked_times` (step indices, 0 = initial state); use this for long runs
-* `"CSV"`  min, max and mean per field and time only
-* `"Live"`  kept in memory, for short interactive runs
-* `tracked_obs`  any `State` field names, e.g. `"N"`, `"b"`, `"h"`, `"Re"`, `"q_x"`, `"W"`
+`observer` (keyword), given the `State` field names to record (`obs`, e.g. `"N"`, `"b"`, `"h"`, `"Re"`, `"q_x"`, `"W"`)
+and the step indices to record them at (`times`, 0 = initial state):
+* `IOObserver(obs, times, NetCDFFileWriter(), path)` (or `HDF5FileWriter()`, `JLD2FileWriter()`)  fields written to `path`; use this for long runs
+* `IOObserver(obs, times, CSVFileWriter(), path)`  min, max and mean per field and time only
+* `LiveObserver(obs, times)`  kept in memory, for short interactive runs
+* `NoObserver()` (default)  nothing recorded
+
+Older drivers pass `obs` positionally before `mi` with `which_observer`, `which_file_writer`, `tracked_times`
+and `path`; that form still runs, with a deprecation warning.
 
 Checkpoints: `run!(sim; checkpoint_every, checkpoint_path)`, then `restart_path` resumes a killed run
 and `extend_path` continues a finished one into a new file.
 =#
 path = joinpath(mktempdir(), "tutorial.nc")
-sim = Simulation(grid, state, nsteps, floattype(dt), p,
-                 ["N", "b", "Re", "po"], mi, sl; ps = ps,
-                 which_observer = "IO", which_file_writer = "NetCDF",
-                 tracked_times = 0:nsteps, path = path)
+sim = Simulation(grid, state, nsteps, floattype(dt), p, mi, sl; ps = ps,
+                 observer = IOObserver(["N", "b", "Re", "po"], 0:nsteps, NetCDFFileWriter(), path))
 
 #=
 ## 11. Run and check
