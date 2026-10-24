@@ -83,7 +83,7 @@
 
     @testset "OPTION_RULES: one table of the refused and warned combinations" begin
         @test all(r -> r[2] in (:error, :warn, :warn_once), Shakti.OPTION_RULES)
-        o(; kw...) = (; cf = UnfilledCavities(), up = IceUplift(), free_surface = true, kfs = ImplicitUpwind(), k_face_default = true,
+        o(; kw...) = (; cf = UnfilledCavities(), up = IceUplift(), gcp = ConsistentGapCoupling(), free_surface = true, kfs = ImplicitUpwind(), k_face_default = true,
                        ps = lu_ps(), ds = NoDiffusion(), cnc = NoCellNClamping(), p, gs = FullyImplicitGapScheme(), kw...)
         @test Shakti.check_options(o()) === nothing                                         # the default sheet passes every row
         @test_throws r"does not conserve water" Shakti.check_options(o(kfs = Arithmetic(), k_face_default = false))
@@ -93,5 +93,30 @@
         @test_logs (:warn, r"lags the water depth") Shakti.check_options(o(kfs = Upwind(), k_face_default = false))
         @test_logs Shakti.check_options(o(cf = FilledCavities(), up = NoUplift(), free_surface = false, kfs = Arithmetic(), ps = chol_ps(),
                                           p = ModelParameters(e_v = 0.0, N_min = 1e3)))   # the filled sheet takes averaged faces and N clamps
+    end
+
+    @testset "C1: a finite gap runaway stops the run; implicit_upwind on the dry floor with ExplicitGapScheme warns" begin
+        # The rule warns once per session, so its predicate and message are checked rather than the log.
+        dry = (; cf = FilledCavities(), up = NoUplift(), gcp = ConsistentGapCoupling(), free_surface = false, kfs = ImplicitUpwind(),
+                 k_face_default = false, ps = lu_ps(), ds = NoDiffusion(), cnc = NoCellNClamping(), p, gs = ExplicitGapScheme())
+        fires(o) = [r[3](o) for r in Shakti.OPTION_RULES if r[2] === :warn_once && r[1](o)]
+        @test any(m -> occursin("can run away", m), fires(dry))
+        @test !any(m -> occursin("can run away", m), fires(merge(dry, (; gs = FullyImplicitGapScheme()))))
+        @test !any(m -> occursin("can run away", m), fires(merge(dry, (; gcp = ExplicitGapCoupling()))))
+
+        # The stuck-cells fixture: nearly rigid ice, a 1 um gap and a point source. The explicit gap update reaches
+        # b = 2 km (H = 500 m) in step 3; before the check it ran on to 3e11 m in step 4.
+        stuck = State(grid)
+        ieb = zeros(nx, ny); ieb[3, 3] = 3 / (grid.dx * grid.dy)
+        set_initial_conditions!(stuck, grid, p, sl, mask, fill(1e-30, nx, ny), zb, zb .+ 500.0, fill(1e-6, nx, ny), fill(0.06, nx, ny),
+                                fill(3e-7, nx + 1, ny), zeros(nx, ny + 1), ieb, zeros(nx + 1, ny), zeros(nx, ny + 1))
+        sim = Simulation(grid, stuck, 4, dt, p, ConstantMeltInput(), sl; gap_scheme = ExplicitGapScheme(), cavity_filling = FilledCavities(),
+                         uplift = NoUplift(), k_face_choice = "implicit_upwind", hydraulic_potential = BedPotential(),
+                         ps = PicardSolver(500, floattype(1e-12), LUDirectSolver(grid), grid))
+        @test_throws r"gap runaway" Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
+            for _ in 1:4
+                step!(sim)
+            end
+        end
     end
 end

@@ -278,23 +278,31 @@ end
 # The filled sheet's part of run!'s verbose line: its suction cells.
 filled_report(sim::Simulation) = sim.cf isa FilledCavities ? " p_w < 0 in $(suction_cells(sim.state)) GROUNDED cells." : ""
 
+# How far the gap may exceed the ice thickness before check_gap_height calls it a runaway, in m.
+const GAP_RUNAWAY_EXCESS = 1000.0
+
 @noinline _gap_not_finite(gcp) = error("step!: the gap height b is not finite in a GROUNDED cell. The usual cause is a gap runaway at N < 0: use " * gap_runaway_hint(gcp) * ".")
+@noinline _gap_runaway(gcp) = error("step!: the gap height b exceeds the ice thickness by more than $(GAP_RUNAWAY_EXCESS) m in a GROUNDED cell, " *
+                                    "a gap runaway (every later step would carry it). The usual cause is N < 0: use " * gap_runaway_hint(gcp) * ".")
 @noinline _warn_gap_thicker_than_ice(gcp) =
     @warn "step!: the gap height b exceeds the ice thickness in a GROUNDED cell, likely a gap runaway at N < 0; consider " * gap_runaway_hint(gcp) maxlog = 1
 
 """
 $(TYPEDSIGNATURES)
 
-Checks the gap after [`step_b!`](@ref): errors if `b` is not finite in a `GROUNDED` cell, and warns (once per session) if
-it exceeds the ice thickness `H` there. Both point to a gap runaway at `N < 0` and its remedies. One lazy reduction over
-the grid, no allocation.
+Checks the gap after [`step_b!`](@ref): errors if `b` is not finite in a `GROUNDED` cell or exceeds the ice thickness
+`H` there by more than `GAP_RUNAWAY_EXCESS` (1 km), and warns (once per session) if it exceeds `H` by less. All point to a
+gap runaway at `N < 0` and its remedies; the 1 km margin leaves thin margins, where a gap of metres can exceed `H`, to
+the warning. One lazy reduction over the grid, no allocation.
 """
 function check_gap_height(sim::Simulation)
     s = sim.state
     grounded = GROUNDED
-    bad = Broadcast.instantiate(Broadcast.broadcasted((m, b, H) -> m == grounded ? (isfinite(b) ? (b > H ? 1 : 0) : 2) : 0, s.mask, s.b, s.H))
+    excess = convert(eltype(s.b), GAP_RUNAWAY_EXCESS)
+    bad = Broadcast.instantiate(Broadcast.broadcasted((m, b, H) -> m == grounded ? (isfinite(b) ? (b > H + excess ? 2 : b > H ? 1 : 0) : 3) : 0, s.mask, s.b, s.H))
     worst = mapreduce(identity, max, bad; init = 0)
-    worst == 2 && _gap_not_finite(sim.gcp)
+    worst == 3 && _gap_not_finite(sim.gcp)
+    worst == 2 && _gap_runaway(sim.gcp)
     worst == 1 && _warn_gap_thicker_than_ice(sim.gcp)
     return nothing
 end

@@ -220,7 +220,7 @@ sheet_name(o) = "$(nameof(typeof(o.cf)))/$(nameof(typeof(o.up)))"
 """
 The combinations of [`Simulation`](@ref)'s options that are refused (`:error`) or warned about (`:warn`; `:warn_once`
 warns once per session), one row `(applies, level, message)` each. `applies` and `message` take the resolved options
-`o`: `cf`, `up`, `free_surface` (`cf isa UnfilledCavities || up isa IceUplift`), `kfs`, `k_face_default` (no
+`o`: `cf`, `up`, `gcp`, `free_surface` (`cf isa UnfilledCavities || up isa IceUplift`), `kfs`, `k_face_default` (no
 `k_face_choice` passed), `ps`, `ds` (the diffusion scheme), `cnc` (the cell N clamping), `p` and `gs`.
 `check_options` walks it once every default is resolved.
 """
@@ -260,6 +260,13 @@ const OPTION_RULES = (
      o -> "N_min > 0, N_max < Inf or a CellNClamping bound tighter than [0, Inf) with $(sheet_name(o)) contradicts the unfilled " *
           "(N = po) and uplifted (N = 0) head rows. These sheets bound N by po - pw already; for a floor on N use IceUplift " *
           "(water above the overburden lifts the ice), or use the filled sheet (FilledCavities(), NoUplift())."),
+    # implicit_upwind faces on the filled dry floor with the explicit gap update: the donors' water depths follow the
+    # gap, which the explicit update lets overshoot. On the stuck-cells fixture b reaches 2 km in step 3 and 3e11 m in
+    # step 4 (check_gap_height stops it); FullyImplicitGapScheme keeps it at 0.2 m.
+    (o -> o.kfs isa ImplicitUpwind && o.gs isa ExplicitGapScheme && o.cf isa FilledCavities && o.up isa NoUplift &&
+          o.gcp isa ConsistentGapCoupling && o.ds isa NoDiffusion, :warn_once,
+     o -> "k_face_choice = \"implicit_upwind\" on the filled sheet's dry floor with ExplicitGapScheme can run away: the explicit " *
+          "gap update overshoots the water depths the faces conduct by. Use FullyImplicitGapScheme (the default)."),
     (o -> o.gs isa ImplicitGapScheme, :warn_once,
      o -> "ImplicitGapScheme is deprecated and will be removed in 0.3: FullyImplicitGapScheme (the default) costs the same and is " *
           "stable at any dt (ImplicitGapScheme's lagged opening is not)"),
@@ -439,7 +446,7 @@ function Simulation(grid, state, tsteps, dt, p, mi::AbstractMeltInput, sl::Abstr
     k_face_default = k_face_choice === nothing
     kfs = k_face_scheme(k_face_default ? (free_surface ? ImplicitUpwind() : Arithmetic()) : k_face_choice)
 
-    check_options((; cf = cavity_filling, up = uplift, free_surface, kfs, k_face_default, ps, ds = diffusion_scheme, cnc = cell_N_clamping, p, gs))
+    check_options((; cf = cavity_filling, up = uplift, gcp = gap_coupling, free_surface, kfs, k_face_default, ps, ds = diffusion_scheme, cnc = cell_N_clamping, p, gs))
 
     head_extrapolation_order >= 0 || error("head_extrapolation_order must be >= 0 (got $head_extrapolation_order)")
     he = head_extrapolation_order == 0 ? NoHeadExtrapolation() : HeadExtrapolation(grid; order = head_extrapolation_order)
