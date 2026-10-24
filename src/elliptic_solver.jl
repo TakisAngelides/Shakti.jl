@@ -357,7 +357,8 @@ end
 # Stall damping of the Picard loops: when the largest head update has not fallen below its smallest value so far for
 # STALL_ITERS checks, the iteration is cycling (at a kink of the head rows that the per-cell limits of
 # limit_head_step! do not catch, e.g. a block of filled cells whose heads move together), and the step factor halves,
-# down to MIN_STALL_FACTOR. A converging iteration never triggers it.
+# down to MIN_STALL_FACTOR. A converging iteration never triggers it; after a donor polishing round (a new set of head
+# rows, whose first updates are larger than the converged ones before it) the count starts afresh, keeping the factor.
 const STALL_ITERS = 20
 const MIN_STALL_FACTOR = 1 / 8
 function stall_damping(ω, best, since, dh)
@@ -444,6 +445,7 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
                 if npol < MAX_DONOR_POLISH_ROUNDS && polish_donors!(kfs, s) > 0 # faces left frozen downstream: refrozen, iterate on
                     npol += 1
                     limit = max(limit, iter + ps.check_every) # the head converged: the polish gets its iterations even past ps.iters
+                    best, since = Inf, 0 # the polished rows' updates are measured against their own smallest, not the converged one
                     refresh_head_dependents!(s, grid, p, mt, kfs, sl; cnc, ds, gc)
                     continue
                 end
