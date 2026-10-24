@@ -522,3 +522,52 @@ end
         end
     end
 end
+
+@testset "Default sheet, global water balance: water leaves the grounded region through LAND and OCEAN faces only" begin
+    # The per-cell budgets above cannot see water a grounded cell sends into a cell outside the budget; here the grounded
+    # region's volume change is its input less what crosses its LAND/OCEAN faces, and the OTHER_BASIN, FROZEN_BED and
+    # domain-edge faces carry nothing.
+    nx, ny = 10, 7
+    grid = Grid(nx, ny, 1e3, 1e3)
+    x = Array(grid.x)
+    sl = RegularizedCoulombSlidingLaw(0.25)
+    mask = fill(GROUNDED, nx, ny); mask[1, :] .= LAND; mask[end, :] .= OCEAN; mask[:, 1] .= OTHER_BASIN; mask[5, 4] = FROZEN_BED; mask[6, ny] = FROZEN_BED
+    zb = [0.03 * xi for xi in x, _ in 1:ny]
+    H = [60 + 300 * sqrt(xi / x[end]) for xi in x, _ in 1:ny]
+    ieb = fill(1e-8, nx, ny); ieb[7, 4] = 1e-6 # a 1 m^3/s moulin next to the frozen cell
+    for (name, p) in (("e_v = 0", ModelParameters()), ("e_v = 1e-3", ModelParameters(e_v = 1e-3)))
+        @testset "$name" begin
+            state = State(grid)
+            set_initial_conditions!(state, grid, p, sl, mask, fill(2.4e-24, nx, ny), zb, zb .+ H, fill(1e-3, nx, ny), fill(0.06, nx, ny),
+                                    fill(1e-6, nx + 1, ny), zeros(nx, ny + 1), ieb, zeros(nx + 1, ny), zeros(nx, ny + 1))
+            sim = Simulation(grid, state, 3, floattype(86400.0), p, String[], ConstantMeltInput(), sl; ps = PicardSolver(500, floattype(1e-10), LUDirectSolver(grid), grid))
+            g = mask .== GROUNDED
+            area = grid.dx * grid.dy
+            for _ in 1:3
+                s = sim.state
+                W_old, h_old = Array(s.W), Array(s.h)
+                step!(sim)
+                @test first(Shakti.picard_status(sim.hs))
+                qx, qy = Array(s.q_x), Array(s.q_y)
+                out = Dict(LAND => 0.0, OCEAN => 0.0, OTHER_BASIN => 0.0, FROZEN_BED => 0.0, :edge => 0.0) # m^3/s leaving the grounded region
+                for i in 1:nx, j in 1:ny
+                    g[i, j] || continue
+                    for (nb, q) in (((i - 1, j), -qx[i, j] * grid.dy), ((i + 1, j), qx[i+1, j] * grid.dy), ((i, j - 1), -qy[i, j] * grid.dx), ((i, j + 1), qy[i, j+1] * grid.dx))
+                        inside = 1 <= nb[1] <= nx && 1 <= nb[2] <= ny
+                        inside && g[nb...] && continue
+                        out[inside ? mask[nb...] : :edge] += q
+                    end
+                end
+                @test out[OTHER_BASIN] == 0 && out[FROZEN_BED] == 0 && out[:edge] == 0
+                @test out[LAND] + out[OCEAN] > 0
+                # the change of the englacial water (e_v > 0), as WaterBudget counts it
+                dE = sum(Shakti.englacial_water(p.e_v, Array(s.h)[i], Array(s.zb)[i], Array(s.po)[i], Array(s.stor)[i], Array(s.stor_up)[i], p.rho_w, p.g) -
+                         Shakti.englacial_water(p.e_v, h_old[i], Array(s.zb)[i], Array(s.po)[i], Array(s.stor)[i], Array(s.stor_up)[i], p.rho_w, p.g) for i in findall(g))
+                wc = water_created(sim)
+                dV = (sum(Array(s.W)[g] .- W_old[g]) + dE) * area
+                @test dV ≈ wc.input - sim.dt[] * (out[LAND] + out[OCEAN]) + wc.created atol = 1e-12 * wc.input
+                @test abs(wc.created) <= 1e-12 * wc.input
+            end
+        end
+    end
+end
