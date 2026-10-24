@@ -41,7 +41,7 @@ gap_coupling = ExplicitGapCoupling()` to `Simulation`.
 | ISSM reproduction | 0.09 to 4.5 | 1.00 MPa | 4.5 mm | 320 | 0.994 |
 | defaults | 0.10 to 1 | 0.63 MPa | 1.2 mm | 8 | 0.78 |
 
-Grid 102 x 200 with 2 695 grounded cells. Wall times are on the [Performance](@ref) page.
+The defaults use the default `b_min = 1e-6`. Grid 102 x 200 with 2 695 grounded cells. Wall times are on the [Performance](@ref) page.
 
 ![Drang Drung, day 365](../figures/DrangDrung.png)
 
@@ -63,3 +63,11 @@ Columns: ISSM, the ISSM reproduction (SHAKTI equations) and the defaults.
     0.65 MPa, a laminar sheet and a correlation of 0.80 with ISSM. `b_min` makes no difference
     here: `1e-3` and `1e-6` give the same run, because the conductance is built from the water and
     not from the clamped gap. To reproduce ISSM itself, use `ExplicitGapCoupling`.
+
+!!! note "`b_min` on the default sheet"
+    On the default (unfilled) sheet `b_min` is a minimum cavity size, not a numerical floor. With ISSM's
+    `b_min = 1e-3` the melt cannot fill a 1 mm gap: after two years every grounded cell is at `b_min`, 74 % are at
+    `p_w = 0` and 88 % have `N > 0.9 p_o`, mean `N` is 2.38 MPa and the correlation with ISSM is -0.70. A run
+    restarted at `b_min = 1e-3` from the wet end state of the `1e-6` run drains to the same state, so `b_min` alone
+    picks the branch. At `1e-6` the two-year run gives mean `N` 0.63 MPa and a correlation of 0.78, with the water
+    budget closed to `1e-16` of the input.
