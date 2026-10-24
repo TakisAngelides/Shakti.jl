@@ -305,23 +305,66 @@ not symmetric, which the head rows assemble under [`ImplicitUpwind`](@ref) (the 
 fluxes' dependence on their donor's water depth couple each face to one side only). Refactorizes in place
 each solve, reusing the symbolic analysis since the sparsity pattern never changes. CPU-only, like
 [`CholeskyDirectSolver`](@ref); about twice its cost per solve on the same matrix.
+
+With `lagged = true` it does not refactorize every solve: it solves with GMRES (Krylov.jl), preconditioned by
+the last factorization it made, and refactorizes only when GMRES has not reached `rtol` within `itmax`
+iterations. Between Picard iterations, and between quiet time steps, the matrix changes little, so the old
+factors are a near-exact preconditioner and GMRES converges in a few iterations, each a triangular solve
+and a matrix-vector product, at well under the cost of the numeric factorization. At a regime change
+GMRES stalls, the solver refactorizes, and that solve costs `itmax` wasted iterations more than a direct one.
+The result agrees with the direct solve to about `rtol` relative to the right-hand side, not bit for bit.
 """
-struct LUDirectSolver{FACT, SALS <: SparseAssembledLinearSystem, V <: AbstractVector} <: AbstractDirectSolver
+struct LUDirectSolver{FACT, SALS <: SparseAssembledLinearSystem, V <: AbstractVector, WS, F} <: AbstractDirectSolver
     sals::SALS # sparse matrix (both triangles stored), rhs and index maps, as for CholeskyDirectSolver
-    fact::FACT # UMFPACK factorization, refactorized in place each solve
+    fact::FACT # UMFPACK factorization, refactorized in place each solve (lagged: only when GMRES stalls)
     h_vec::V   # solve-result buffer, reshaped into s.h
+    ws::WS     # GMRES workspace under lagged = true; nothing otherwise
+    rtol::F    # GMRES relative tolerance (lagged only)
+    itmax::Int # GMRES iterations before refactorizing (lagged only)
+    factored::Base.RefValue{Bool} # whether fact holds a factorization of an assembled matrix yet (lagged only)
+    refactorizations::Base.RefValue{Int} # numeric factorizations made (lagged only: how often GMRES stalled, plus the first)
 end
 
 """
 $(TYPEDSIGNATURES)
 
-Builds an [`LUDirectSolver`](@ref) on grid `g`. CPU (`"Threads"` backend) only.
+Builds an [`LUDirectSolver`](@ref) on grid `g`. CPU (`"Threads"` backend) only. `lagged = true` solves by GMRES
+preconditioned by the last factorization, refactorizing only when GMRES has not reached the relative
+tolerance `rtol` within `itmax` iterations.
 """
-function LUDirectSolver(g::Grid{F}) where F
+function LUDirectSolver(g::Grid{F}; lagged::Bool = false, rtol = 1e-10, itmax::Int = 20) where F
     backend != "Threads" && error("LUDirectSolver is CPU-only (SparseArrays/UMFPACK has no GPU path); use CUDSSDirectSolver(grid) for a GPU LU.")
+    itmax >= 1 || error("LUDirectSolver: itmax must be at least 1")
     sals = SparseAssembledLinearSystem(g)
     fact = lu(sals.M) # symbolic analysis on the fixed 5-point pattern (the placeholder identity diagonal keeps it nonsingular)
-    return LUDirectSolver(sals, fact, zeros(F, g.nx * g.ny))
+    # as a preconditioner the old factors solve for an old matrix: UMFPACK's iterative refinement (against that
+    # old matrix) would only cost time, the GMRES iterations do the refining
+    lagged && (fact.control[SparseArrays.UMFPACK.JL_UMFPACK_IRSTEP] = 0)
+    ws = lagged ? GmresWorkspace(sals.M, sals.rhs; memory = itmax) : nothing
+    return LUDirectSolver(sals, fact, zeros(F, g.nx * g.ny), ws, F(rtol), itmax, Ref(false), Ref(0))
+end
+
+# Factorizes the assembled matrix and solves into ls.h_vec, or, lagged, solves by GMRES from x0 preconditioned
+# by the last factorization, refactorizing when GMRES stalls (and solving directly) or needed more than half of itmax
+# (for the next solve).
+function lu_solve!(ls::LUDirectSolver, x0)
+    if ls.ws !== nothing && ls.factored[]
+        gmres!(ls.ws, ls.sals.M, ls.sals.rhs, x0; M = ls.fact, ldiv = true, rtol = ls.rtol, atol = zero(ls.rtol), itmax = ls.itmax)
+        if ls.ws.stats.solved
+            ls.h_vec .= ls.ws.x
+            # factors this stale cost more in GMRES iterations than refactorizing saves: refresh them for the next solve
+            2 * ls.ws.stats.niter > ls.itmax && refactorize!(ls)
+            return ls.h_vec
+        end
+    end
+    refactorize!(ls)
+    ls.h_vec .= ls.fact \ ls.sals.rhs
+end
+
+function refactorize!(ls::LUDirectSolver)
+    lu!(ls.fact, ls.sals.M)
+    ls.factored[] = true
+    ls.refactorizations[] += 1
 end
 
 """
@@ -1382,8 +1425,7 @@ both the (non-symmetric, [`ImplicitUpwind`](@ref)) head solve and the gap solve.
 """
 function solve_b_diffusion!(ls::LUDirectSolver, s::State, g::Grid, p::ModelParameters, dt, out = s.b)
     update_SALS_b_diffusion!(ls.sals, s, g, p, dt)
-    lu!(ls.fact, ls.sals.M)
-    ls.h_vec .= ls.fact \ ls.sals.rhs
+    lu_solve!(ls, vec(s.b))
     out .= clamp.(reshape(ls.h_vec, g.nx, g.ny), p.b_min, p.b_max)
 end
 
@@ -1391,12 +1433,11 @@ end
 $(TYPEDSIGNATURES)
 
 Solves the linearized elliptic equation for `h` with an [`LUDirectSolver`](@ref): rebuilds the system
-(`update_SALS_elliptic!`), refactorizes in place and solves.
+(`update_SALS_elliptic!`), refactorizes in place and solves (lagged: by GMRES on the last factors, see the type).
 """
 function solve_elliptic_linear_system!(ls::LUDirectSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), dt = 0, h_old = s.h)
     update_SALS_elliptic!(ls.sals, s, g, p, kfs, ds, gc, dt, h_old)
-    lu!(ls.fact, ls.sals.M)
-    ls.h_vec .= ls.fact \ ls.sals.rhs
+    lu_solve!(ls, vec(s.h))
     s.h .= reshape(ls.h_vec, g.nx, g.ny)
 end
 

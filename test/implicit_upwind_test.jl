@@ -419,4 +419,41 @@
             end
         end
 
+        @testset "LUDirectSolver(lagged = true): GMRES on the last factors, the direct solve's heads" begin
+            # A sheet fed by a few moulins, from cold. The lagged solver refactorizes a handful of times in a hundred
+            # solves, takes the direct solver's Picard iterations and lands on its head and water to the GMRES
+            # tolerance. itmax = 1 makes every GMRES stall: the fallback factorizes and solves directly, so that
+            # run is the direct one bit for bit.
+            nx, ny = 80, 20
+            grid = Grid(nx, ny, 20000.0, 5000.0)
+            mask = fill(GROUNDED, nx, ny); mask[1, :] .= LAND; mask[end, :] .= OTHER_BASIN; mask[:, [1, end]] .= OTHER_BASIN
+            zs = [6 * (sqrt(x + 5000.0) - sqrt(5000.0)) + 1 for x in grid.x, y in grid.y]
+            ieb = fill(1.0 / (365 * 86400.0), nx, ny)
+            for (i, j) in ((15, 5), (30, 15), (45, 8), (60, 12))
+                ieb[i, j] += 2.0 / (grid.dx * grid.dy)
+            end
+            p, sl_c = ModelParameters(), RegularizedCoulombSlidingLaw(0.25)
+            function lu_sim(ls)
+                state = State(grid)
+                set_initial_conditions!(state, grid, p, sl_c, mask, fill(5e-25, nx, ny), zeros(nx, ny), zs, fill(0.01, nx, ny), fill(0.05, nx, ny),
+                                        fill(1e-6, nx + 1, ny), zeros(nx, ny + 1), ieb, zeros(nx + 1, ny), zeros(nx, ny + 1))
+                Simulation(grid, state, 1, floattype(3600.0), p, "fully_implicit", String[], ConstantMeltInput(), sl_c;
+                           ps = PicardSolver(200, floattype(1e-6), ls, grid))
+            end
+            direct, lagged, stalled = lu_sim(LUDirectSolver(grid)), lu_sim(LUDirectSolver(grid; lagged = true)), lu_sim(LUDirectSolver(grid; lagged = true, itmax = 1))
+            @test lagged.kfs isa ImplicitUpwind
+            solves = 0
+            for _ in 1:10
+                foreach(step!, (direct, lagged, stalled))
+                solves += direct.hs.ps.last_iter
+                @test lagged.hs.ps.last_iter == direct.hs.ps.last_iter && first(Shakti.picard_status(lagged.hs))
+                @test maximum(abs, Array(lagged.state.h) .- Array(direct.state.h)) < 1e-12 * maximum(abs, Array(direct.state.h))
+                @test maximum(abs, Array(lagged.state.W) .- Array(direct.state.W)) < 1e-10 * maximum(abs, Array(direct.state.W))
+                @test Array(stalled.state.h) == Array(direct.state.h) && Array(stalled.state.W) == Array(direct.state.W)
+            end
+            @test direct.hs.ps.ls.refactorizations[] == solves # one per Picard iteration
+            @test lagged.hs.ps.ls.refactorizations[] < solves ÷ 10
+            @test stalled.hs.ps.ls.refactorizations[] == solves
+        end
+
     end
