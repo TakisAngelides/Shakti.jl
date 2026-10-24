@@ -364,8 +364,10 @@ $(TYPEDSIGNATURES)
 The water budget of a [`Simulation`](@ref)'s steps (`sim.wb`), for every sheet: per step, the water the step created
 on `GROUNDED` cells beyond what its sources and fluxes deliver, `created = sum(W_new + dE - (W_old + dt*(mdot/rho_w +
 ieb - div(q)))) * dx*dy` [m^3] (`dE` the change of the englacial water, `p.e_v > 0`), and that step's grounded input
-`dt*sum(mdot/rho_w + ieb) * dx*dy` [m^3]; `total_created`/`total_input` since the `Simulation` was built (not
-checkpointed). Read them with [`water_created`](@ref).
+`dt*sum(mdot/rho_w + ieb) * dx*dy` [m^3]. Over all steps since the `Simulation` was built (kept in checkpoints):
+`total_created` (net), `gross_created` and `gross_lost` (summed over cells and steps by sign, so water created in one
+cell or step and lost in another does not cancel; `gross_lost <= 0`), `total_input`, and `unconverged`, the number of
+steps taken with an unconverged head solve. Read them with [`water_created`](@ref).
 
 Under [`UnfilledCavities`](@ref) (the default sheet) `created` is the water the floor `W >= 0` of
 [`update_water_budget!`](@ref) creates, about the Picard tolerance times the input once the steps converge. Under
@@ -380,8 +382,14 @@ struct WaterBudget{F <: AbstractFloat, A <: AbstractArray{F}}
     input::Base.RefValue{F}
     total_created::Base.RefValue{F}
     total_input::Base.RefValue{F}
+    gross_created::Base.RefValue{F}
+    gross_lost::Base.RefValue{F}
+    unconverged::Base.RefValue{Int}
 end
-WaterBudget(s::State) = (z = zero(eltype(s.W)); WaterBudget(similar(s.W), similar(s.W), Ref(z), Ref(z), Ref(z), Ref(z)))
+WaterBudget(s::State) = (z = zero(eltype(s.W)); WaterBudget(similar(s.W), similar(s.W), Ref(z), Ref(z), Ref(z), Ref(z), Ref(z), Ref(z), Ref(0)))
+
+# The budget's running totals, by name: what a checkpoint keeps.
+const WATER_BUDGET_TOTALS = (:total_created, :total_input, :gross_created, :gross_lost, :unconverged)
 
 # Before the gap update: expected <- the budget's water, src <- the grounded input (both per cell, zero off GROUNDED).
 @parallel_indices (ix, iy) function expected_water_kernel!(Wx, src, mask, W, q_x, q_y, mdot, ieb, dx, dy, dt, rho_w, h, h_old, zb, po, stor, stor_up, e_v, ggrav)
@@ -412,9 +420,11 @@ end
 $(TYPEDSIGNATURES)
 
 The water budget of `sim`'s last step and of all its steps (see [`WaterBudget`](@ref)), in m^3: `(created, input,
-total_created, total_input)`. `created/input` is the fraction of the step's grounded input the step created.
+total_created, total_input, gross_created, gross_lost, unconverged)`, the last a count of steps. `created/input` is the
+fraction of the step's grounded input the step created.
 """
-water_created(wb::WaterBudget) = (created = wb.created[], input = wb.input[], total_created = wb.total_created[], total_input = wb.total_input[])
+water_created(wb::WaterBudget) = (created = wb.created[], input = wb.input[], total_created = wb.total_created[], total_input = wb.total_input[],
+                                  gross_created = wb.gross_created[], gross_lost = wb.gross_lost[], unconverged = wb.unconverged[])
 
 # The water a GROUNDED cell's head row stored under the sheets whose water is not budgeted (water_is_budgeted, run.jl):
 # the new gap less the empty depth below the bed (UnfilledCavities, budgeted in a Simulation), plus the uplift layer above

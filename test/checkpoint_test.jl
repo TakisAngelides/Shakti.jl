@@ -69,6 +69,13 @@
                 # the head-extrapolation history is restored too, so the resumed steps start from the same guesses
                 # and repeat the full run exactly (it differed within the Picard tolerance)
                 @test Array(sim_resumed.state.h) == Array(sim_full.state.h)
+                # the water budget's totals continue from the checkpoint instead of counting from zero (review C2)
+                wf, wr = water_created(sim_full), water_created(sim_resumed)
+                for k in (:total_created, :total_input, :gross_created, :gross_lost)
+                    @test getproperty(wr, k) ≈ getproperty(wf, k) rtol = 1e-6 atol = 1e-12 * wf.total_input
+                end
+                @test wr.unconverged == wf.unconverged
+                @test wf.gross_created >= max(wf.total_created, 0) && wf.gross_lost <= min(wf.total_created, 0)
 
                 h_full    = NetCDF.ncread(full_path, "h")
                 h_resumed = NetCDF.ncread(crash_path, "h")

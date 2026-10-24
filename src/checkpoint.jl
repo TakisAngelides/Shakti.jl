@@ -23,7 +23,8 @@ the observer's `tracked_obs` subset, which is often a small slice picked for out
 resumed run would restart from the constructor's initial `dt` guess rather than whatever
 `AdaptiveTimeStep` had actually converged to before the checkpoint) with the state of its controller, and the head-extrapolation
 history ([`HeadExtrapolation`](@ref); without it a resumed run starts its next head solves from
-another guess, and so ends them at another point within the tolerance).
+another guess, and so ends them at another point within the tolerance), and the running totals of the
+[`WaterBudget`](@ref) (`sim.wb`).
 
 # Notes
 
@@ -44,6 +45,9 @@ function save_checkpoint(path::String, sim::Simulation, t::Int)
         file["options"] = option_signature(sim)
         save_head_history(file, sim.he)
         save_timestep_control(file, sim.ts)
+        for name in WATER_BUDGET_TOTALS
+            file["wb_" * String(name)] = getfield(sim.wb, name)[]
+        end
         for name in fieldnames(typeof(state)) # for every field name in the State struct save it to file
             file[String(name)] = Array(getfield(state, name))
         end
@@ -75,7 +79,7 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Restores `sim.state`, `sim.total_time[]`, `sim.dt[]` and the head-extrapolation history in place from a checkpoint
+Restores `sim.state`, `sim.total_time[]`, `sim.dt[]`, the head-extrapolation history and the water budget's totals in place from a checkpoint
 written by [`save_checkpoint`](@ref), and returns the timestep it was saved at, so [`run!`](@ref) knows
 where to resume the loop. A checkpoint written before `dt` was added to it (no `"dt"` key) leaves
 `sim.dt[]` untouched, at whatever the `Simulation` constructor set it to; one without the history clears it
@@ -106,6 +110,10 @@ function load_checkpoint!(sim::Simulation, path::String)
         haskey(file, "mdot0") || copyto!(state.mdot0, state.mdot) # older checkpoints: the start-of-step melt of ImplicitUpwind is the saved melt
         load_head_history!(sim.he, file)
         load_timestep_control!(sim.ts, file)
+        for name in WATER_BUDGET_TOTALS # an older checkpoint without them leaves the totals counting from the restart
+            key = "wb_" * String(name)
+            haskey(file, key) && (getfield(sim.wb, name)[] = file[key])
+        end
         if haskey(file, "options") && file["options"] != option_signature(sim)
             @warn "Checkpoint $path was written under other options; the next step zeroes the fields the current ones do not own (stor, stor_up) and brings the water W within the current sheet" saved = file["options"] current = option_signature(sim)
         end

@@ -201,6 +201,8 @@ function account_water!(sim::Simulation)
     wb.input[] = sum(wb.src) * area
     wb.total_created[] += wb.created[]
     wb.total_input[] += wb.input[]
+    wb.gross_created[] += sum(x -> max(x, zero(x)), wb.expected) * area
+    wb.gross_lost[] += sum(x -> min(x, zero(x)), wb.expected) * area
     return sim
 end
 water_created(sim::Simulation) = water_created(sim.wb)
@@ -237,10 +239,16 @@ no_storage_hint(sim::Simulation) = sim.cf isa FilledCavities && sim.up isa NoUpl
 """
 $(TYPEDSIGNATURES)
 
-Warns (once per session) when the step's head solve ended unconverged, with the water the step created or lost
-([`WaterBudget`](@ref)) and the usual remedy.
+Counts the step in `sim.wb.unconverged` ([`WaterBudget`](@ref)) when its head solve ended unconverged, and warns (once
+per session) with the water the step created or lost and the usual remedy.
 """
-check_convergence(sim::Simulation) = ((converged, iters) = picard_status(sim.hs); converged || _warn_unconverged(sim, iters); nothing)
+function check_convergence(sim::Simulation)
+    converged, iters = picard_status(sim.hs)
+    converged && return nothing
+    sim.wb.unconverged[] += 1
+    _warn_unconverged(sim, iters)
+    return nothing
+end
 
 # ARCH-3: a gap that is always full of water has three ways to meet a creep closure its inflow cannot supply: create
 # water (ExplicitGapCoupling, SHAKTI's original), hold the water at p_w < 0 (suction, ConsistentGapCoupling), or let the
@@ -512,7 +520,8 @@ reset_timestep!(::FixedTimeStep) = nothing
 reset_timestep!(ts::AdaptiveTimeStep) = (ts.dt_ctrl[] = NaN; ts.fast_count[] = 0; ts.rejected[] = 0; nothing)
 
 # The water budget part of run!'s verbose line (WaterBudget): the water the step created, against its grounded input.
-water_report(wb::WaterBudget) = " water created: $(round(wb.created[], sigdigits = 3)) m^3 ($(round(wb.created[] / wb.input[], sigdigits = 3)) of the input)."
+water_report(wb::WaterBudget) = " water created: $(round(wb.created[], sigdigits = 3)) m^3 ($(round(wb.created[] / wb.input[], sigdigits = 3)) of the input)." *
+                                (wb.unconverged[] > 0 ? " Unconverged steps so far: $(wb.unconverged[])." : "")
 
 # The timestep part of run!'s verbose line.
 timestep_report(::FixedTimeStep, sim) = ""

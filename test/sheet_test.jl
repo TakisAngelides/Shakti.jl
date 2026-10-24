@@ -118,5 +118,9 @@
                 step!(sim)
             end
         end
+        # The fixture's first steps end unconverged (the filled sheet without storage takes up the moulin only by creep
+        # opening at N < 0): each one is counted in the water budget (review C2).
+        @test sim.wb.unconverged[] >= 1
+        @test water_created(sim).unconverged == sim.wb.unconverged[]
     end
 end
