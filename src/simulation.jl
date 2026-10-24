@@ -174,6 +174,50 @@ target_time(ts::AdaptiveTimeStep) = ts.target_time
 """
 $(TYPEDSIGNATURES)
 
+A sheet: the four choices that together make one physical model of the water at the bed, passed to
+[`Simulation`](@ref) as `sheet`. Build one with [`GlaDS2Sheet`](@ref) (the default) or [`ShaktiSheet`](@ref); a
+`Simulation` keyword (`cavity_filling`, `uplift`, `hydraulic_potential`, `gap_coupling`) overrides its field.
+The face conductance is not part of the sheet: it follows from the cavity filling and uplift (`k_face_choice`).
+"""
+struct Sheet{CF <: AbstractCavityFilling, UP <: AbstractIceUplift, HP <: AbstractHydraulicPotential, GCP <: AbstractGapCoupling}
+    cf::CF
+    up::UP
+    hp::HP
+    gcp::GCP
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+The sheet of GlaDS-2 (Wells et al. 2026), the default: [`UnfilledCavities`](@ref), [`IceUplift`](@ref),
+[`SheetTopPotential`](@ref) and [`ConsistentGapCoupling`](@ref), with `"implicit_upwind"` faces. The pressure stays
+in `0 <= p_w <= p_o`.
+"""
+GlaDS2Sheet() = Sheet(UnfilledCavities(), IceUplift(), SheetTopPotential(), ConsistentGapCoupling())
+
+"""
+$(TYPEDSIGNATURES)
+
+SHAKTI's sheet (Sommers et al. 2018): [`FilledCavities`](@ref) and [`NoUplift`](@ref), with `"arithmetic"` faces, so
+`p_w` may leave `[0, p_o]`. With `original = true` also [`BedPotential`](@ref) and [`ExplicitGapCoupling`](@ref): the
+original equations bit for bit. Otherwise [`SheetTopPotential`](@ref) and [`ConsistentGapCoupling`](@ref).
+"""
+ShaktiSheet(; original::Bool = false) = original ? Sheet(FilledCavities(), NoUplift(), BedPotential(), ExplicitGapCoupling()) :
+                                                   Sheet(FilledCavities(), NoUplift(), SheetTopPotential(), ConsistentGapCoupling())
+
+# A face scheme by name (k_face_choice) or as itself.
+k_face_scheme(kfs::AbstractKFaceScheme) = kfs
+k_face_scheme(name::AbstractString) =
+    name == "arithmetic"      ? Arithmetic() :
+    name == "harmonic"        ? Harmonic() :
+    name == "upwind"          ? Upwind() :
+    name == "implicit_upwind" ? ImplicitUpwind() :
+    error("Unknown k_face_choice: \"$name\" (expected \"arithmetic\", \"harmonic\", \"upwind\" or \"implicit_upwind\")")
+k_face_name(kfs::AbstractKFaceScheme) = kfs isa ImplicitUpwind ? "implicit_upwind" : lowercase(string(nameof(typeof(kfs))))
+
+"""
+$(TYPEDSIGNATURES)
+
 Everything needed to run a subglacial hydrology simulation: the grid, state, model parameters,
 and every "which scheme/law" choice (head, gap, melt-rate terms, K-face, melt-input, sliding-law)
 bundled together with the observer that records output. Build one with the keyword constructor
@@ -233,7 +277,10 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
   `ModelParameters` field (there's no single physical parameter that makes the diffusion term
   identically zero the way `p.br`/`p.b_c` do): pass `WithDiffusion(ls)` explicitly, with `ls` a
   second, independent [`AbstractLinearSolver`](@ref) instance for `b`'s own diffusion operator.
-- `k_face_choice`: `"arithmetic"`, `"harmonic"`, `"upwind"` or `"implicit_upwind"` (see [`AbstractKFaceScheme`](@ref));
+- `sheet`: [`GlaDS2Sheet`](@ref) (default) or [`ShaktiSheet`](@ref), a [`Sheet`](@ref) bundling `cavity_filling`, `uplift`,
+  `hydraulic_potential` and `gap_coupling`. Each of these keywords, when passed, overrides the sheet's field.
+- `k_face_choice`: `"arithmetic"`, `"harmonic"`, `"upwind"` or `"implicit_upwind"`, or the scheme itself (`Arithmetic()`,
+  `ImplicitUpwind()`, ...; see [`AbstractKFaceScheme`](@ref));
   by default `"implicit_upwind"` under [`UnfilledCavities`](@ref) or [`IceUplift`](@ref) (so with the default sheet),
   `"arithmetic"` otherwise. Where the water depth is free (a free surface or an uplift layer) the flux is a kinematic
   wave in it, `q ~ K(W)*grad(zb)`; with `W` lagged to the start of the step a face mean is unstable (explicit central
@@ -258,12 +305,13 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
   ice, stored in an uplift layer at `N = 0`; see `ice_uplift.jl`) or [`NoUplift`](@ref) (SHAKTI's original: the water
   pressure may exceed the overburden, `N < 0`). The defaults, `UnfilledCavities()` and `IceUplift()` with
   `hydraulic_potential = SheetTopPotential()`, are the sheet of GlaDS-2 (Wells et al. 2026), with the pressure bounded
-  by `0 <= p_w <= p_o` (the range a coupled ice model's sliding law expects). Pass `cavity_filling = FilledCavities(),
-  uplift = NoUplift()` for SHAKTI's sheet (with `hydraulic_potential = BedPotential()` and
-  `gap_coupling = ExplicitGapCoupling()` for its original equations bit for bit).
+  by `0 <= p_w <= p_o` (the range a coupled ice model's sliding law expects). Pass `sheet = ShaktiSheet()` for SHAKTI's
+  sheet (`ShaktiSheet(original = true)` for its original equations bit for bit).
 - Observer: [`NoObserver`](@ref) if `tracked_obs` is empty; otherwise `which_observer` must be
   `"IO"` (writes to `path` via `which_file_writer`, one of `"NetCDF"`/`"HDF5"`/`"JLD2"`/`"CSV"`,
   at `tracked_times`) or `"Live"` (keeps `tracked_times` in memory instead of writing to disk).
+  Or pass the observer itself as `observer` (with `tracked_obs` empty), e.g.
+  `observer = IOObserver(["h", "b"], times, NetCDFFileWriter(), path)`.
 - `gap_coupling`: [`ExplicitGapCoupling`](@ref) (legacy: the head rows assume the gap changes by `dt*rate(N, b_old)`) or
   [`ConsistentGapCoupling`](@ref) (they assume the change the gap scheme itself makes, so the head equation and the gap update
   store the same water at any `dt`; needed with the implicit and fully implicit gap schemes when `dt*A*|N|^(n-1)*N` is not
@@ -281,7 +329,20 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
   initial guess ([`HeadExtrapolation`](@ref); default `1`, linear). `0` starts every solve from the
   previous step's head.
 """
-function Simulation(grid, state, tsteps, dt, p, tracked_obs::Vector{String}, mi::AbstractMeltInput, sl::AbstractSlidingLaw; gap_scheme::AbstractGapScheme = FullyImplicitGapScheme(), ps = nothing, which_observer = nothing, which_file_writer = nothing, tracked_times = nothing, path = nothing, k_face_choice = nothing, verbose = false, cell_N_clamping::AbstractCellNClamping = NoCellNClamping(), timestep_scheme::AbstractTimeStepScheme = FixedTimeStep(), diffusion_scheme::AbstractDiffusionScheme = NoDiffusion(), head_extrapolation_order::Int = 1, cavity_filling::AbstractCavityFilling = UnfilledCavities(), hydraulic_potential::AbstractHydraulicPotential = SheetTopPotential(), uplift::AbstractIceUplift = IceUplift(), gap_coupling::Union{Nothing, AbstractGapCoupling} = nothing)
+function Simulation(grid, state, tsteps, dt, p, tracked_obs::Vector{String}, mi::AbstractMeltInput, sl::AbstractSlidingLaw; gap_scheme::AbstractGapScheme = FullyImplicitGapScheme(), ps = nothing, which_observer = nothing, which_file_writer = nothing, tracked_times = nothing, path = nothing, k_face_choice = nothing, verbose = false, cell_N_clamping::AbstractCellNClamping = NoCellNClamping(), timestep_scheme::AbstractTimeStepScheme = FixedTimeStep(), diffusion_scheme::AbstractDiffusionScheme = NoDiffusion(), head_extrapolation_order::Int = 1, sheet::Sheet = GlaDS2Sheet(), cavity_filling::Union{Nothing, AbstractCavityFilling} = nothing, hydraulic_potential::Union{Nothing, AbstractHydraulicPotential} = nothing, uplift::Union{Nothing, AbstractIceUplift} = nothing, gap_coupling::Union{Nothing, AbstractGapCoupling} = nothing, observer::Union{Nothing, AbstractObserver} = nothing)
+
+    # The sheet, field by field: a keyword overrides the preset.
+    cavity_filling = something(cavity_filling, sheet.cf)
+    uplift = something(uplift, sheet.up)
+    hydraulic_potential = something(hydraulic_potential, sheet.hp)
+    gap_coupling = something(gap_coupling, sheet.gcp)
+
+    # An observer passed as an object names its own observables.
+    if observer !== nothing
+        isempty(tracked_obs) && which_observer === nothing ||
+            error("pass either observer (an object) or tracked_obs with which_observer, not both")
+        tracked_obs = observer isa NoObserver ? String[] : observer.tracked_obs
+    end
 
     # Check that all tracked observables are valid State fields
     for name in tracked_obs
@@ -314,18 +375,8 @@ function Simulation(grid, state, tsteps, dt, p, tracked_obs::Vector{String}, mi:
     # Under a free surface the implicit water depth is the default; averaged faces are refused there (below).
     free_surface = cavity_filling isa UnfilledCavities || uplift isa IceUplift
     k_face_default = k_face_choice === nothing
-    k_face_default && (k_face_choice = free_surface ? "implicit_upwind" : "arithmetic")
-    if k_face_choice == "arithmetic"
-        kfs = Arithmetic()
-    elseif k_face_choice == "harmonic"
-        kfs = Harmonic()
-    elseif k_face_choice == "upwind"
-        kfs = Upwind()
-    elseif k_face_choice == "implicit_upwind"
-        kfs = ImplicitUpwind()
-    else
-        error("Unknown k_face_choice: \"$k_face_choice\" (expected \"arithmetic\", \"harmonic\", \"upwind\" or \"implicit_upwind\")")
-    end
+    kfs = k_face_scheme(k_face_default ? (free_surface ? ImplicitUpwind() : Arithmetic()) : k_face_choice)
+    k_face_choice = k_face_name(kfs)
     # An averaged face lets an unfilled cell's outflow outgrow its water: the arithmetic mean gives a dry cell half its
     # neighbour's conductance, and the water it then delivers is created by the W >= 0 floor of update_water_budget!
     # (Thwaites 2 km, uplift, dt = 1 h: 1.7e7 m^3/s after 12 h against 500 m^3/s of melt, lifting the ice by hundreds of
@@ -361,7 +412,8 @@ function Simulation(grid, state, tsteps, dt, p, tracked_obs::Vector{String}, mi:
         error("WithDiffusion's gap solve has no method for $(nameof(typeof(diffusion_scheme.ls))): use CholeskyDirectSolver(grid), CUDSSDirectSolver(grid; structure = :spd) or CGIterativeSolver (the gap system is symmetric positive definite)")
 
     # Observer setup
-    if isempty(tracked_obs)
+    if observer !== nothing
+    elseif isempty(tracked_obs)
         observer = NoObserver()
     elseif which_observer === nothing
         error("which_observer should be specified as \"IO\" or \"Live\" when tracked_obs is not empty.")
@@ -415,7 +467,6 @@ function Simulation(grid, state, tsteps, dt, p, tracked_obs::Vector{String}, mi:
                   "contradicts the unfilled (N = po) and uplifted (N = 0) head rows. These sheets bound N by po - pw already; for a floor " *
                   "on N use IceUplift (water above the overburden lifts the ice), or use the filled sheet (FilledCavities(), NoUplift()).")
     end
-    gap_coupling === nothing && (gap_coupling = ConsistentGapCoupling())
 
     sim = Simulation(tsteps, Ref(dt), p, hs, gs, mt, oss, cls, diffusion_scheme, observer, grid, state, mi, kfs, sl, verbose, Ref(zero(dt)), cell_N_clamping, timestep_scheme, he, cavity_filling, hydraulic_potential, uplift, gap_coupling, WaterBudget(state))
     return refresh_state!(sim) # the derived fields with this simulation's options (set_initial_conditions! knows none of them)
@@ -437,3 +488,13 @@ function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice::AbstractStrin
          error("Unknown gap_scheme_choice: \"$gap_scheme_choice\" (expected \"explicit\", \"implicit\", or \"fully_implicit\")")
     return Simulation(grid, state, tsteps, dt, p, tracked_obs, mi, sl; gap_scheme = gs, kwargs...)
 end
+
+"""
+$(TYPEDSIGNATURES)
+
+The same [`Simulation`](@ref) without `tracked_obs`: the output is the `observer` keyword's object
+(`IOObserver(obs, times, NetCDFFileWriter(), path)`, `LiveObserver(obs, times)`; [`NoObserver`](@ref) by default),
+and the model is the `sheet` keyword's ([`GlaDS2Sheet`](@ref) by default, or [`ShaktiSheet`](@ref)). The preferred form.
+"""
+Simulation(grid, state, tsteps, dt, p, mi::AbstractMeltInput, sl::AbstractSlidingLaw; kwargs...) =
+    Simulation(grid, state, tsteps, dt, p, String[], mi, sl; kwargs...)

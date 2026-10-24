@@ -25,6 +25,7 @@ using CSV
     include("implicit_upwind_test.jl")
     include("diffusion_test.jl")
     include("consistency_test.jl")
+    include("sheet_test.jl")
     include("ieb_external_test.jl")
     include("cairomakie_ext_test.jl")
 end

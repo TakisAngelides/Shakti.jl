@@ -203,7 +203,7 @@ export AbstractHeadScheme, PicardHeadScheme
 export AbstractGapScheme, ExplicitGapScheme, ImplicitGapScheme, FullyImplicitGapScheme
 export AbstractTimeStepScheme, FixedTimeStep, AdaptiveTimeStep, target_time
 export AbstractCellNClamping, NoCellNClamping, CellNClamping, apply_cell_N_clamping!
-export Simulation
+export Simulation, Sheet, GlaDS2Sheet, ShaktiSheet
 
 # head_extrapolation.jl
 export AbstractHeadExtrapolation, NoHeadExtrapolation, HeadExtrapolation, reset_head_history!

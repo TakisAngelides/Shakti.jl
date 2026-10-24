@@ -169,6 +169,9 @@ AbstractGapScheme
 ExplicitGapScheme
 ImplicitGapScheme
 FullyImplicitGapScheme
+Sheet
+GlaDS2Sheet
+ShaktiSheet
 Simulation
 AbstractHeadExtrapolation
 NoHeadExtrapolation

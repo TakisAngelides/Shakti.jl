@@ -21,6 +21,7 @@
 !/test/implicit_upwind_test.jl
 !/test/diffusion_test.jl
 !/test/consistency_test.jl
+!/test/sheet_test.jl
 !/test/helheim_setup.jl
 
 # OS junk

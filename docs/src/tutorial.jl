@@ -148,8 +148,9 @@ The defaults are the GlaDS-2 sheet. Each keyword of `Simulation` has an opt-out:
 
 Which to choose:
 * default: physically bounded `p_w`, closed budget, large steps (hours to days)
-* SHAKTI's sheet: `cavity_filling = FilledCavities(), uplift = NoUplift()`, and Cholesky is allowed
-* the original equations bit for bit: also `hydraulic_potential = BedPotential(), gap_coupling = ExplicitGapCoupling()`
+* SHAKTI's sheet: `sheet = ShaktiSheet()` (the same as `cavity_filling = FilledCavities(), uplift = NoUplift()`), and Cholesky is allowed
+* the original equations bit for bit: `sheet = ShaktiSheet(original = true)` (also `hydraulic_potential = BedPotential(), gap_coupling = ExplicitGapCoupling()`)
+* any keyword above overrides the field of the `sheet` it names (`GlaDS2Sheet()` by default)
 =#
 
 #=
