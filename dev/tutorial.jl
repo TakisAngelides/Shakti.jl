@@ -22,7 +22,7 @@ Set once, before `using Shakti`, then restart Julia (`set_preferences!` writes `
 
 `backend`:
 * `"Threads"` (default)  CPU kernels; the only backend the sparse direct solvers (and CUDSS) work with
-* `"CUDA"`, `"Metal"`  fields live on the GPU; only `CGIterativeSolver(grid, MatrixFreeLinearSystem)` solves there, so not the default sheet
+* `"CUDA"`, `"Metal"`  fields live on the GPU; the matrix-free solvers work there: `BiCGStabIterativeSolver(grid)` for the default sheet, `CGIterativeSolver(grid, MatrixFreeLinearSystem)` for the filled sheet
 
 `floattype`:
 * `"Float64"` (default)
@@ -104,7 +104,7 @@ geo
 * `b_min = 1e-6`  lower clamp of `b`; keep it well below the initial `b`, or every cell can sit on the clamp
 * `b_max = Inf`  upper clamp; ISSM's SHAKTI uses `1.0`. A finite value hides a gap runaway, `Inf` lets `check_gap_height` report it
 * `N_min = -Inf`, `N_max = Inf`  clamps of `N`; off, `IceUplift` (step 7) is the physical bound
-* `e_v = 0`  englacial void ratio; `0` elliptic head equation, `> 0` parabolic (needs `pps`, step 8)
+* `e_v = 0`  englacial void ratio; `0` elliptic head equation, `> 0` parabolic (the head stores englacial water, see the [Parabolic scheme](@ref ParabolicScheme) page)
 * `outflow_only_land = true`, `outflow_only_ocean = true`  outlets let water out, never in; `false` for tidal intrusion
 * `b_c = 0`  creep cutoff length (SUHMO); non-zero selects `CreepCutoff`. Dataset-dependent runaways: opt in with care
 =#
@@ -148,23 +148,23 @@ The defaults are the GlaDS-2 sheet. Each keyword of `Simulation` has an opt-out:
 
 Which to choose:
 * default: physically bounded `p_w`, closed budget, large steps (hours to days)
-* SHAKTI's sheet: `cavity_filling = FilledCavities(), uplift = NoUplift()`, and Cholesky is allowed
-* the original equations bit for bit: also `hydraulic_potential = BedPotential(), gap_coupling = ExplicitGapCoupling()`
+* SHAKTI's sheet: `sheet = ShaktiSheet()` (the same as `cavity_filling = FilledCavities(), uplift = NoUplift()`), and Cholesky is allowed
+* the original equations bit for bit: `sheet = ShaktiSheet(original = true)` (also `hydraulic_potential = BedPotential(), gap_coupling = ExplicitGapCoupling()`)
+* any keyword above overrides the field of the `sheet` it names (`GlaDS2Sheet()` by default)
 =#
 
 #=
 ## 8. Solvers
-Head solve, `ps` for `e_v = 0`:
+Head solve, `ps`, for any `e_v`:
 * `PicardSolver(iters, tol, ls, grid; alpha = nothing, atol = 0)`  fixed-point iteration; `alpha < 1` under-relaxes a stalling solve, `atol > 0` [m] replaces the relative test
-
-and `pps = ParabolicPicardSolver(...)` for `e_v > 0` (see the [Parabolic scheme](@ref ParabolicScheme) page).
 
 Linear solver `ls`:
 * `LUDirectSolver(grid)`  UMFPACK LU, CPU; the default sheet's matrix is non-symmetric
 * `CUDSSDirectSolver(grid)` (`structure = :general`, the default)  the same on a GPU node (fields stay on the CPU); the fastest on large grids
 * `CholeskyDirectSolver(grid)`, `CUDSSDirectSolver(grid; structure = :spd)`  symmetric matrices only: SHAKTI's sheet or `"upwind"`
 * `CGIterativeSolver(grid, SparseAssembledLinearSystem; amg = true)`  symmetric only, CPU
-* `CGIterativeSolver(grid, MatrixFreeLinearSystem)`  symmetric only, the one GPU-resident solver
+* `CGIterativeSolver(grid, MatrixFreeLinearSystem)`  symmetric only, matrix-free with the same multigrid preconditioner, GPU-resident: about 0.07 s per quiet step on an A100 at 800 x 200 and 0.08 s at 1600 x 400 (`CUDSSDirectSolver(grid; structure = :spd)`: 0.10 s and 0.24 s); `multigrid = false` gives Jacobi
+* `BiCGStabIterativeSolver(grid)`  matrix-free with a multigrid preconditioner, GPU-resident: the default sheet with fields on the GPU, about 0.2 s per step on an A100 from 800 x 200 to 1600 x 400 cells (`CUDSSDirectSolver` is faster on smaller grids, slower on larger ones)
 
 `Simulation` refuses Cholesky and CG with the default sheet, and names the opt-outs.
 =#
@@ -184,7 +184,7 @@ Under `WithDiffusion` the choice is ignored: the diffusive gap solve has its own
 
 Time step:
 * `FixedTimeStep()` (default)  `dt` every step; with the default sheet hours to days work
-* `AdaptiveTimeStep(grid, state; safety_factor = 0.3, dt_min, dt_max, target_time)`  `dt` from the creep and sliding rates; `run!` stops at `target_time`
+* `AdaptiveTimeStep(grid, state; dt_min, dt_max, target_time)`  `dt` halved when the head solve does not converge (the step is retried) and grown after fast steps; `safety_factor` adds an optional cap from the creep and sliding rates; `run!` stops at `target_time`
 =#
 dt, nsteps = 86400.0, 365
 
@@ -193,7 +193,7 @@ dt, nsteps = 86400.0, 365
 * `which_observer = "IO"` with `which_file_writer = "NetCDF"` (or `"HDF5"`, `"JLD2"`)  fields written at `tracked_times` (step indices, 0 = initial state); use this for long runs
 * `"CSV"`  min, max and mean per field and time only
 * `"Live"`  kept in memory, for short interactive runs
-* `tracked_obs`  any `State` field names, e.g. `"N"`, `"b"`, `"h"`, `"Re"`, `"q_x"`, `"b_empty"`, `"b_uplift"`
+* `tracked_obs`  any `State` field names, e.g. `"N"`, `"b"`, `"h"`, `"Re"`, `"q_x"`, `"W"`
 
 Checkpoints: `run!(sim; checkpoint_every, checkpoint_path)`, then `restart_path` resumes a killed run
 and `extend_path` continues a finished one into a new file.
