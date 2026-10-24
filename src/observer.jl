@@ -99,12 +99,15 @@ IOObserver(tracked_obs, tracked_times, fr, path) = IOObserver(tracked_obs, track
 $(TYPEDSIGNATURES)
 
 Keeps `tracked_obs` (names of `State` fields) at each of `tracked_times` (timestep indices) in
-memory (`history`, one preallocated array per tracked observable) rather than writing to disk.
+memory (`history`, one preallocated array per tracked observable) rather than writing to disk, with the model time of
+each frame in `times` (s; the step indices alone do not give it under [`AdaptiveTimeStep`](@ref)). A frame the run has
+not reached, e.g. after an adaptive run stopped at its `target_time`, holds NaN (`times` and floating-point fields).
 """
 struct LiveObserver <: AbstractObserver # no writing to files, just arrays kept in RAM
     tracked_obs::Vector{String}          # names of State fields to record
     tracked_times::AbstractVector{Int}   # time step indices at which to record
     history::Dict{String, Array}         # set by prepare!; one preallocated array per tracked observable
+    times::Vector{Float64}               # set by prepare!; total_time of each recorded frame, NaN until it is recorded
     tracked_times_index::Dict{Int, Int}  # tracked_times[i] -> i, see tracked_times_index(...) above; observe!'s O(1) lookup
 end
 
@@ -113,7 +116,7 @@ $(TYPEDSIGNATURES)
 
 Builds a [`LiveObserver`](@ref) with an empty `history` (populated later by [`prepare!`](@ref)).
 """
-LiveObserver(tracked_obs, tracked_times) = LiveObserver(tracked_obs, tracked_times, Dict{String, Array}(), tracked_times_index(tracked_times))
+LiveObserver(tracked_obs, tracked_times) = LiveObserver(tracked_obs, tracked_times, Dict{String, Array}(), Float64[], tracked_times_index(tracked_times))
 
 """
 $(TYPEDSIGNATURES)
@@ -144,10 +147,14 @@ Sets up `observer` before the time loop starts -- a no-op for [`NoObserver`](@re
 prepare!(observer::NoObserver, state::State) = nothing
 
 function prepare!(observer::LiveObserver, state::State)
+    ntimes = length(observer.tracked_times)
     for name in observer.tracked_obs
         field = get_observable(state, name)
-        observer.history[name] = Array{eltype(field)}(undef, size(field)..., length(observer.tracked_times))
+        hist = Array{eltype(field)}(undef, size(field)..., ntimes)
+        eltype(field) <: AbstractFloat && fill!(hist, NaN) # a frame never recorded reads as NaN, not as leftover memory
+        observer.history[name] = hist
     end
+    resize!(observer.times, ntimes); fill!(observer.times, NaN)
     return nothing
 end
 
@@ -187,7 +194,7 @@ end
 function openfile!(fr::HDF5FileWriter, observer::IOObserver, state::State)
     file = HDF5.h5open(observer.path, "w")
     ntimes = length(observer.tracked_times)
-    HDF5.create_dataset(file, "time", Float64, (ntimes,))
+    file["time"] = fill(NaN, ntimes) # a frame never written (an adaptive run that stopped at its target_time) has time NaN
     for name in observer.tracked_obs
         field = get_observable(state, name)
         HDF5.create_dataset(file, name, eltype(field), (size(field)..., ntimes))
@@ -286,6 +293,7 @@ observe!(observer::NoObserver, state::State, t, total_time) = nothing
 function observe!(observer::LiveObserver, state::State, t, total_time)
     idx = get(observer.tracked_times_index, t, nothing)
     idx === nothing && return nothing
+    observer.times[idx] = total_time
     for name in observer.tracked_obs
         hist = observer.history[name]
         selectdim(hist, ndims(hist), idx) .= Array(get_observable(state, name))

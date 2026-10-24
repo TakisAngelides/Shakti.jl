@@ -56,6 +56,10 @@
                         @test file["time"][idx] ≈ Float64(t)
                     end
                 end
+                # frames never written have time NaN
+                short = IOObserver(tracked_obs, tracked_times, HDF5FileWriter(), joinpath(dir, "short.h5"))
+                prepare!(short, state); observe!(short, state, 0, 0.0); finalize!(short, state)
+                HDF5.h5open(f -> @test(f["time"][1] == 0.0 && all(isnan, f["time"][2:end])), joinpath(dir, "short.h5"), "r")
             end
 
             @testset "JLD2" begin
@@ -120,6 +124,11 @@
                 @test observer.history["h"][:, :, idx] ≈ Array(state.h)
                 @test observer.history["mdot"][:, :, idx] ≈ Array(state.mdot)
             end
+            @test observer.times == Float64.(tracked_times)
+            # a run that stops early (AdaptiveTimeStep at its target_time) leaves NaN, not leftover memory, in the frames it never reached
+            prepare!(observer, state)
+            observe!(observer, state, 0, 0.0)
+            @test isnan(observer.times[2]) && all(isnan, observer.history["h"][:, :, 2:end]) && !any(isnan, observer.history["h"][:, :, 1])
         end
 
         @testset "derived observables b_empty and b_uplift" begin
