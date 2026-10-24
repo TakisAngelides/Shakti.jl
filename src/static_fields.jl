@@ -5,9 +5,13 @@
 # refreshes H/po from the current b, zb, zs at its start (prepare_head_solve!, run.jl), so a coupled ice model's new
 # geometry is picked up; they stay fixed during the step's head solve.
 
-@parallel_indices (ix, iy) function compute_H_kernel!(H, zs, zb, b)
+# The ice base sits b above the bed, and under IceUplift a further W - b where the water lifts it (the uplift layer,
+# water_above_gap); the ice above it is floored at zero thickness, so a gap or layer thicker than zs - zb (a thin
+# margin) gives po = 0, not a negative overburden that would cap pw below zero and read the closure at N < 0.
+@parallel_indices (ix, iy) function compute_H_kernel!(H, zs, zb, b, W, lifted)
     if ix <= size(H, 1) && iy <= size(H, 2)
-        H[ix, iy] = zs[ix, iy] - (zb[ix, iy] + b[ix, iy])
+        bu = lifted ? max(zero(eltype(H)), W[ix, iy] - b[ix, iy]) : zero(eltype(H))
+        H[ix, iy] = max(zero(eltype(H)), zs[ix, iy] - (zb[ix, iy] + b[ix, iy] + bu))
     end
     return
 end
@@ -15,9 +19,12 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Updates `s.H` (ice thickness) from the current `s.zs`/`s.zb`/`s.b`: `H = zs - (zb + b)`.
+Updates `s.H` (ice thickness) from the current `s.zs`/`s.zb`/`s.b`: `H = max(0, zs - (zb + b + b_uplift))`, the ice
+above the gap and, under [`IceUplift`](@ref) (`up`), above the uplift layer `b_uplift = max(0, W - b)`
+([`water_above_gap`](@ref)); `b_uplift = 0` under [`NoUplift`](@ref) or with no `up` given. Floored at zero, so a gap
+thicker than the ice (a thin margin) gives no negative overburden.
 """
-compute_H!(s::State) = (@parallel compute_H_kernel!(s.H, s.zs, s.zb, s.b); s)
+compute_H!(s::State, up::AbstractIceUplift = NoUplift()) = (@parallel compute_H_kernel!(s.H, s.zs, s.zb, s.b, s.W, up isa IceUplift); s)
 
 @parallel_indices (ix, iy) function compute_po_kernel!(po, H, rho_i, ggrav)
     if ix <= size(po, 1) && iy <= size(po, 2)

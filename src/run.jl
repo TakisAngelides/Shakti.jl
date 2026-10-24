@@ -245,8 +245,8 @@ Brings everything the head solve reads up to date with the state as the timestep
 has just been evolved by the previous [`step_b!`](@ref), and an ice-flow model may have changed
 `zs`/`zb`/`u_b` since:
 
-1. `H`/`po` from the current `b` ([`compute_H!`](@ref)/[`compute_po!`](@ref); `H = zs - (zb + b)`),
-   so a large gap (a wide channel at fine resolution) lowers the overburden it sits under. Two
+1. `H`/`po` from the current `b` ([`compute_H!`](@ref)/[`compute_po!`](@ref); `H = max(0, zs - (zb + b + b_uplift))`),
+   so a large gap (a wide channel at fine resolution) or uplift layer lowers the overburden it sits under. Two
    elementwise kernels, negligible next to one linear solve. Under [`SheetTopPotential`](@ref) also
    the gap jumps across faces ([`update_gap_jumps!`](@ref)) from the same `b`, so that the flux is
    driven by `h + b` throughout the step.
@@ -274,7 +274,7 @@ end
 # The step's inputs that depend on b and the mask only (step 1 of prepare_head_solve!).
 function prepare_step_inputs!(sim::Simulation)
     s = sim.state
-    compute_H!(s)
+    compute_H!(s, sim.up)
     compute_po!(s, sim.p)
     # The option-owned fields (stor, stor_up) are read by the kernels whatever the option, so each 'off' option writes its
     # neutral value, and the water W is brought within the sheet: a State that ran under another sheet (spin-up,
