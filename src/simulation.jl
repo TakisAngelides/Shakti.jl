@@ -347,7 +347,7 @@ function Simulation(grid, state, tsteps, dt, p, tracked_obs::Vector{String}, mi:
         hasproperty(solver, :ls) && supports_nonsymmetric(solver.ls) ||
             error("k_face_choice = \"implicit_upwind\"" * (k_face_default ? " (the default with $(nameof(typeof(cavity_filling)))/$(nameof(typeof(uplift))))" : "") *
                   " assembles a non-symmetric head matrix: it needs a PicardSolver " *
-                  "with LUDirectSolver(grid) or CUDSSDirectSolver(grid) (structure = :general) as its linear solver, got $(nameof(typeof(solver)))" *
+                  "with LUDirectSolver(grid), CUDSSDirectSolver(grid) (structure = :general) or, for fields on the GPU, BiCGStabIterativeSolver(grid) as its linear solver, got $(nameof(typeof(solver)))" *
                   (hasproperty(solver, :ls) ? " with $(nameof(typeof(solver.ls)))" : "") *
                   (k_face_default ? ". Alternatively pass k_face_choice = \"upwind\" (stable only at short dt), or cavity_filling = FilledCavities(), " *
                                     "uplift = NoUplift() for SHAKTI's original filled sheet." : ""))

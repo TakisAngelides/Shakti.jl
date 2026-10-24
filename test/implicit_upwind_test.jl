@@ -454,6 +454,25 @@
             @test direct.hs.ps.ls.refactorizations[] == solves # one per Picard iteration
             @test lagged.hs.ps.ls.refactorizations[] < solves ÷ 10
             @test stalled.hs.ps.ls.refactorizations[] == solves
+
+            # BiCGStabIterativeSolver, the matrix-free (GPU-resident) solver: its stencil carries the same water-depth
+            # Newton terms as the assembled matrix, so it takes the direct solver's Picard iterations to its heads.
+            mf = lu_sim(BiCGStabIterativeSolver(grid; rtol = 1e-10, atol = 0.0))
+            direct = lu_sim(LUDirectSolver(grid))
+            for _ in 1:10
+                foreach(step!, (direct, mf))
+                @test mf.hs.ps.last_iter == direct.hs.ps.last_iter && first(Shakti.picard_status(mf.hs))
+                @test maximum(abs, Array(mf.state.h) .- Array(direct.state.h)) < 1e-12 * maximum(abs, Array(direct.state.h))
+                @test maximum(abs, Array(mf.state.W) .- Array(direct.state.W)) < 1e-10 * maximum(abs, Array(direct.state.W))
+            end
+            s, gc = mf.state, Shakti.gap_coupling_terms(mf)
+            sals, mfls = SparseAssembledLinearSystem(grid), MatrixFreeLinearSystem(grid)
+            Shakti.update_SALS_elliptic!(sals, s, grid, p, mf.kfs, mf.ds, gc, mf.dt[], s.h)
+            Shakti.update_MFLS_elliptic!(mfls, s, grid, p, mf.kfs, mf.ds, gc, mf.dt[], s.h)
+            @test sals.M != sals.M' # the Newton terms are there
+            x = randn(nx * ny)
+            @test Array(mul!(similar(mfls.rhs), Shakti.StencilOperator(mfls), x)) ≈ sals.M * x rtol = 1e-14
+            @test Array(mfls.rhs) == sals.rhs
         end
 
     end

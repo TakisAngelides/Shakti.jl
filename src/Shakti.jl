@@ -157,7 +157,7 @@ export AbstractKFaceScheme, Arithmetic, Harmonic, Upwind, ImplicitUpwind, comput
 # iterative solver constructors, e.g. CGIterativeSolver(g, MatrixFreeLinearSystem))
 export AbstractLinearSolver, AbstractDirectSolver, AbstractIterativeSolver
 export AbstractLinearSystem, SparseAssembledLinearSystem, MatrixFreeLinearSystem
-export CholeskyDirectSolver, LUDirectSolver, CGIterativeSolver
+export CholeskyDirectSolver, LUDirectSolver, CGIterativeSolver, BiCGStabIterativeSolver
 @static if backend != "Metal"
     export CUDSSDirectSolver
 end

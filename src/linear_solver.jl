@@ -814,6 +814,37 @@ end
     return
 end
 
+# The same Newton terms for MatrixFreeLinearSystem, whose couplings aE/aW/aN/aS are stored positive (the matvec
+# subtracts them), so a neighbour donor's -J on the matrix entry is +J on the coupling.
+@inline add_water_depth_newton_mf!(::Val{false}, aP, aE, aW, aN, aS, rhs, row, Jw_x, Jw_y, h, ix, iy, nx, ny, dx, dy) = nothing
+
+@inline function add_water_depth_newton_mf!(::Val{true}, aP, aE, aW, aN, aS, rhs, row, Jw_x, Jw_y, h, ix, iy, nx, ny, dx, dy)
+    dP = zero(eltype(rhs)); acc = zero(eltype(rhs))
+    if ix < nx
+        J = Jw_x[ix+1, iy] / dx
+        J < 0 && (dP -= J; acc -= J * h[ix, iy])
+        J > 0 && (aE[ix, iy] += J; acc -= J * h[ix+1, iy])
+    end
+    if ix > 1
+        J = Jw_x[ix, iy] / dx
+        J > 0 && (dP += J; acc += J * h[ix, iy])
+        J < 0 && (aW[ix, iy] -= J; acc += J * h[ix-1, iy])
+    end
+    if iy < ny
+        J = Jw_y[ix, iy+1] / dy
+        J < 0 && (dP -= J; acc -= J * h[ix, iy])
+        J > 0 && (aN[ix, iy] += J; acc -= J * h[ix, iy+1])
+    end
+    if iy > 1
+        J = Jw_y[ix, iy] / dy
+        J > 0 && (dP += J; acc += J * h[ix, iy])
+        J < 0 && (aS[ix, iy] -= J; acc += J * h[ix, iy-1])
+    end
+    aP[ix, iy] += dP
+    rhs[row] += acc
+    return
+end
+
 # Every assembly kernel here is launched with an explicit (1:nx, 1:ny) range
 # (`@parallel (1:g.nx, 1:g.ny) kernel!(...)`): ParallelStencil otherwise infers the
 # range from the elementwise max size over ALL array arguments, and the flat
@@ -953,7 +984,7 @@ end
 # stored as the raw positive face conductances -- stencil_matvec_kernel!
 # below applies the minus sign when it uses them, matching the sign
 # convention update_SALS_elliptic_kernel! bakes directly into nzval.
-@parallel_indices (ix, iy) function update_MFLS_elliptic_kernel!(mask, aP, aE, aW, aN, aS, rhs, zb, h, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, b, b_min, b_max, D_x, D_y, diffusion_on, po, N_min, N_max, stor, db_x, db_y, stor_up, W, gc, bump, b_next, db_next, h_old, e_v, dt)
+@parallel_indices (ix, iy) function update_MFLS_elliptic_kernel!(mask, aP, aE, aW, aN, aS, rhs, zb, h, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, b, b_min, b_max, D_x, D_y, diffusion_on, po, N_min, N_max, stor, db_x, db_y, stor_up, Jw_x, Jw_y, newton_on, dx, dy, W, gc, bump, b_next, db_next, h_old, e_v, dt)
 
     nx, ny = size(mask, 1), size(mask, 2)
 
@@ -995,7 +1026,7 @@ end
                 # As in update_SALS_elliptic_kernel!: an OCEAN/LAND neighbour's known head
                 # is folded into rhs instead of being wired up as a matrix
                 # coupling (aE/aW/aN/aS stay at their fill!-ed 0 for that
-                # direction), so the operator stays symmetric.
+                # direction), so the operator stays symmetric (up to ImplicitUpwind's Newton terms below).
                 dirichlet_rhs = zero(eltype(rhs))
                 if ix < nx
                     mE = mask[ix+1, iy]
@@ -1020,6 +1051,7 @@ end
                             srhs + # englacial storage at the start of the step, zero for e_v = 0
                             dirichlet_rhs
                 add_sheet_top_source!(rhs, row, aE_ij, aW_ij, aN_ij, aS_ij, db_x, db_y, ix, iy) # SheetTopPotential: the known part of -div(K grad(b)), zero otherwise
+                add_water_depth_newton_mf!(newton_on, aP, aE, aW, aN, aS, rhs, row, Jw_x, Jw_y, h, ix, iy, nx, ny, dx, dy) # ImplicitUpwind: Newton terms of the donors' water depths, nothing otherwise
             end
         end
 
@@ -1044,7 +1076,7 @@ function update_MFLS_elliptic!(mfls::MatrixFreeLinearSystem, s::State, g::Grid, 
     fill!(mfls.aS, 0)
     fill!(mfls.rhs, 0)
 
-    @parallel (1:g.nx, 1:g.ny) update_MFLS_elliptic_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.zb, s.h, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, s.b, p.b_min, p.b_max, s.D_x, s.D_y, diffusion_in_head(ds, gc), s.po, p.N_min, p.N_max, s.stor, s.db_x, s.db_y, s.stor_up, s.W, gc, s.bump, s.b_next, s.db_next, h_old, storage_e_v(p, dt), floattype(dt))
+    @parallel (1:g.nx, 1:g.ny) update_MFLS_elliptic_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.zb, s.h, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, s.b, p.b_min, p.b_max, s.D_x, s.D_y, diffusion_in_head(ds, gc), s.po, p.N_min, p.N_max, s.stor, s.db_x, s.db_y, s.stor_up, s.Jw_x, s.Jw_y, Val(kfs isa ImplicitUpwind), g.dx, g.dy, s.W, gc, s.bump, s.b_next, s.db_next, h_old, storage_e_v(p, dt), floattype(dt))
 
     return
 
@@ -1455,6 +1487,12 @@ hot path.
 @noinline _warn_cg_not_converged(stats) =
     @warn "CGIterativeSolver: CG stopped before converging -- the head solution is inaccurate (check the preconditioner or raise itmax)" niter = stats.niter status = stats.status maxlog = 20
 
+# check_cg_converged's counterpart for BiCGStabIterativeSolver.
+@inline check_krylov_converged(ws) = (ws.stats.solved || _warn_krylov_not_converged(ws.stats); nothing)
+
+@noinline _warn_krylov_not_converged(stats) =
+    @warn "BiCGStabIterativeSolver: BiCGStab stopped before converging -- the head solution is inaccurate (raise itmax or loosen rtol)" niter = stats.niter status = stats.status maxlog = 20
+
 """
 $(TYPEDSIGNATURES)
 
@@ -1664,5 +1702,66 @@ function solve_b_diffusion!(ls::CGIterativeSolver{<:MatrixFreeLinearSystem}, s::
     check_cg_converged(ls.ws)
 
     out .= clamp.(reshape(ls.ws.x, g.nx, g.ny), p.b_min, p.b_max)
+
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Matrix-free BiCGStab (Krylov.jl's `bicgstab!`) with a Jacobi preconditioner over a [`MatrixFreeLinearSystem`](@ref): the
+GPU-resident solver for the non-symmetric head matrix of [`ImplicitUpwind`](@ref) (the default sheet), which
+[`CGIterativeSolver`](@ref) cannot solve. Every array lives on the active backend and the solve warm-starts from the
+current head.
+
+# Notes
+
+BiCGStab rather than GMRES: on the default sheet's head matrix GMRES with Jacobi needed 6-10 times BiCGStab's
+iterations even with 100 vectors kept, and its memory grows with the restart length. Jacobi leaves the iteration count
+growing with the grid (about 750 at 400 x 100 cells, 1600-1900 at 800 x 200), and on a GPU each iteration costs about
+0.5 ms of kernel launches and reductions whatever the grid size. So it is slow: on an A100 a quiet 800 x 200 step took
+3 s, against 2.4 s for [`LUDirectSolver`](@ref) on the CPU and 0.12 s for `CUDSSDirectSolver` (fields on the CPU, the
+factorization on the GPU). Use it where the fields must stay on the GPU. `rtol`/`atol` are the relative and absolute
+residual tolerances, `itmax` the iteration cap (`0`: Krylov.jl's default, twice the number of cells). A solve that
+stops before its tolerance warns, as [`CGIterativeSolver`](@ref)'s does.
+"""
+struct BiCGStabIterativeSolver{LSy <: MatrixFreeLinearSystem, WS, V <: AbstractVector, F <: AbstractFloat} <: AbstractIterativeSolver
+    lsy::LSy
+    ws::WS
+    precond_diag::V # Jacobi diagonal, refreshed every solve
+    rtol::F
+    atol::F
+    itmax::Int
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Builds a [`BiCGStabIterativeSolver`](@ref) on grid `g`, every array on the active backend.
+"""
+function BiCGStabIterativeSolver(g::Grid{F}, ::Type{MatrixFreeLinearSystem} = MatrixFreeLinearSystem; rtol = sqrt(eps(F)), atol = sqrt(eps(F)), itmax::Int = 0) where F
+    itmax >= 0 || error("itmax must be >= 0 (0: Krylov.jl's default), got $itmax")
+    mfls = MatrixFreeLinearSystem(g)
+    ws = BicgstabWorkspace(g.nx * g.ny, g.nx * g.ny, typeof(mfls.rhs))
+    return BiCGStabIterativeSolver(mfls, ws, @zeros(g.nx * g.ny), F(rtol), F(atol), itmax)
+end
+
+supports_nonsymmetric(::BiCGStabIterativeSolver) = true
+
+"""
+$(TYPEDSIGNATURES)
+
+Solves the linearized head equation for `h`, storing the result in `s.h` -- the [`BiCGStabIterativeSolver`](@ref)
+method: rebuilds the stencil coefficients (with the water-depth Newton terms under [`ImplicitUpwind`](@ref)) and runs
+`bicgstab!` warm-started from the current `s.h`.
+"""
+function solve_elliptic_linear_system!(ls::BiCGStabIterativeSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), dt = 0, h_old = s.h)
+
+    update_MFLS_elliptic!(ls.lsy, s, g, p, kfs, ds, gc, dt, h_old)
+    update_diag_precond!(ls.precond_diag, ls.lsy)
+
+    bicgstab!(ls.ws, StencilOperator(ls.lsy), ls.lsy.rhs, vec(s.h); M = Diagonal(ls.precond_diag), ldiv = true, rtol = ls.rtol, atol = ls.atol, itmax = ls.itmax)
+    check_krylov_converged(ls.ws)
+
+    s.h .= reshape(ls.ws.x, g.nx, g.ny)
 
 end

@@ -22,7 +22,7 @@ Set once, before `using Shakti`, then restart Julia (`set_preferences!` writes `
 
 `backend`:
 * `"Threads"` (default)  CPU kernels; the only backend the sparse direct solvers (and CUDSS) work with
-* `"CUDA"`, `"Metal"`  fields live on the GPU; only `CGIterativeSolver(grid, MatrixFreeLinearSystem)` solves there, so not the default sheet
+* `"CUDA"`, `"Metal"`  fields live on the GPU; the matrix-free solvers work there: `BiCGStabIterativeSolver(grid)` for the default sheet, `CGIterativeSolver(grid, MatrixFreeLinearSystem)` for the filled sheet
 
 `floattype`:
 * `"Float64"` (default)
@@ -162,7 +162,8 @@ Linear solver `ls`:
 * `CUDSSDirectSolver(grid)` (`structure = :general`, the default)  the same on a GPU node (fields stay on the CPU); the fastest on large grids
 * `CholeskyDirectSolver(grid)`, `CUDSSDirectSolver(grid; structure = :spd)`  symmetric matrices only: SHAKTI's sheet or `"upwind"`
 * `CGIterativeSolver(grid, SparseAssembledLinearSystem; amg = true)`  symmetric only, CPU
-* `CGIterativeSolver(grid, MatrixFreeLinearSystem)`  symmetric only, the one GPU-resident solver
+* `CGIterativeSolver(grid, MatrixFreeLinearSystem)`  symmetric only, GPU-resident
+* `BiCGStabIterativeSolver(grid)`  matrix-free with a Jacobi preconditioner, GPU-resident; the default sheet with fields on the GPU, but slow (Jacobi: thousands of iterations on large grids), so `CUDSSDirectSolver` is the fast GPU choice
 
 `Simulation` refuses Cholesky and CG with the default sheet, and names the opt-outs.
 =#
