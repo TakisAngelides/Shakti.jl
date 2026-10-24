@@ -115,6 +115,16 @@
                 @test b_new >= 0
                 @test abs(residual(cls, c.opening0, c.gamma, c.C, dt, c.br, c.b_c, b_new)) < 1e-8
             end
+
+            # The kink (review C3): starting gaps whose new gap is exactly b_c (< br). Rounding put branch (i)'s root
+            # 4e-14 above b_c and branch (ii)'s 2e-17 below it, and branch (iv) was returned unchecked, 4e-6 m low.
+            m, g, C, dtk, br, b_c = 6.396420948918853e-10, 1.1100887267871447e-7, 2.6946008753917766e-8, 711.7103506433916, 0.1, 0.05
+            b0s = b_c * (1 + dtk * (g + C)) - dtk * (m + g * br)
+            for b0 in (prevfloat(b0s), b0s, nextfloat(b0s), 0.04999655333958234)
+                b_new = Shakti.fully_implicit_creep_update(CreepCutoff(), b0, m, g, C, dtk, br, b_c)
+                @test abs(residual(CreepCutoff(), b0 + dtk * m, g, C, dtk, br, b_c, b_new)) < 1e-12
+                @test abs(b_new - b_c) < 1e-12
+            end
         end
 
         # --- End-to-end: CreepCutoff through the real kernel launches, via a Simulation --------

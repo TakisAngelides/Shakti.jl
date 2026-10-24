@@ -393,12 +393,18 @@ end
         return b3
     end
 
-    # Branch (iv): beta zero (b_{k+1} >= br) AND l_c linear (b_{k+1} > b_c) -- always
-    # self-consistent as the final fallback (exactly one of the four branches must be, since
-    # beta/l_c are continuous and together partition the b_{k+1} axis into non-overlapping pieces). For C < 0 it is
-    # floored at br, as in the StandardCreep update above.
+    # Branch (iv): beta zero (b_{k+1} >= br) AND l_c linear (b_{k+1} > b_c). For C < 0 it is floored at br, as in the
+    # StandardCreep update above.
     b4 = relax_update(b0, m, C, dt)
-    return C < zero(C) ? max(b4, br) : b4
+    C < zero(C) && return max(b4, br)
+    b4 >= br && b4 > b_c && return b4
+    # For C >= 0 exactly one branch is self-consistent in exact arithmetic (beta and l_c are continuous and partition the
+    # b_{k+1} axis). When none passes, the solution sits on a kink and rounding put each candidate just across it: a
+    # starting gap whose new gap is b_c gave b1 = b_c + 4e-14 and b2 = b_c - 2e-17, and branch (iv), returned unchecked,
+    # 4e-6 m below b_c. The residual of the backward-Euler equation is increasing in b_{k+1}, so the kink where it is
+    # smallest is the solution.
+    resid(b) = abs(b - opening0 - dt * (gamma * max(br - b, zero(b)) - C * creep_length(CreepCutoff(), b, b_c)))
+    return resid(b_c) <= resid(br) ? b_c : br
 end
 
 @parallel_indices (ix, iy) function compute_b_fully_implicit_kernel!(b, mask, mdot, abs_ub, A_visc, N, rho_i, n_minus_1, dt, b_min, b_max, bump, lr, cls::AbstractCreepLengthScheme, b_c)
