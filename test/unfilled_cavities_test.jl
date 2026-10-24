@@ -250,6 +250,27 @@
             @test !first(Shakti.picard_status(sim.hs)) && sim.wb.created[] < -0.9 * sim.wb.input[] # N would have to reach ~ -1e9 Pa
         end
 
+        @testset "filled sheet: suction or created water warns (ARCH-3), unfilled never" begin
+            for cf in (FilledCavities(), UnfilledCavities())
+                sim = make_sim(cf; stuck = false, kface = "upwind")
+                s = sim.state
+                g = grounded(s)
+                fill!(s.pw, 1.0)
+                sim.wb.created[], sim.wb.input[] = 0.0, 1.0
+                @test Shakti.suction_cells(s) == 0
+                @test_logs Shakti.check_filled_sheet(sim)
+                pw = Array(s.pw); pw[findfirst(g)] = -1.0; pw[findfirst(.!g)] = -1.0; copyto!(s.pw, pw) # suction off GROUNDED does not count
+                @test Shakti.suction_cells(s) == 1
+                cf isa UnfilledCavities && (@test_logs Shakti.check_filled_sheet(sim); continue)
+                @test_logs (:warn, r"1 GROUNDED cells are at p_w < 0.*UnfilledCavities\(\)") Shakti.check_filled_sheet(sim)
+                fill!(s.pw, 1.0)
+                sim.wb.created[] = 1e-4 # within 1e-3 of the input: the consistent coupling's Picard tolerance
+                @test_logs Shakti.check_filled_sheet(sim)
+                sim.wb.created[] = 0.02 # ExplicitGapCoupling on this fixture
+                @test_logs (:warn, r"0 GROUNDED cells.*created 0.02 m\^3") Shakti.check_filled_sheet(sim)
+            end
+        end
+
         @testset "gap held at b_max: opening blocked, empty volume bounded, budget exact" begin
             A_visc = fill(1e-30, nx, ny); b0 = fill(1e-6, nx, ny)
             ub_x = fill(3e-7, nx + 1, ny); ub_y = zeros(nx, ny + 1)

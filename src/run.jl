@@ -100,7 +100,7 @@ function run!(sim::Simulation; checkpoint_every::Union{Nothing, Int} = nothing, 
 
         if sim.verbose
             converged, last_iter = picard_status(sim.hs)
-            println("$t / $(sim.tsteps) completed in $(round(step_time; digits = 4))s. head solve converged: $converged in $last_iter iterations.$(timestep_report(sim.ts, sim))$(water_report(sim.wb))")
+            println("$t / $(sim.tsteps) completed in $(round(step_time; digits = 4))s. head solve converged: $converged in $last_iter iterations.$(timestep_report(sim.ts, sim))$(water_report(sim.wb))$(filled_report(sim))")
             s = sim.state
             Narr = Array(s.N)
             if converged === false
@@ -155,7 +155,7 @@ inputs up to date and sets its initial guess (`prepare_head_solve!`), solves for
 head ([`step_h!`](@ref)), under [`AdaptiveTimeStep`](@ref) retrying it at half the `dt` while it does not converge
 (`retry_step!`), records it for the next step's extrapolation (`sim.he`), evolves the gap height and the
 water `W` ([`step_b!`](@ref)), checks the gap (`check_gap_height`) and the head solve's convergence
-(`check_convergence`) and lets an adaptive `dt` grow (`control_dt!`).
+(`check_convergence`), under [`FilledCavities`](@ref) whether the full gap still holds (`check_filled_sheet`), and lets an adaptive `dt` grow (`control_dt!`).
 `sim.dt[]` is the step taken.
 """
 function step!(sim::Simulation)
@@ -173,6 +173,7 @@ function step!(sim::Simulation)
     step_b!(sim)
     check_gap_height(sim)
     check_convergence(sim)
+    check_filled_sheet(sim)
     control_dt!(sim, sim.ts)
     return sim
 end
@@ -240,6 +241,42 @@ Warns (once per session) when the step's head solve ended unconverged, with the 
 ([`WaterBudget`](@ref)) and the usual remedy.
 """
 check_convergence(sim::Simulation) = ((converged, iters) = picard_status(sim.hs); converged || _warn_unconverged(sim, iters); nothing)
+
+# ARCH-3: a gap that is always full of water has three ways to meet a creep closure its inflow cannot supply: create
+# water (ExplicitGapCoupling, SHAKTI's original), hold the water at p_w < 0 (suction, ConsistentGapCoupling), or let the
+# gap part-empty at p_w = 0, which is UnfilledCavities. The filled sheet is SHAKTI's, valid where water is plentiful;
+# check_filled_sheet says when a run has left that regime.
+"""
+$(TYPEDSIGNATURES)
+
+The number of `GROUNDED` cells whose water pressure is below zero (suction, `p_w < 0`). One lazy reduction over the grid,
+no allocation.
+"""
+suction_cells(s::State) = mapreduce((m, pw) -> (m == GROUNDED) & (pw < 0), +, s.mask, s.pw; init = 0)
+
+@noinline _warn_filled_sheet(sim, nsuction, created, input) =
+    @warn "step!: the filled sheet (FilledCavities) has left the regime where a full gap holds: $nsuction GROUNDED cells " *
+          "are at p_w < 0 (suction) and the step created $(round(created, sigdigits = 3)) m^3 of water (input " *
+          "$(round(input, sigdigits = 3)) m^3). A full gap meets a closure its inflow cannot supply only by suction or by " *
+          "creating water; UnfilledCavities() lets the gap part-empty at p_w = 0 instead." maxlog = 1
+
+"""
+$(TYPEDSIGNATURES)
+
+Under [`FilledCavities`](@ref), warns (once per session) when the step has `GROUNDED` cells at `p_w < 0`
+([`suction_cells`](@ref)) or created more than `1e-3` of its input as water ([`WaterBudget`](@ref)): the two ways a
+gap that is always full meets a creep closure its inflow cannot supply. [`UnfilledCavities`](@ref) removes both.
+"""
+check_filled_sheet(sim::Simulation) = check_filled_sheet(sim, sim.cf)
+check_filled_sheet(sim::Simulation, ::UnfilledCavities) = nothing
+function check_filled_sheet(sim::Simulation, ::FilledCavities)
+    n, created, input = suction_cells(sim.state), sim.wb.created[], sim.wb.input[]
+    (n > 0 || abs(created) > 1e-3 * abs(input)) && _warn_filled_sheet(sim, n, created, input)
+    return nothing
+end
+
+# The filled sheet's part of run!'s verbose line: its suction cells.
+filled_report(sim::Simulation) = sim.cf isa FilledCavities ? " p_w < 0 in $(suction_cells(sim.state)) GROUNDED cells." : ""
 
 @noinline _gap_not_finite(gcp) = error("step!: the gap height b is not finite in a GROUNDED cell. The usual cause is a gap runaway at N < 0: use " * gap_runaway_hint(gcp) * ".")
 @noinline _warn_gap_thicker_than_ice(gcp) =
