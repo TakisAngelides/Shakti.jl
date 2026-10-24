@@ -415,9 +415,10 @@ $(TYPEDSIGNATURES)
 
 Writes `C + gamma` (the same local relaxation rate behind `compute_b_fully_implicit_kernel!`'s
 branch-1 denominator, i.e. the reciprocal of the physical timescale `tau` the timestep-selection
-report is built on) into `rate` for every `GROUNDED` cell; non-grounded cells get `-Inf`, which never
-wins a `maximum` reduction and marks the cell for exclusion from a percentile reduction
-([`rate_statistic`](@ref)), so both follow the mask as it is at this step. `gamma` only contributes while
+report is built on) into `rate` for every `GROUNDED` cell whose gap is above `b_min`; other cells get `-Inf`, which
+never wins a `maximum` reduction and marks the cell for exclusion from a percentile reduction
+([`rate_statistic`](@ref)), so both follow the mask as it is at this step. A gap at `b_min` is held there, so its rate
+(fastest where thick ice closes it within minutes) says nothing about how the solution changes. `gamma` only contributes while
 `b < br` (mirrors `compute_b_fully_implicit_kernel!`'s own branch condition) and is `0` outright
 when `br == 0` (opening-by-sliding off) -- so a domain that never uses it (e.g. Drang Drung) isn't
 penalized with an artificially small `dt`. Under [`CreepCutoff`](@ref), `C` alone is no longer the
@@ -425,16 +426,16 @@ closure term's local slope (since `l_c` is quadratic, not linear, in `b` below `
 scaled by [`creep_length_slope`](@ref) (`dl_c/db`, `1` under [`StandardCreep`](@ref) so this is a
 no-op there) to keep the rate/timescale estimate correct.
 """
-@parallel_indices (ix, iy) function compute_dt_rate_kernel!(rate, mask, b, abs_ub, A_visc, N, n_minus_1, bump, lr, cls::AbstractCreepLengthScheme, b_c)
+@parallel_indices (ix, iy) function compute_dt_rate_kernel!(rate, mask, b, abs_ub, A_visc, N, n_minus_1, bump, lr, cls::AbstractCreepLengthScheme, b_c, b_min)
     if ix <= size(rate, 1) && iy <= size(rate, 2)
-        if mask[ix, iy] == GROUNDED
+        if mask[ix, iy] == GROUNDED && b[ix, iy] > b_min
             Cn = A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy]
             C = Cn * creep_length_slope(cls, b[ix, iy], b_c, Cn)
             br = bump[ix, iy] # bump height under the ice base (compute_beta!)
             gamma = (br > 0 && b[ix, iy] < br) ? abs_ub[ix, iy] / lr : zero(C)
             rate[ix, iy] = C + gamma
         else
-            rate[ix, iy] = typemin(eltype(rate)) # -Inf: not grounded (rate_statistic)
+            rate[ix, iy] = typemin(eltype(rate)) # -Inf: not rated (rate_statistic)
         end
     end
     return

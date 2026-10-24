@@ -71,7 +71,7 @@ $(TYPEDSIGNATURES)
 
 How `sim.dt[]` is chosen each timestep -- multiple dispatch on the concrete subtype picks between
 [`FixedTimeStep`](@ref) (today's behavior: `dt` set once at construction, never changes) and
-[`AdaptiveTimeStep`](@ref) (recomputed every step from the current `A_visc`/`N`/`u_b` fields).
+[`AdaptiveTimeStep`](@ref) (chosen every step by how the head solve converges).
 """
 abstract type AbstractTimeStepScheme end
 
@@ -85,34 +85,46 @@ struct FixedTimeStep <: AbstractTimeStepScheme end
 """
 $(TYPEDSIGNATURES)
 
-Recomputes `sim.dt[]` every step from the gap-height equation's own local relaxation rate
-`C + gamma = A_visc*|N|^(n-1)*N + |u_b|/lr` -- the same quantities behind
-[`FullyImplicitGapScheme`](@ref)'s unconditional-stability proof and [`ImplicitGapScheme`](@ref)'s
-`dt` cap: `dt = clamp(safety_factor / stat, dt_min, dt_max)`, where `stat` is either the domain
-maximum of that rate (`UsePercentile=false`, the default -- a single cheap, GPU-native reduction,
-fully conservative) or a chosen percentile of it restricted to grounded cells
-(`UsePercentile=true` -- needs a sort each step, and a host-device transfer on a GPU backend, but
-avoids one outlier cell dominating). `UsePercentile` is a type parameter, not a field, so the
-choice is resolved at compile time into two separate `rate_statistic` methods -- same "dispatch on
-a type decided once outside the hot loop" idiom as [`MeltTerms`](@ref) -- not a runtime branch
-inside the per-step reduction.
+Chooses `sim.dt[]` every step by how the head solve converges, between `dt_min` and `dt_max`, and stops [`run!`](@ref)
+at `target_time`. Under the default sheet the gap update is fully implicit and unconditionally stable, so what limits
+the step is the Picard iteration at regime changes (cells filling, emptying or lifting the ice), not a relaxation
+rate of the gap:
 
-Note this recomputes `dt` from the *previous* step's converged `N`/`u_b` (it can't know the
-current step's `N` before solving it) -- the same lagged-coefficient idiom already used for
-`s.beta` in [`ImplicitGapScheme`](@ref).
+- a step whose head solve does not converge is rejected: the head is reset to the start of the step and the step is
+  retried at half the `dt`, down to `dt_min` (a step at `dt_min` is kept whether it converged or not);
+- after `grow_after` steps in a row that converged within `fast_iters` iterations, `dt` grows by the factor `grow`.
 
-Build with the [`AdaptiveTimeStep`](@ref) convenience constructor below, not
-this one directly -- it sizes `rate_field`/`host_rate`/`scratch` correctly.
+The step that `dt` starts from is the `Simulation`'s own `dt`. Only the head solve is redone: the gap, the water `W`,
+the start-of-step melt and the head history change only once a step is accepted.
+
+Optionally `dt` is also capped by the local relaxation rate of the gap equation,
+`C + gamma = A_visc*|N|^(n-1)*N + |u_b|/lr` ([`compute_dt_rate_kernel!`](@ref)), over the cells whose gap is above
+`b_min` (a gap at `b_min` is held there: creep closes it within minutes under thick ice and nothing changes):
+`dt <= safety_factor / stat`, where `stat` is the maximum of that rate (`UsePercentile=false`, a single GPU-native
+reduction) or a chosen percentile of it (`UsePercentile=true`, a sort and a host transfer each step, less swayed by one
+outlier cell). This is an accuracy cap only; it is off unless `safety_factor` is given. `UsePercentile` is a type
+parameter, so the choice is two `rate_statistic` methods rather than a branch in the per-step reduction. The rate is
+taken from the previous step's converged `N`/`u_b`, the same lagged-coefficient idiom as `s.beta` in
+[`ImplicitGapScheme`](@ref).
+
+Build with the [`AdaptiveTimeStep`](@ref) convenience constructor below, not this one directly -- it sizes
+`rate_field`/`host_rate`/`scratch` correctly.
 """
 struct AdaptiveTimeStep{UsePercentile, F} <: AbstractTimeStepScheme
-    safety_factor::F
+    safety_factor::F              # the rate cap safety_factor/stat; 0 = no cap
     percentile::F                 # quantile of the RATE field C+gamma (not of tau=1/(C+gamma)); unused when UsePercentile=false
     dt_min::F
     dt_max::F
     target_time::F                # physical duration to run for; run! breaks out of its tsteps loop once total_time[] reaches this
+    grow::F                       # factor dt grows by after grow_after fast steps
+    fast_iters::Int               # a step that converged within this many Picard iterations is fast
+    grow_after::Int               # fast steps in a row before dt grows
+    dt_ctrl::Base.RefValue{F}     # the step the controller asks for (NaN until the first step takes the Simulation's dt)
+    fast_count::Base.RefValue{Int} # fast steps in a row since dt last grew or a step was rejected
+    rejected::Base.RefValue{Int}  # rejected steps in this run (a diagnostic)
     rate_field::AbstractMatrix{F} # preallocated once (same backend as State), holds C+gamma per cell each step
     host_rate::Vector{F}          # preallocated once, CPU-side; empty when UsePercentile=false. Bridges a possibly-GPU-resident rate_field via one bulk copyto! (CUDA.jl/Metal.jl's real device->host transfer -- scalar-indexing a GPU array per grounded cell would be illegal/catastrophically slow, see checkpoint.jl's own note on this)
-    scratch::Vector{F}            # preallocated once (one slot per cell); empty when UsePercentile=false. Each step gathers the grounded cells' rates (the cells compute_dt_rate_kernel! did not mark -Inf, so the mask as it is now) and sorts them in place
+    scratch::Vector{F}            # preallocated once (one slot per cell); empty when UsePercentile=false. Each step gathers the rated cells (those compute_dt_rate_kernel! did not mark -Inf, so the mask as it is now) and sorts them in place
 end
 
 """
@@ -121,35 +133,33 @@ $(TYPEDSIGNATURES)
 Builds an [`AdaptiveTimeStep`](@ref), sizing its scratch buffers from `grid`/`state.mask`.
 
 # Arguments
-- `use_percentile`: `false` (default) uses the domain maximum of `C+gamma` each step (cheap,
-  GPU-native, fully conservative); `true` uses the `percentile`-th quantile of `C+gamma`
-  restricted to grounded cells instead (needs a sort; more representative, less swayed by one
-  outlier cell).
-- `safety_factor`: `dt_candidate = safety_factor / stat` -- e.g. `0.3` for the accuracy-oriented
-  guidance worked out empirically for AIS/GrIS/Drang Drung, larger if some inaccuracy is
-  acceptable.
-- `percentile`: only used when `use_percentile=true`, in RATE space (not `tau` space) -- `0.75`
-  means "the value such that 75% of grounded cells have `C+gamma` below it", i.e. the
-  *fast-relaxing* end of the distribution, corresponding to the 25th percentile of
-  `tau=1/(C+gamma)`.
-- `dt_min`/`dt_max`: hard bounds on the resulting `dt`. `dt_min` in particular guarantees
-  [`run!`](@ref)'s loop terminates: total simulated time advances by at least `dt_min` every step,
-  so a `target_time`-based run takes at most `ceil((target_time-total_time)/dt_min)` steps -- pass
-  that same bound as `tsteps` when constructing the [`Simulation`](@ref).
-- `target_time`: the physical duration (seconds) this run is meant to cover -- the final step is
-  clipped to land exactly on it rather than overshoot, and the step before it is shortened when the
-  remainder would otherwise be less than `dt_min` (see `update_dt!`).
+- `dt_min`/`dt_max`: hard bounds on `dt`. `dt_min` in particular guarantees [`run!`](@ref)'s loop terminates: total
+  simulated time advances by at least `dt_min` every step (except a last step that lands on `target_time`), so a
+  `target_time`-based run takes at most `ceil((target_time-total_time)/dt_min)` steps -- pass that same bound as
+  `tsteps` when constructing the [`Simulation`](@ref). Rejected steps are retried within the same `tsteps` step.
+- `target_time`: the physical duration (seconds) this run is meant to cover -- the final step is clipped to land exactly
+  on it rather than overshoot, and the step before it is shortened when the remainder would otherwise be less than
+  `dt_min` (see `update_dt!`).
+- `grow`, `fast_iters`, `grow_after`: `dt` grows by `grow` after `grow_after` steps in a row whose head solve converged
+  within `fast_iters` Picard iterations.
+- `safety_factor`: `nothing` (default) for no rate cap; otherwise `dt <= safety_factor / stat` from the creep and
+  sliding rate of the gap, e.g. `0.3` for the accuracy-oriented guidance worked out empirically for AIS/GrIS/Drang Drung.
+- `use_percentile`: `false` (default) caps by the maximum of `C+gamma` (cheap, GPU-native, fully conservative); `true`
+  by its `percentile`-th quantile instead (needs a sort; less swayed by one outlier cell).
+- `percentile`: only used when `use_percentile=true`, in RATE space (not `tau` space) -- `0.75` means "the value such
+  that 75% of the rated cells have `C+gamma` below it", i.e. the *fast-relaxing* end of the distribution.
 """
-function AdaptiveTimeStep(grid::Grid, state::State; use_percentile::Bool = false, safety_factor, percentile = 0.75, dt_min, dt_max, target_time)
+function AdaptiveTimeStep(grid::Grid, state::State; dt_min, dt_max, target_time, grow = 1.5, fast_iters::Int = 30, grow_after::Int = 3,
+                          safety_factor = nothing, use_percentile::Bool = false, percentile = 0.75)
     F = eltype(state.N)
+    grow > 1 || error("AdaptiveTimeStep: grow must be > 1")
+    0 < dt_min <= dt_max || error("AdaptiveTimeStep: need 0 < dt_min <= dt_max")
+    sf = safety_factor === nothing ? zero(F) : F(safety_factor)
+    sf >= 0 || error("AdaptiveTimeStep: safety_factor must be positive")
     rate_field = initialize_center_field(grid)
-    if use_percentile
-        host_rate = Vector{F}(undef, length(rate_field))
-        scratch = Vector{F}(undef, length(rate_field)) # every cell, so the grounded set may change during the run (set_mask!, freezing)
-        return AdaptiveTimeStep{true, F}(F(safety_factor), F(percentile), F(dt_min), F(dt_max), F(target_time), rate_field, host_rate, scratch)
-    else
-        return AdaptiveTimeStep{false, F}(F(safety_factor), F(percentile), F(dt_min), F(dt_max), F(target_time), rate_field, F[], F[])
-    end
+    n = use_percentile ? length(rate_field) : 0 # every cell, so the rated set may change during the run (set_mask!, freezing)
+    return AdaptiveTimeStep{use_percentile, F}(sf, F(percentile), F(dt_min), F(dt_max), F(target_time), F(grow), fast_iters, grow_after,
+                                               Ref(F(NaN)), Ref(0), Ref(0), rate_field, Vector{F}(undef, n), Vector{F}(undef, n))
 end
 
 """
@@ -262,8 +272,8 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
   (`DiffusiveGapUpdate`), one extra linear solve per iteration (two with `"implicit_upwind"`), with any cavity
   filling and uplift.
 - `timestep_scheme`: [`FixedTimeStep`](@ref) (default, `dt` never changes) or
-  [`AdaptiveTimeStep`](@ref) (`dt` recomputed every step from `C+gamma`). With the latter, `dt` is
-  still the *first* step's value (until the first recomputation) and `tsteps` should be sized from
+  [`AdaptiveTimeStep`](@ref) (`dt` chosen every step by how the head solve converges, a step that does not converge
+  retried at half the `dt`). With the latter, `dt` is the step the controller starts from and `tsteps` should be sized from
   `AdaptiveTimeStep`'s own `dt_min`/`target_time` (see its docstring) rather than from `dt` itself,
   since the true step count isn't known in advance.
 - `head_extrapolation_order`: degree of the time extrapolation of the head used as each step's

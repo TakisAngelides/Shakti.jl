@@ -14,7 +14,7 @@ Saves everything needed to resume `sim`'s physics at timestep `t`: the full `Sta
 the observer's `tracked_obs` subset, which is often a small slice picked for output/analysis),
 `sim.total_time[]`, `sim.dt[]` (matters under [`AdaptiveTimeStep`](@ref): without it, a
 resumed run would restart from the constructor's initial `dt` guess rather than whatever
-`AdaptiveTimeStep` had actually converged to before the checkpoint), and the head-extrapolation
+`AdaptiveTimeStep` had actually converged to before the checkpoint) with the state of its controller, and the head-extrapolation
 history ([`HeadExtrapolation`](@ref); without it a resumed run starts its next head solves from
 another guess, and so ends them at another point within the tolerance).
 
@@ -42,6 +42,7 @@ function save_checkpoint(path::String, sim::Simulation, t::Int)
         file["dt"] = sim.dt[]
         file["options"] = option_signature(sim)
         save_head_history(file, sim.he)
+        save_timestep_control(file, sim.ts)
         for name in fieldnames(typeof(state)) # for every field name in the State struct save it to file
             file[String(name)] = Array(getfield(state, name))
         end
@@ -70,6 +71,17 @@ function checkpoint_water(file)
     return max.(b .- split("b_empty") .- split("b_dry"), zero(eltype(b))) .+ split("b_uplift")
 end
 
+# AdaptiveTimeStep's controller: the step it asks for and its count of fast steps, so a resumed run chooses the steps an
+# uninterrupted one would. A checkpoint without them restarts the controller from the loaded dt.
+save_timestep_control(file, ::AbstractTimeStepScheme) = nothing
+save_timestep_control(file, ts::AdaptiveTimeStep) = (file["dt_ctrl"] = ts.dt_ctrl[]; file["fast_count"] = ts.fast_count[]; nothing)
+load_timestep_control!(::AbstractTimeStepScheme, file) = nothing
+function load_timestep_control!(ts::AdaptiveTimeStep, file)
+    ts.dt_ctrl[] = haskey(file, "dt_ctrl") ? file["dt_ctrl"] : NaN
+    ts.fast_count[] = haskey(file, "fast_count") ? file["fast_count"] : 0
+    return nothing
+end
+
 function load_checkpoint!(sim::Simulation, path::String)
     state = sim.state
     t, total_time, dt = JLD2.jldopen(path, "r") do file
@@ -91,6 +103,7 @@ function load_checkpoint!(sim::Simulation, path::String)
         haskey(file, "bump") || compute_beta!(state, sim.p, sim.oss)
         haskey(file, "mdot0") || copyto!(state.mdot0, state.mdot) # older checkpoints: the start-of-step melt of ImplicitUpwind is the saved melt
         load_head_history!(sim.he, file)
+        load_timestep_control!(sim.ts, file)
         if haskey(file, "options") && file["options"] != option_signature(sim)
             @warn "Checkpoint $path was written under other options; the next step zeroes the fields the current ones do not own (stor, stor_up) and brings the water W within the current sheet" saved = file["options"] current = option_signature(sim)
         end

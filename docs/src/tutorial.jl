@@ -182,7 +182,7 @@ Under `WithDiffusion` the choice is ignored: the diffusive gap solve has its own
 
 Time step:
 * `FixedTimeStep()` (default)  `dt` every step; with the default sheet hours to days work
-* `AdaptiveTimeStep(grid, state; safety_factor = 0.3, dt_min, dt_max, target_time)`  `dt` from the creep and sliding rates; `run!` stops at `target_time`
+* `AdaptiveTimeStep(grid, state; dt_min, dt_max, target_time)`  `dt` halved when the head solve does not converge (the step is retried) and grown after fast steps; `safety_factor` adds an optional cap from the creep and sliding rates; `run!` stops at `target_time`
 =#
 dt, nsteps = 86400.0, 365
 
@@ -191,7 +191,7 @@ dt, nsteps = 86400.0, 365
 * `which_observer = "IO"` with `which_file_writer = "NetCDF"` (or `"HDF5"`, `"JLD2"`)  fields written at `tracked_times` (step indices, 0 = initial state); use this for long runs
 * `"CSV"`  min, max and mean per field and time only
 * `"Live"`  kept in memory, for short interactive runs
-* `tracked_obs`  any `State` field names, e.g. `"N"`, `"b"`, `"h"`, `"Re"`, `"q_x"`, `"b_empty"`, `"b_uplift"`
+* `tracked_obs`  any `State` field names, e.g. `"N"`, `"b"`, `"h"`, `"Re"`, `"q_x"`, `"W"`
 
 Checkpoints: `run!(sim; checkpoint_every, checkpoint_path)`, then `restart_path` resumes a killed run
 and `extend_path` continues a finished one into a new file.

@@ -22,7 +22,7 @@
         dt     = 1800.0
 
         # a 3 m^3/s moulin into a 1 mm gap (200 m cells): far more water than the sheet can carry at overburden
-        function make_sim(; up = NoUplift(), cf = FilledCavities(), gap = "explicit", e_v = 0.0, mask = base_mask(), moulin = 3.0)
+        function make_sim(; up = NoUplift(), cf = FilledCavities(), gap = "explicit", e_v = 0.0, mask = base_mask(), moulin = 3.0, dt = dt, iters = 500, ts = _ -> FixedTimeStep())
             A_visc = fill(5e-25, nx, ny)
             b0     = fill(1e-3, nx, ny)
             ub_x   = fill(1e-6, nx + 1, ny); ub_y = zeros(nx, ny + 1)
@@ -32,7 +32,7 @@
             set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b0, G, ub_x, ub_y, ieb, taub_x, taub_y)
             ls = CholeskyDirectSolver(grid)
             return Simulation(grid, state, 1, floattype(dt), p, gap, String[], ConstantMeltInput(), sl; k_face_choice = "upwind", cavity_filling = cf, uplift = up,
-                              ps = PicardSolver(500, floattype(1e-12), ls, grid))
+                              ps = PicardSolver(iters, floattype(1e-12), ls, grid), timestep_scheme = ts(state))
         end
         grounded(s) = Array(s.mask) .== GROUNDED
         h_o(s, p) = Array(s.zb) .+ Array(s.po) ./ (p.rho_w * p.g)
@@ -134,6 +134,50 @@
             @test water_above_gap(s)[3, 3] > 0
             res = budget_residual(sim, W_old)
             @test abs(res[3, 3]) < 1e-9 * abs(Array(s.ieb)[3, 3])
+        end
+
+        @testset "AdaptiveTimeStep: a step that does not converge is retried at half the dt, fast steps grow it" begin
+            # 100 Picard iterations: step 4 does not converge at 3 h nor at 1.5 h and is taken at 45 min, then dt grows back to 3 h
+            day = 86400.0
+            adaptive(st) = AdaptiveTimeStep(grid, st; dt_min = 600.0, dt_max = 3 * 3600.0, target_time = day, fast_iters = 40, grow_after = 1)
+            sim = make_sim(; up = IceUplift(), cf = UnfilledCavities(), dt = 3 * 3600.0, iters = 100, ts = adaptive)
+            ts = sim.ts
+            dts, conv = Float64[], Bool[]
+            while sim.total_time[] < day
+                step!(sim); push!(dts, sim.dt[]); push!(conv, first(Shakti.picard_status(sim.hs))); sim.total_time[] += sim.dt[]
+            end
+            @test ts.rejected[] > 0 && all(conv)
+            @test minimum(dts) < 3 * 3600.0 && maximum(dts[argmin(dts):end - 1]) == 3 * 3600.0 # halved, then grown back to dt_max
+            @test sim.total_time[] == day
+            # only the head was redone: the same steps at fixed dt give the same state bit for bit
+            ref = make_sim(; up = IceUplift(), cf = UnfilledCavities(), iters = 100)
+            for dt_k in dts
+                ref.dt[] = dt_k; step!(ref)
+            end
+            @test Array(ref.state.h) == Array(sim.state.h) && Array(ref.state.W) == Array(sim.state.W) && Array(ref.state.b) == Array(sim.state.b)
+            # a step at dt_min is kept whether it converged or not
+            stuck = make_sim(; up = IceUplift(), cf = UnfilledCavities(), dt = 3600.0, iters = 2,
+                             ts = st -> AdaptiveTimeStep(grid, st; dt_min = 1800.0, dt_max = 3600.0, target_time = day))
+            step!(stuck)
+            @test stuck.dt[] == 1800.0 && stuck.ts.rejected[] == 1 && !first(Shakti.picard_status(stuck.hs))
+            # the optional rate cap rates only the gaps above b_min
+            capped = make_sim(; ts = st -> AdaptiveTimeStep(grid, st; dt_min = 1.0, dt_max = day, target_time = day, safety_factor = 0.3))
+            s = capped.state
+            Shakti.update_dt!(capped)
+            rate = Array(capped.ts.rate_field)
+            @test isfinite(rate[3, 3]) && capped.dt[] < day
+            b = Array(s.b); b[3, 3] = capped.p.b_min; copyto!(s.b, b)
+            Shakti.update_dt!(capped)
+            @test Array(capped.ts.rate_field)[3, 3] == -Inf
+            # the controller is checkpointed with the state
+            mktempdir() do dir
+                ck = joinpath(dir, "ck.jld2")
+                ts.dt_ctrl[] = 1234.0; ts.fast_count[] = 2
+                Shakti.save_checkpoint(ck, sim, 1)
+                other = make_sim(; up = IceUplift(), cf = UnfilledCavities(), ts = adaptive)
+                Shakti.load_checkpoint!(other, ck)
+                @test other.ts.dt_ctrl[] == 1234.0 && other.ts.fast_count[] == 2
+            end
         end
 
         @testset "parabolic scheme (e_v > 0): pw <= po" begin
