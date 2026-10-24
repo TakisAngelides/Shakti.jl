@@ -78,6 +78,47 @@
 
     end
 
+    @testset "the two assemblers agree under every head-row option (storage, wall diffusion, gap couplings, frozen cells)" begin
+
+        # update_SALS_*/update_MFLS_* are written twice, once per representation; the test above covers the
+        # Arithmetic rows at e_v = 0 and implicit_upwind_test.jl the default sheet. Here the rest of the head rows'
+        # terms (englacial storage, SUHMO's wall diffusion, each gap coupling, a FROZEN_BED cell) and b's own
+        # diffusion system, on the state a few steps leave.
+        nx, ny = 8, 6
+        grid = Grid(nx, ny, 1e3, 1e3)
+        sl = RegularizedCoulombSlidingLaw(0.25)
+        mask = fill(GROUNDED, nx, ny); mask[end, :] .= OCEAN; mask[1, :] .= LAND; mask[:, 1] .= OTHER_BASIN; mask[4, 6] = FROZEN_BED
+        zb = repeat(reshape(-0.02 .* grid.x, nx, 1), 1, ny)
+        function run_sim(p; kw...)
+            state = State(grid)
+            set_initial_conditions!(state, grid, p, sl, mask, fill(5e-25, nx, ny), zb, zb .+ 500.0, fill(0.01, nx, ny), fill(0.06, nx, ny),
+                                    fill(1e-6, nx + 1, ny), zeros(nx, ny + 1), fill(1e-8, nx, ny), zeros(nx + 1, ny), zeros(nx, ny + 1))
+            sim = Simulation(grid, state, 3, floattype(10800.0), p, ConstantMeltInput(), sl; ps = PicardSolver(300, floattype(1e-8), LUDirectSolver(grid), grid), kw...)
+            run!(sim)
+            return sim
+        end
+        with_storage, without = ModelParameters(e_v = 1e-3, b_min = 1e-6), ModelParameters(e_v = 0.0, b_min = 1e-6)
+        cases = ((with_storage, (;)), (with_storage, (; gap_coupling = ExplicitGapCoupling())),
+                 (without, (; sheet = ShaktiSheet(original = true))),
+                 (with_storage, (; diffusion_scheme = WithDiffusion(LUDirectSolver(grid)))),
+                 (without, (; diffusion_scheme = WithDiffusion(LUDirectSolver(grid)), gap_coupling = ExplicitGapCoupling())))
+        for (p, kw) in cases
+            sim = run_sim(p; kw...)
+            s, gc = sim.state, Shakti.gap_coupling_terms(sim)
+            sals, mfls = SparseAssembledLinearSystem(grid), MatrixFreeLinearSystem(grid)
+            x = randn(nx * ny)
+            Shakti.update_SALS_elliptic!(sals, s, grid, p, sim.kfs, sim.ds, gc, sim.dt[], s.h)
+            Shakti.update_MFLS_elliptic!(mfls, s, grid, p, sim.kfs, sim.ds, gc, sim.dt[], s.h)
+            @test mul!(similar(mfls.rhs), Shakti.StencilOperator(mfls), x) ≈ sals.M * x rtol = 1e-14
+            @test mfls.rhs == sals.rhs
+            Shakti.update_SALS_b_diffusion!(sals, s, grid, p, sim.dt[])
+            Shakti.update_MFLS_b_diffusion!(mfls, s, grid, p, sim.dt[])
+            @test mul!(similar(mfls.rhs), Shakti.StencilOperator(mfls), x) ≈ sals.M * x rtol = 1e-14
+            @test mfls.rhs == sals.rhs
+        end
+
+    end
+
     @testset "CGIterativeSolver matches CholeskyDirectSolver" begin
 
         # Same nontrivial mask/state as above, but this time actually solving
