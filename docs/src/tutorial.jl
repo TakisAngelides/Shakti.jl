@@ -1,14 +1,17 @@
 #=
 # Tutorial
 
-One runnable script, every decision from the grid to the plots, on a synthetic glacier. Each step
-lists the options as `Option(...)  what it does, when to pick it`; the live line below the list is
-the default or a typical pick. Change it to switch.
+This tutorial covers every decision the user can make using a synthetic glacier.
 
-Steps: 1 preferences, 2 grid, 3 mask, 4 state, 5 parameters, 6 sliding law and melt input, 7 the
-sheet, 8 solvers, 9 gap scheme and time step, 10 output, 11 run and check, 12 coupling, 13 plot.
-
-This page runs when the docs are built: one year of 1-day steps on an 80 x 20 grid, in under a minute.
+| Step | Topic | Step | Topic |
+|:----:|:------|:----:|:------|
+| 1 | Preferences | 8 | Solvers |
+| 2 | Grid | 9 | Gap scheme and time step |
+| 3 | Mask | 10 | Output |
+| 4 | State and initial conditions | 11 | Run and check |
+| 5 | Parameters | 12 | Coupling to an ice-flow model |
+| 6 | Sliding law and melt input | 13 | Plot |
+| 7 | Physics of the water sheet | | |
 =#
 
 using Shakti
@@ -38,51 +41,54 @@ backend, floattype
 
 #=
 ## 2. Grid
-* `Grid(nx, ny, lx, ly)`  regular grid of `nx x ny` cells over `lx x ly` metres; cell centres in `grid.x`, `grid.y`
+* `Grid(nx, ny, lx, ly)`  regular grid of `nx x ny` cells. `lx` and `ly` are the distances between the first and the last cell **centre**, not the
+  extent of the cells' outer faces: `dx = lx / (nx - 1)`, `dy = ly / (ny - 1)`, and `grid.x` runs from `0` to `lx`, `grid.y` from `0` to `ly`. The cell centres are `grid.x`, `grid.y`
 =#
 nx, ny = 80, 20
-grid = Grid(nx, ny, 20000.0, 5000.0)
+lx, ly = 20000.0, 5000.0
+grid = Grid(nx, ny, lx, ly);
 
 #=
 ## 3. Mask
 One code per cell. It sets the boundary conditions:
-* `GROUNDED`  grounded ice, solved
-* `LAND`  ice-free land: an outlet at atmospheric pressure
-* `OCEAN`  ocean or floating ice: an outlet at the sea-water pressure of the bed
-* `OTHER_BASIN`  ice outside the basin or no data: closed, no water crosses
-* `FROZEN_BED`  frozen bed: `p_w = 0`, closed (set by `update_frozen_mask!`, step 12)
+* `GROUNDED`  grounded ice where the subglacial hydrology of the hydraulic head and the gap between ice and bed are solved for
+* `LAND`  ice-free land which is an outlet at atmospheric pressure (we use the gauge p_atm = 0)
+* `OCEAN`  ocean or floating ice which is an outlet at the sea-water pressure of the bed
+* `OTHER_BASIN`  ice outside the basin or no data and this cell is closed so no water crosses in
+* `FROZEN_BED`  frozen bed cell with `p_w = 0` that is closed (set by `update_frozen_mask!` described in step 12)
 
 The grid edge is closed, so every grounded region needs an outlet. Water leaves through `LAND`/`OCEAN`
-faces and never enters (`outflow_only_land`, `outflow_only_ocean`, step 5).
+faces and never enters so `outflow_only_land` and `outflow_only_ocean` are by default true and described in step 5.
 =#
 mask = fill(GROUNDED, nx, ny)
 mask[1, :] .= LAND                  # terminus at x = 0
 mask[end, :] .= OTHER_BASIN
-mask[:, [1, end]] .= OTHER_BASIN
+mask[:, [1, end]] .= OTHER_BASIN;
 
 #=
-## 4. State and initial conditions
-`set_initial_conditions!` fills a `State` from the geometry and the inputs below, all SI:
+## 4. The state and initial conditions
+This step only creates the input arrays below, all in SI units. They are put into a `State` by
+`set_initial_conditions!` in step 6, once the parameters (step 5) and the sliding law (step 6) exist.
 * `zb`, `zs`  bed and surface elevation [m]
 * `b`  initial gap height [m]; keep it above `b_min` (step 5)
-* `A_visc`  ice rate factor [Pa^-3 s^-1]
+* `A_visc`  ice rate factor in Glen's flow law [Pa^-3 s^-1]
 * `G`  geothermal flux [W/m2]
-* `ub_x`, `ub_y`  sliding speed on the x- and y-faces [m/s]
-* `ieb`  water input from above [m/s]
-* `taub_x`, `taub_y`  basal shear stress on the faces [Pa] (used by `PrescribedSlidingLaw` only)
+* `ub_x`, `ub_y`  basal sliding speed on the x- and y-faces [m/s]
+* `ieb`  water input from above such as from moulins [m/s]
+* `taub_x`, `taub_y`  basal shear stress on the faces [Pa]; every sliding law (step 6) computes them from `N` and the sliding speed in its own analytical form, at the start and in each Picard iteration. These two arrays are only the starting values `PrescribedSlidingLaw` keeps fixed (e.g. from an ice-flow model); for every other law the input is overwritten, so pass zeros
 =#
 zb     = zeros(nx, ny)
-zs     = [6 * (sqrt(x + 5000.0) - sqrt(5000.0)) + 1 for x in grid.x, y in grid.y]   # SHMIP (de Fleurian et al. 2018)
+zs     = [6 * (sqrt(x + 5000.0) - sqrt(5000.0)) + 1 for x in grid.x, y in grid.y]   # SHMIP (de Fleurian et al. 2018), the ice-sheet margin geometry
 b      = fill(0.01, nx, ny)
 A_visc = fill(5e-25, nx, ny)
 G      = fill(0.05, nx, ny)
 ub_x   = fill(1e-6, nx + 1, ny)
 ub_y   = zeros(nx, ny + 1)
 ieb    = fill(1.0 / (365 * 86400.0), nx, ny)   # 1 m/a
-taub_x, taub_y = zeros(nx + 1, ny), zeros(nx, ny + 1)
+taub_x, taub_y = zeros(nx + 1, ny), zeros(nx, ny + 1);
 
-# The geometry along `x` (the slab is uniform in `y`): a flat bed and the ice-sheet margin of SHMIP,
-# 1 m thick at the outlet and about 520 m thick 20 km inland.
+# The geometry along `x` is described by a flat bed and the ice-sheet margin of SHMIP [deFleurian2018](@cite), which is 1 m thick at the outlet and about 520 m thick 20 km inland.
+# The slab is uniform in the `y` direction.
 xg = grid.x ./ 1e3
 geo = Figure(size = (720, 280))
 axg = Axis(geo[1, 1]; xlabel = L"x\ [\mathrm{km}]", ylabel = L"z\ [\mathrm{m}]",
@@ -93,26 +99,59 @@ lines!(axg, xg, zs[:, 1]; color = :steelblue, linewidth = 2)
 lines!(axg, xg, zb[:, 1]; color = :saddlebrown, linewidth = 2)
 ylims!(axg, -100, 600)
 Legend(geo[1, 2], axg; framevisible = false)
+# inset at the top left: the terminus, 0 to 20 m, where the ice is 1 m thick
+xt = range(0.0, 20.0, length = 101)
+zt = [6 * (sqrt(x + 5000.0) - sqrt(5000.0)) + 1 for x in xt]
+axt = Axis(geo[1, 1]; width = Relative(0.2), height = Relative(0.26), halign = 0.15, valign = 0.95, xticks = 0:10:20, yticks = 0:1:2, xlabelsize = 11, ylabelsize = 11, xticklabelsize = 10, yticklabelsize = 10, xlabelpadding = 0,
+           xgridvisible = false, ygridvisible = false,
+           xlabel = L"x\ [\mathrm{m}]", ylabel = L"z\ [\mathrm{m}]",
+           xtickformat = vs -> [L"%$(round(Int, v))" for v in vs], ytickformat = vs -> [L"%$(round(Int, v))" for v in vs],
+           backgroundcolor = :white)
+band!(axt, xt, zeros(length(xt)), zt; color = (:lightblue, 0.6))
+lines!(axt, xt, zt; color = :steelblue, linewidth = 2)
+lines!(axt, xt, zeros(length(xt)); color = :saddlebrown, linewidth = 2)
+lines!(axt, [0.0, 0.0], [0.0, 1.0]; color = :firebrick, linewidth = 4)
+text!(axt, 1.0, 0.5; text = L"1\ \mathrm{m}", align = (:left, :center), fontsize = 12, color = :firebrick)
+xlims!(axt, -1, 20); ylims!(axt, -0.3, 2.5)
 geo
 
 #=
 ## 5. Parameters
-`ModelParameters(; ...)`, every field has a default. The ones that change results most:
-* `omega = 1e-3`  laminar-turbulent transition (Sommers et al. 2018, Table 2)
-* `br = 0.1`, `lr = 2.0`  bed-bump height and spacing [m]; `br = 0` switches opening by sliding off
-* `ct = 7.5e-8`  pressure-melting coefficient; `0` drops the sensible-heat term (as ISSM's SHAKTI does)
-* `b_min = 1e-6`  minimum gap height. On the default (unfilled) sheet it is a minimum cavity size, not only a numerical floor: where the melt cannot fill a gap of `b_min`, the gap stays partly empty at `p_w = 0` and `N = p_o`. Drang Drung drains this way at `b_min = 1e-3` (mean `N` 2.38 MPa against 0.63 MPa at `1e-6`), from a cold start and from the wet `1e-6` state alike. Keep it well below the initial `b`
-* `b_max = Inf`  upper clamp; ISSM's SHAKTI uses `1.0`. A finite value hides a gap runaway, `Inf` lets `check_gap_height` report it
-* `N_min = -Inf`, `N_max = Inf`  clamps of `N`; off, `IceUplift` (step 7) is the physical bound
-* `e_v = 0`  englacial void ratio; `0` elliptic head equation, `> 0` parabolic (the head stores englacial water, see the [Parabolic scheme](@ref ParabolicScheme) page)
-* `outflow_only_land = true`, `outflow_only_ocean = true`  outlets let water out, never in; `false` for tidal intrusion
-* `b_c = 0`  creep cutoff length (SUHMO); non-zero selects `CreepCutoff`. Dataset-dependent runaways: opt in with care
-* `T_freeze = -1.0`, `T_hysteresis = 0.5`  [K] used by `update_frozen_mask!` (step 12): a cell freezes when its basal temperature relative to pressure melting drops below `T_freeze` and thaws at `T_freeze + T_hysteresis`; `0` hysteresis gives one threshold, at which a cell can flicker
-* `mdot_includes_G`, `_frictional`, `_potential`, `_sensible`, `_qT` (all `true`)  switch one term of the melt rate off: geothermal flux, frictional heating, potential-energy dissipation, sensible heat, conductive heat into the ice
-* `limit_freeze_on = true`  floors the melt rate at the freeze-on the gap can absorb this step (`freeze_on_capacity!`, step 12), so freezing never takes `b` below `b_min` or more water than a cell holds; `false` lets the melt rate freeze as much as the energy balance asks
-* Constants, SI, rarely changed: `rho_w = 1000`, `rho_sw = 1027` (sea water, for the `OCEAN` pressure), `rho_i = 910`, `g = 9.81`, `nu = 1.787e-6` (water viscosity), `n = 3` (Glen's exponent), `L = 334e3` (latent heat), `cw = 4.22e3` (water heat capacity), `p_atm = 0` (the pressure of `LAND` outlets)
+`ModelParameters(; ...)`, every field has a default. All of them:
+
+| Variable | Units | Value | Comment |
+|:---------|:------|:------|:--------|
+| `rho_w` | kg/m3 | `1000` | density of fresh water |
+| `rho_sw` | kg/m3 | `1027` | density of sea water, sets the pressure at `OCEAN` outlets |
+| `rho_i` | kg/m3 | `910` | density of ice |
+| `g` | m/s2 | `9.81` | gravitational acceleration |
+| `nu` | m2/s | `1.787e-6` | kinematic viscosity of water |
+| `n` | - | `3` | Glen's flow-law exponent |
+| `omega` | - | `1e-3` | laminar-turbulent transition parameter, [Sommers2018](@cite) Table 2; it sets the constitutive law, so changing it changes results |
+| `L` | J/kg | `334e3` | latent heat of fusion |
+| `br` | m | `0.1` | bed-bump height ([Sommers2018](@cite)); `0` switches opening by sliding off |
+| `lr` | m | `2.0` | bed-bump spacing ([Sommers2018](@cite)) |
+| `b_c` | m | `0` | creep cutoff length of [Felden2023](@cite) (Suhmo), Eq. 7. `0` selects `StandardCreep` (`l_c = b`); non-zero selects `CreepCutoff`. It is independent of `diffusion_scheme` (step 8): it works with or without `WithDiffusion`. Dataset-dependent gap runaways are known, see the `CreepCutoff` docstring |
+| `ct` | K/Pa | `7.5e-8` | change of the pressure-melting point with pressure; `0` drops the sensible-heat term the way ISSM's Shakti does (use `mdot_includes_sensible = false` for that instead) |
+| `cw` | J/(kg K) | `4.22e3` | heat capacity of water |
+| `p_atm` | Pa | `0` | pressure at `LAND` outlets (gauge) |
+| `b_min` | m | `1e-6` | minimum gap height. On the default (unfilled) sheet it is a minimum cavity size, not only a numerical floor: where the melt cannot fill a gap of `b_min`, the gap stays partly empty at `p_w = 0` and `N = p_o`. Must be above `0` so `K` and the creep closure do not vanish |
+| `b_max` | m | `Inf` | upper clamp of the gap height; ISSM's Shakti uses `1.0`. A finite value hides a gap runaway, `Inf` lets `check_gap_height` report it |
+| `N_min` | Pa | `-Inf` | lower clamp of `N`; off. On the default sheet `IceUplift` (step 7, [Wells2026](@cite)) already bounds `N >= 0` physically; a value `> 0` is refused with it |
+| `N_max` | Pa | `Inf` | upper clamp of `N`; off. On the default sheet `UnfilledCavities` (step 7, [Wells2026](@cite)) already bounds `N <= p_o` (`p_w >= 0`); a finite value is refused with it |
+| `e_v` | - | `0` | englacial void ratio ([Sommers2018](@cite) Eq. 13); `0` elliptic head equation, `> 0` parabolic, see the [Parabolic scheme](@ref ParabolicScheme) page |
+| `T_freeze` | K | `-1.0` | `update_frozen_mask!` (step 12) freezes a cell when its basal temperature relative to pressure melting drops below this |
+| `T_hysteresis` | K | `0.5` | a frozen cell thaws at `T_freeze + T_hysteresis`; `0` gives one threshold, at which a cell might flicker |
+| `mdot_includes_G` | - | `true` | melt rate includes the geothermal flux |
+| `mdot_includes_frictional` | - | `true` | melt rate includes frictional heating |
+| `mdot_includes_potential` | - | `true` | melt rate includes potential-energy dissipation |
+| `mdot_includes_sensible` | - | `true` | melt rate includes the sensible-heat term |
+| `mdot_includes_qT` | - | `true` | melt rate includes the conductive heat into the ice |
+| `limit_freeze_on` | - | `true` | floors the melt rate at the freeze-on the gap can absorb this step (`freeze_on_capacity!`, step 12), so freezing never takes `b` below `b_min` or more water than a cell holds; `false` lets the melt rate freeze as much as the energy balance asks |
+| `outflow_only_land` | - | `true` | `LAND` outlets let water out, never in |
+| `outflow_only_ocean` | - | `true` | the same for `OCEAN` outlets; `false` could help to model tidal intrusion |
 =#
-p = ModelParameters()
+p = ModelParameters();
 
 #=
 ## 6. Sliding law and melt input
@@ -140,7 +179,7 @@ a bed under water above overburden carries no shear. Some rows show one construc
 | Linear combination | ``\dfrac{C_{\max} N \xi + C^2 u^m}{1 + \xi}``, ``\xi = \alpha u / N^n`` | `LinearCombinationSlidingLaw(grid, C, C_max, alpha; m = 1/3, n = 3)` | [McArthur2026](@citet) |
 | Gagliardini | ``C N \left(\dfrac{\chi}{1 + \alpha \chi^q}\right)^{1/n}``, ``\chi = \dfrac{u}{C^n N^n A_s}``, ``\alpha = \dfrac{(q-1)^{q-1}}{q^q}`` | `GagliardiniSlidingLaw(grid, C, A_s; q = 1, n = 3)` | [Gagliardini2007](@citet) |
 | Regularized Coulomb, Shakti's (Gagliardini at ``q = 1``, ``C^n A_s = \lambda``) | ``C N \left(\dfrac{u}{u + N^n \lambda}\right)^{1/n}``, ``\lambda = 1.5 A`` | `RegularizedCoulombSlidingLaw(C)`, `RegularizedCoulombFieldSlidingLaw(grid, C)` | |
-| Regularized Coulomb, threshold speed | ``C N \left(\dfrac{u}{u + u_0}\right)^q`` | `RegularizedCoulombV0SlidingLaw(grid, C, u0; q = 1/3)` | Joughin et al. (2019), [Kazmierczak2024](@citet) |
+| Regularized Coulomb, threshold speed | ``C N \left(\dfrac{u}{u + u_0}\right)^q`` | `RegularizedCoulombV0SlidingLaw(grid, C, u0; q = 1/3)` | [Joughin2019](@citet), [Kazmierczak2024](@citet) |
 | Till slip law | ``N \tan\phi \left(\dfrac{u}{u + u_t}\right)^{1/p}`` | `RegularizedCoulombV0SlidingLaw(grid, tan(phi), u_t; q = 1/p)` | [ZoetIverson2020](@citet) |
 | Hard-bed slip law | ``C N \left(\dfrac{u}{u + (K N)^m}\right)^{1/m}`` | `HelanowSlidingLaw(grid, C, K; m = 3)` | [Helanow2021](@citet) |
 | Regelation and enhanced creep | ``u = A_R \tau_b + A_C \tau_b^n``, solved for ``\tau_b`` | `RegelationCreepSlidingLaw(grid, A_R, A_C; n = 3)` | [Weertman1957](@citet), [Nye1969](@citet), [Kamb1970](@citet) |
@@ -150,62 +189,187 @@ Speeds (`u0`, `u_t`) are in m/s, like `ub_x`. `FunctionSlidingLaw` takes any mag
 plain function or a closure over plain numbers.
 
 ### Melt input
+The melt input is the water that enters the bed from above, such as surface melt reaching the bed or moulins
+(`ieb`, step 4 [m/s]). It is a new input at the start of every step and is added to whatever a coupled model sets with
+`set_ieb_external!` (step 12).
 
-Water from above:
-* `ConstantMeltInput()`  the `ieb` of step 4, unchanged
-* `SeasonalMeltInput(; t_start, t_end, amplitude, offset, i_min)`  Sommers et al. (2018) Sect. 3.3, see the [Seasonal melt](@ref SeasonalMeltInput) page
-* `GaussianMoulinMeltInput(grid, x0, y0, sigma, Q_max, ramp_duration)`  one moulin [m3/s], ramped up
-* a coupled model adds its own with `set_ieb_external!` (step 12)
+| Melt input | Constructor | Inputs |
+|:-----------|:------------|:-------|
+| Constant | `ConstantMeltInput()` | none: the `ieb` array of step 4 is used unchanged for the whole run |
+| Seasonal | `SeasonalMeltInput(; t_start, t_end, amplitude, offset, i_min)` | see below |
+| One moulin | `GaussianMoulinMeltInput(grid, x0, y0, sigma, Q_max, ramp_duration)` | see below |
+
+`SeasonalMeltInput` is the seasonal experiment of [Sommers2018](@cite) (Sect. 3.3) on the SHMIP geometry
+[deFleurian2018](@cite); see the [Seasonal melt](@ref SeasonalMeltInput) page. The input is the same in every cell. With the
+year fraction ``f`` (0 to 1, repeating every year), it is ``i_\min`` outside the melt window and
+``i = \mathrm{offset} - \mathrm{amplitude}\,\cos\left(2\pi (f - t_\mathrm{start}) / (t_\mathrm{end} - t_\mathrm{start})\right)``
+inside it, which rises from ``i_\min`` to a peak and falls back.
+
+| Input | Units | Default | Meaning |
+|:------|:------|:--------|:--------|
+| `t_start` | year fraction | `0.4` | start of the melt window (day 146) |
+| `t_end` | year fraction | `0.7` | end of the melt window (day 256) |
+| `amplitude` | m/a | `492.75` | amplitude of the cosine |
+| `offset` | m/a | `493.75` | mean of the cosine; the peak is `offset + amplitude` (986.5 m/a) |
+| `i_min` | m/a | `1.0` | input outside the window; the defaults make the window start and end at this value too |
+
+`GaussianMoulinMeltInput` is one moulin, as in the channel test of [Felden2023](@cite) (Sect. 4.2): a fixed Gaussian spread
+of the discharge over the cells around the moulin, which is ramped up linearly in time and then held. The width of the
+Gaussian and the linear shape of the ramp are choices of this package, not of the paper.
+
+| Input | Units | Meaning |
+|:------|:------|:--------|
+| `grid` | - | the grid of step 2 |
+| `x0`, `y0` | m | position of the moulin, in the coordinates of `grid.x`, `grid.y` |
+| `sigma` | m | standard deviation of the Gaussian footprint; keep it small against the domain, because the footprint is normalised so that it integrates to 1 over the grid |
+| `Q_max` | m3/s | the discharge of the moulin once the ramp is complete |
+| `ramp_duration` | s | time over which the discharge rises linearly from zero to `Q_max` |
 =#
 sl = RegularizedCoulombSlidingLaw(0.25)
 mi = ConstantMeltInput()
+# alternatives: mi = SeasonalMeltInput(), or mi = GaussianMoulinMeltInput(grid, 10e3, 2.5e3, 200.0, 1.0, 30 * 86400.0)
 
+# The `State` holds every field of the model. `set_initial_conditions!` fills it from the grid, the parameters, the sliding law, the mask and the inputs of step 4.
 state = State(grid)
-set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
+set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y);
 
 #=
 ## 7. The sheet
-The defaults are the GlaDS-2 sheet. Each keyword of `Simulation` has an opt-out:
-* `cavity_filling = UnfilledCavities()` (default)  a head below the bed empties the cavity, `p_w >= 0`
-  * `FilledCavities()`  SHAKTI's always-full gap; `p_w < 0` (suction) appears where the gap cannot hold the head
-* `uplift = IceUplift()` (default)  water above the overburden lifts the ice, `p_w <= p_o`
-  * `NoUplift()`  SHAKTI's, `N < 0` allowed
-* `hydraulic_potential = SheetTopPotential()` (default)  `q = -K grad(h + b)`
-  * `BedPotential()`  `q = -K grad(h)`, the original equations
-* `k_face_choice = "implicit_upwind"` (default with the two above)  face conductance from the upwind water depth at the end of the step: no time-step limit, needs an LU solver (step 8); on the filled sheet's dry floor with `ExplicitGapScheme` it warns, because the explicit gap update overshoots the water depths the faces conduct by (use the default `FullyImplicitGapScheme`)
-  * `"upwind"`  symmetric matrix (Cholesky, CG, Newton allowed), but stable only for `dt < dx W / (3|q|)` (minutes at 100 m); warns with unfilled cavities or uplift
-  * `"arithmetic"` (default with `FilledCavities`/`NoUplift`), `"harmonic"`  averaged faces; refused with unfilled cavities or uplift, where they create water
-* `gap_coupling = ConsistentGapCoupling()` (default with a Picard solver)  the head equation uses the gap change the gap scheme makes: the water budget closes
-  * `ExplicitGapCoupling()`  SHAKTI's: the head equation assumes `dt*rate(N, b_old)`. Creates water where `b` is clamped (13 times the melt on Drang Drung) and can let the gap run away at `N < 0`; use it only to reproduce SHAKTI/ISSM
+The sheet is the water layer between the ice and the bed. Four choices define it, one per keyword of `Simulation`. The defaults
+are the sheet of GlaDS-2 [Wells2026](@cite); each has an opt-out that gives Shakti's sheet [Sommers2018](@cite).
+
+| Keyword | Default (GlaDS-2) | Opt-out (Shakti) | What it changes |
+|:--------|:------------------|:-----------------|:----------------|
+| `cavity_filling` | `UnfilledCavities()` | `FilledCavities()` | `UnfilledCavities` lets the gap be only partly filled with water, where ``p_w = 0``. `FilledCavities` assumes the gap is always full, so ``p_w < 0`` (suction) appears where the gap cannot hold the head |
+| `uplift` | `IceUplift()` | `NoUplift()` | `IceUplift` caps the water pressure at the overburden: water above it lifts the ice, so ``N \ge 0``. `NoUplift` lets ``N < 0``. With both defaults ``0 \le p_w \le p_o`` |
+| `hydraulic_potential` | `SheetTopPotential()` | `BedPotential()` | the potential that drives the flux ``q``. `SheetTopPotential`: ``q = -K \nabla (h + b)`` ([Wells2026](@cite) Eq. 7), `BedPotential`: ``q = -K \nabla h``. See below |
+| `gap_coupling` | `ConsistentGapCoupling()` | `ExplicitGapCoupling()` | what the head equation assumes about how far the gap moves during the step. See below |
+
+The stored head ``h`` does not change between the two options, and neither does its definition: it is the bed-referenced
+head ``z_b + p_w/(\rho_w g)`` in a cell whose gap is full (and ``z_b + W - b`` in a partly empty cell, with ``W`` the water
+depth). What changes is the potential whose gradient drives the flux, that is the level of the water:
+
+| Option | Level that drives ``q`` | In a full cell (``W = b``) | In a partly empty cell (``W < b``) |
+|:-------|:------------------------|:---------------------------|:-----------------------------------|
+| `BedPotential` | ``h`` | ``z_b + p_w/(\rho_w g)`` | ``z_b + W - b`` |
+| `SheetTopPotential` | ``h + b`` | ``z_b + p_w/(\rho_w g) + b`` | ``z_b + W`` |
+
+So the top of the water is ``z_b + W`` where the gap is not full, and ``+ b`` and ``+ W`` are the same thing in a full cell,
+where ``W = b``. The code adds ``b`` (held at its start-of-step value) because ``h`` already contains ``W - b`` in the other
+regimes. The same level is used in the dissipation heat, which uses ``q``. Without it, water and its dissipation heat would not
+follow differences in the gap height.
+
+### Face conductance
+The flux between two cells needs the conductance ``K`` on their shared face. `k_face_choice` picks how it is made from the
+two cells. Its default follows from the sheet: `"implicit_upwind"` with `UnfilledCavities` or `IceUplift` (so by default),
+`"arithmetic"` otherwise. In the table, ``W`` is the water depth of a cell [m] (`state.W`), which equals the gap height
+``b`` where the gap is full. The head matrix is the linear system for the head, one row per cell, that the linear solver of
+step 8 solves in every Picard iteration.
+
+| `k_face_choice` | Face value | Head matrix | Time step | Notes |
+|:----------------|:-----------|:------------|:----------|:------|
+| `"implicit_upwind"` | ``K`` of the upwind cell (the one the water flows out of), at the water depth ``W`` of the *end* of the step | non-symmetric: the iteration is Newton's method in ``W`` and adds the derivative of each face flux with respect to the water depth of its upwind cell | any | needs `LUDirectSolver` or `CUDSSDirectSolver` (`:general`) or `BiCGStabIterativeSolver`. With `FilledCavities`, `NoUplift`, `ExplicitGapScheme` (step 9) and the default gap coupling it warns: the explicit gap update overshoots the water depths the faces conduct by, so use `FullyImplicitGapScheme`. The other three choices have no such warning |
+| `"upwind"` | the same, but at the water depth of the *start* of the step | symmetric, so Cholesky and CG are allowed | ``\Delta t < \Delta x\, W / (3 \lvert q \rvert)``, minutes at 100 m | the water depth is then explicit in time. Warns with `UnfilledCavities` or `IceUplift` |
+| `"arithmetic"` | mean of the two cells | symmetric | - | default with `FilledCavities` and `NoUplift`. Refused with `UnfilledCavities` or `IceUplift`, where it creates water |
+| `"harmonic"` | harmonic mean of the two cells, which is lower than the arithmetic mean where one cell has a small ``K`` | symmetric | - | same restriction as `"arithmetic"` |
+
+### Gap coupling and the water budget
+Each step solves the head equation and then moves the gap with the gap scheme (step 9). The head equation contains the change of the
+gap, which has not been computed yet, so it has to assume it. The *water budget* is the bookkeeping of the water: in a step,
+the water stored in the sheet changes by the input minus what leaves through the outlets. The budget *closes* when this holds
+to solver tolerance. `water_created(sim)` (step 11) reports the difference.
+* `ConsistentGapCoupling()` (default with a Picard solver): the head equation assumes the change the gap scheme itself makes. The
+  head equation and the gap then store the same water, and the budget closes at any time step.
+* `ExplicitGapCoupling()`: the head equation assumes the gap changes by ``\Delta t \cdot \mathrm{rate}(N, b_\mathrm{old})``, as in
+  Shakti [Sommers2018](@cite). When creep is fast (``\Delta t\, A N^3 > 1``) the gap scheme moves the gap by less than the head
+  equation assumed, and the difference is created water. At ``N < 0`` the gap can also run away. Use it only to reproduce Shakti or ISSM.
+
+The [Gap coupling](@ref GapCoupling) page runs both on this tutorial's glacier and shows the created water against the time step.
+
+### Using the sheet in the code
+`sheet` takes a `Sheet`, a bundle of the four choices. `GlaDS2Sheet()` is the default, so nothing needs to be passed for it:
+```julia
+sheet = GlaDS2Sheet()     # UnfilledCavities, IceUplift, SheetTopPotential, ConsistentGapCoupling
+sheet = ShaktiSheet()     # FilledCavities, NoUplift, SheetTopPotential, ConsistentGapCoupling
+sheet = ShaktiSheet(original = true)   # FilledCavities, NoUplift, BedPotential, ExplicitGapCoupling
+sim = Simulation(grid, state, nsteps, dt, p, mi, sl; ps = ps, sheet = sheet)
+```
+`ShaktiSheet(original = true)` already contains `BedPotential()` and `ExplicitGapCoupling()`: nothing has to be passed on top of it.
+It reproduces the equations of Shakti bit for bit. A keyword passed to `Simulation` replaces the field of `sheet` it names, so one
+choice can be changed without building a new sheet:
+```julia
+sim = Simulation(grid, state, nsteps, dt, p, mi, sl; ps = ps, sheet = ShaktiSheet(), hydraulic_potential = BedPotential())
+sim = Simulation(grid, state, nsteps, dt, p, mi, sl; ps = ps, cavity_filling = FilledCavities(), uplift = NoUplift())   # the GlaDS-2 sheet with two fields replaced
+sim = Simulation(grid, state, nsteps, dt, p, mi, sl; ps = ps, k_face_choice = "upwind")
+```
 
 Which to choose:
-* default: physically bounded `p_w`, closed budget, large steps (hours to days)
-* SHAKTI's sheet: `sheet = ShaktiSheet()` (the same as `cavity_filling = FilledCavities(), uplift = NoUplift()`), and Cholesky is allowed
-* the original equations bit for bit: `sheet = ShaktiSheet(original = true)` (also `hydraulic_potential = BedPotential(), gap_coupling = ExplicitGapCoupling()`)
-* any keyword above overrides the field of the `sheet` it names (`GlaDS2Sheet()` by default)
+* default: bounded ``p_w``, a closed water budget, large steps (hours to days)
+* Shakti's sheet: `ShaktiSheet()`, with which Cholesky and CG are allowed
+* the original equations bit for bit: `ShaktiSheet(original = true)`
 =#
+sheet = GlaDS2Sheet()
 
 #=
 ## 8. Solvers
-Head solve, `ps`, for any `e_v`:
-* `PicardSolver(iters, tol, ls, grid; alpha = nothing, atol = 0)`  fixed-point iteration; `alpha < 1` under-relaxes a stalling solve, `atol > 0` [m] replaces the relative test
+The head equation is nonlinear, and a Picard iteration solves it: each iteration freezes the coefficients, solves a linear system
+for the head with the linear solver and repeats until the head stops changing. Both objects are created explicitly:
+```julia
+ls = LUDirectSolver(grid)                       # linear solver
+ps = PicardSolver(200, 1e-6, ls, grid)           # Picard solver, passed to Simulation as ps = ps
+```
+`PicardSolver(iters, tol, ls, grid; alpha, atol, check_every)` works for any `e_v` (englacial storage), zero or not:
 
-Linear solver `ls`:
-* `LUDirectSolver(grid)`  UMFPACK LU, CPU; the default sheet's matrix is non-symmetric
-* `CUDSSDirectSolver(grid)` (`structure = :general`, the default)  the same on a GPU node (fields stay on the CPU); the fastest on large grids
-* `CholeskyDirectSolver(grid)`, `CUDSSDirectSolver(grid; structure = :spd)`  symmetric matrices only: SHAKTI's sheet or `"upwind"`
-* `CGIterativeSolver(grid, SparseAssembledLinearSystem; amg = true)`  symmetric only, CPU
-* `CGIterativeSolver(grid, MatrixFreeLinearSystem)`  symmetric only, matrix-free with the same multigrid preconditioner, GPU-resident: about 0.07 s per quiet step on an A100 at 800 x 200 and 0.08 s at 1600 x 400 (`CUDSSDirectSolver(grid; structure = :spd)`: 0.10 s and 0.24 s); `multigrid = false` gives Jacobi
-* `BiCGStabIterativeSolver(grid)`  matrix-free with a multigrid preconditioner, GPU-resident: the default sheet with fields on the GPU, about 0.2 s per step on an A100 from 800 x 200 to 1600 x 400 cells (`CUDSSDirectSolver` is faster on smaller grids, slower on larger ones)
+| Argument | Default | Meaning |
+|:---------|:--------|:--------|
+| `iters` | - | the largest number of Picard iterations per step. A step that does not converge within it is counted in `unconverged` (step 11) and warns |
+| `tol` | - | relative tolerance: the iteration stops when the largest head change of an iteration, divided by the largest head, is below `tol` |
+| `ls` | - | the linear solver of the table below |
+| `grid` | - | the grid of step 2 |
+| `alpha` | `nothing` | under-relaxation in `(0, 1]`. The new head is `alpha` times the solve plus `1 - alpha` times the previous iterate. Use `alpha < 1` when the iteration stalls or oscillates; it needs more iterations. `nothing` is no relaxation |
+| `atol` | `0` | absolute tolerance [m of head]. If `> 0` it replaces `tol`: stops when the largest head change is below `atol`. Useful because the relative test depends on the elevation of the glacier, about 4.5 km on Drang Drung |
+| `check_every` | `1` | test convergence every this many iterations. Each test needs a GPU-to-CPU transfer, so a larger value can save time on a GPU |
 
-`Simulation` refuses Cholesky and CG with the default sheet, and names the opt-outs.
+### Linear solvers
+`ls` solves the linear system of one iteration. Which are possible depends on whether the head matrix is symmetric, which
+step 7 gives per `k_face_choice`: the default sheet's matrix is not symmetric, Shakti's sheet's is. `Simulation` refuses Cholesky
+and CG with the default sheet and names the opt-outs.
+
+| Constructor | Method | Runs on | Matrix | Notes |
+|:------------|:-------|:--------|:-------|:------|
+| `LUDirectSolver(grid)` | sparse LU (UMFPACK), a direct method | CPU | any | the default choice for the default sheet |
+| `CUDSSDirectSolver(grid)` (`structure = :general`) | sparse LU with NVIDIA cuDSS | the matrix is factorised on a GPU, the fields and the rest of the model stay on the CPU | any | the same method as `LUDirectSolver`, with the factorisation on the GPU, for a node that has one. The fastest on large grids |
+| `CholeskyDirectSolver(grid)` | sparse Cholesky, a direct method | CPU | symmetric | Shakti's sheet or `"upwind"` |
+| `CUDSSDirectSolver(grid; structure = :spd)` | Cholesky with cuDSS | factorised on a GPU, as above | symmetric | |
+| `CGIterativeSolver(grid, SparseAssembledLinearSystem; ...)` | conjugate gradients on the assembled sparse matrix | CPU | symmetric | preconditioners below |
+| `CGIterativeSolver(grid, MatrixFreeLinearSystem; ...)` | conjugate gradients without assembling the matrix | CPU or GPU, all fields on the GPU | symmetric | about 0.07 s per quiet step on an A100 at 800 x 200 and 0.08 s at 1600 x 400 (`CUDSSDirectSolver(grid; structure = :spd)`: 0.10 s and 0.24 s) |
+| `BiCGStabIterativeSolver(grid; ...)` | BiCGStab (a Krylov method for non-symmetric matrices), matrix-free | CPU or GPU, all fields on the GPU | any | the default sheet with the fields on a GPU: about 0.2 s per step on an A100 from 800 x 200 to 1600 x 400 cells (`CUDSSDirectSolver` is faster on smaller grids, slower on larger ones) |
+
+### Preconditioners
+An iterative solver needs a preconditioner: an approximate inverse of the matrix that makes it converge in few iterations. A direct solver has none. The
+choices are made when the solver is built, by keywords:
+
+| Solver | Keyword | Default | Preconditioner |
+|:-------|:--------|:--------|:---------------|
+| `CGIterativeSolver(grid, SparseAssembledLinearSystem)` | `amg = true` | on | algebraic multigrid (Ruge-Stuben, AlgebraicMultigrid.jl): near-constant iteration count as the grid grows. CPU only |
+| | `amg_refresh_every = 1` | `1` | rebuild the multigrid hierarchy every this many solves; a larger value saves time when the matrix changes slowly |
+| | `chebyshev_degree = k` | `nothing` | Chebyshev polynomial of degree `k` instead of `amg` (set `amg = false`); it needs no dot products. Its optional keywords are `chebyshev_nsteps_estimate = 15` (Lanczos steps), `chebyshev_bounds = :gershgorin` (or `:lanczos`) for the eigenvalue bounds and `chebyshev_eig_ratio = 30` |
+| | `amg = false` with no `chebyshev_degree` | | Jacobi: the inverse of the diagonal. Cheapest per iteration, but the iteration count grows with the grid |
+| `CGIterativeSolver(grid, MatrixFreeLinearSystem)` and `BiCGStabIterativeSolver(grid)` | `multigrid = true` | on | aggregation multigrid, run on the GPU: 2 x 2 cells are merged per level. It holds the iteration count at 5 to 12 from 80 x 20 to 1600 x 400 cells |
+| | `nsmooth = 2` | `2` | Gauss-Seidel smoothing sweeps before and after each coarse correction |
+| | `coarse_scale = 2.0` | `2.0` | scale of the coarse correction; above 1 it compensates for the coarse grid undershooting smooth errors. The defaults gave the fewest iterations |
+| | `multigrid = false` | | Jacobi. With `CGIterativeSolver` you can use `chebyshev_degree = k` instead (not together with `multigrid`). On a GPU, Jacobi was faster than Chebyshev in the sizes tested |
+
+`BiCGStabIterativeSolver` also takes `rtol` and `atol` (the tolerances of its own residual, default `sqrt(eps)`) and `itmax` (the
+iteration cap, `0` is Krylov.jl's default of twice the number of cells). A solve that stops before its tolerance warns.
 
 Other solver keywords of `Simulation`:
 * `head_extrapolation_order = 1` (default)  the first guess of each head solve is the head extrapolated in time from the last converged steps (`1` linear, `2` quadratic): fewer Picard iterations, the same answer. `0` starts from the previous head
 * `cell_N_clamping = NoCellNClamping()` (default)  `CellNClamping(Dict((i, j) => (nmin, nmax)))` clamps `N` in the named cells only, on top of the global `N_min`/`N_max` of step 5: a patch for a few cells that misbehave, leaving the rest of the domain free to reach low or negative `N`
-* `diffusion_scheme = NoDiffusion()` (default)  `WithDiffusion(ls)` adds SUHMO's channel-wall diffusion of the gap. It solves a second linear system, for the gap, so `ls` is a second solver instance next to the head solver's; see the [SUHMO page](@ref SUHMO)
+* `diffusion_scheme = NoDiffusion()` (default)  `WithDiffusion(ls2)` adds Suhmo's channel-wall diffusion of the gap [Felden2023](@cite). It solves a second linear system, for the gap, so `ls2` is a second solver instance next to the head solver's `ls`; see the [Suhmo page](@ref SUHMO)
 =#
-ps = PicardSolver(200, 1e-6, LUDirectSolver(grid), grid)
+ls = LUDirectSolver(grid)
+ps = PicardSolver(200, 1e-6, ls, grid);
 
 #=
 ## 9. Gap scheme and time step
@@ -219,6 +383,8 @@ Time step:
 * `FixedTimeStep()` (default)  `dt` every step; with the default sheet hours to days work
 * `AdaptiveTimeStep(grid, state; dt_min, dt_max, target_time)`  `dt` halved when the head solve does not converge (the step is retried) and grown after fast steps; `safety_factor` adds an optional cap from the creep and sliding rates; `run!` stops at `target_time`
 =#
+gs = FullyImplicitGapScheme()
+ts = FixedTimeStep()
 dt, nsteps = 86400.0, 365
 
 #=
@@ -237,8 +403,9 @@ the totals of the water budget (`sim.wb`, step 11), so a resumed run continues t
 checkpoint written before any of these were saved restarts that part from zero.
 =#
 path = joinpath(mktempdir(), "tutorial.nc")
-sim = Simulation(grid, state, nsteps, floattype(dt), p, mi, sl; ps = ps,
-                 observer = IOObserver(["N", "b", "Re", "po"], 0:nsteps, NetCDFFileWriter(), path))
+obs = IOObserver(["N", "b", "Re", "po"], 0:nsteps, NetCDFFileWriter(), path)
+sim = Simulation(grid, state, nsteps, floattype(dt), p, mi, sl; ps = ps, sheet = sheet, gap_scheme = gs,
+                 timestep_scheme = ts, observer = obs)
 
 #=
 ## 11. Run and check

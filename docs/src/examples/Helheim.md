@@ -1,9 +1,9 @@
 # [Helheim Glacier](@id Helheim)
 
-The winter base state of Helheim Glacier, East Greenland, from the ISSM SHAKTI setup of
+The winter base state of Helheim Glacier, East Greenland, from the ISSM Shakti setup of
 [Sommers2023](@cite): their mesh, geometry, ice hardness and inverted friction coefficient,
 rasterized onto a 500 m grid. 90 days of 30-minute steps, with the defaults and with the original
-SHAKTI equations. The loader is `load_helheim` in `docs/make_figures.jl`, which also makes the figure;
+Shakti equations. The loader is `load_helheim` in `docs/make_figures.jl`, which also makes the figure;
 the input files are in `docs/src/examples/input/Helheim`.
 
 * Mask: the mesh interior is `GROUNDED`, the rest `OTHER_BASIN`; boundary cells along the calving
@@ -42,7 +42,7 @@ gap_coupling = ExplicitGapCoupling()` to `Simulation`.
 | Run | Grid | Grounded | Steps | `N/p_o` | Mean `N` | Max `b` | Max `Re` |
 |---|---|---|---|---|---|---|---|
 | defaults | 134 x 104 | 8 199 | 4320 x 30 min | 0 to 1 | 0.74 MPa | 0.29 m | 3 300 |
-| SHAKTI | 134 x 104 | 8 199 | 4320 x 30 min | -0.02 to 31.6 | 0.84 MPa | 0.29 m | 4 300 |
+| Shakti | 134 x 104 | 8 199 | 4320 x 30 min | -0.02 to 31.6 | 0.84 MPa | 0.29 m | 4 300 |
 
 Wall times are on the [Performance](@ref) page.
 

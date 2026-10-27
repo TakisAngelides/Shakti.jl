@@ -1,8 +1,8 @@
 # [Drang Drung Glacier](@id DrangDrung)
 
 The winter hydrology of Drang Drung Glacier, a valley glacier in the western Himalaya, from the
-ISSM SHAKTI run of [Thota2026](@cite), rasterized onto a 100 m grid. One year of 1-hour steps,
-the length of the ISSM run, with the defaults and with the original SHAKTI equations, against
+ISSM Shakti run of [Thota2026](@cite), rasterized onto a 100 m grid. One year of 1-hour steps,
+the length of the ISSM run, with the defaults and with the original Shakti equations, against
 ISSM's own solution. The loaders are `load_drangdrung` and `load_drangdrung_issm` in
 `docs/make_figures.jl`, which also makes the figure; the data is in `test/drangdrung/data_v2`.
 
@@ -45,7 +45,7 @@ The defaults use the default `b_min = 1e-6`. Grid 102 x 200 with 2 695 grounded 
 
 ![Drang Drung, day 365](../figures/DrangDrung.png)
 
-Columns: ISSM, the ISSM reproduction (SHAKTI equations) and the defaults.
+Columns: ISSM, the ISSM reproduction (Shakti equations) and the defaults.
 
 * The ISSM reproduction matches ISSM's effective pressure, including the cells where `p_w < 0`
   (`N/p_o > 1`) along the margins.

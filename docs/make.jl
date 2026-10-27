@@ -11,7 +11,7 @@ bib = CitationBibliography(joinpath(@__DIR__, "src", "refs.bib"); style = :autho
 # Greenland, Antarctica) are plain markdown with figures made by make_figures.jl.
 Literate.markdown(joinpath(@__DIR__, "src", "tutorial.jl"), joinpath(@__DIR__, "src"); config = Dict("credit" => false))
 
-literate_examples = ["SeasonalMeltInput", "ParabolicScheme", "SUHMO"]
+literate_examples = ["SeasonalMeltInput", "ParabolicScheme", "SUHMO", "GapCoupling"]
 for example in literate_examples
     Literate.markdown(joinpath(@__DIR__, "src", "examples", "$example.jl"), joinpath(@__DIR__, "src", "examples");
                       config = Dict("credit" => false))

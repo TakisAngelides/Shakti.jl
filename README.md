@@ -17,7 +17,7 @@ model can be selected with keywords, shown in the
 [tutorial](https://TakisAngelides.github.io/Shakti.jl/dev/tutorial/) and run in the
 [Helheim](https://TakisAngelides.github.io/Shakti.jl/dev/examples/Helheim/) and
 [Drang Drung](https://TakisAngelides.github.io/Shakti.jl/dev/examples/DrangDrung/) examples.
-Channel-wall diffusion from SUHMO is available as an option.
+Channel-wall diffusion from Suhmo is available as an option.
 
 ## Aim
 
