@@ -49,6 +49,7 @@ makedocs(
     draft = false,
     plugins = [bib],
     checkdocs = :exports,
+    checkdocs_ignored_modules = [Shakti.Data],   # ParallelStencil's generated submodule, not ours
     warnonly = true,
 )
 
