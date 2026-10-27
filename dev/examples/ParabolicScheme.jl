@@ -34,7 +34,8 @@ state0 = State(grid)
 set_initial_conditions!(state0, grid, ModelParameters(), sl, mask, fill(5e-25, nx, ny), zeros(nx, ny), zs,
                         fill(0.01, nx, ny), fill(0.05, nx, ny), fill(1e-6, nx + 1, ny), zeros(nx, ny + 1),
                         fill(1.0 / spy, nx, ny), zeros(nx + 1, ny), zeros(nx, ny + 1))
-ps = PicardSolver(200, 1e-6, LUDirectSolver(grid), grid)
+max_iter, tol = 200, 1e-6   # Picard iterations per step and tolerance
+ps = PicardSolver(max_iter, tol, LUDirectSolver(grid), grid)
 run!(Simulation(grid, state0, 100, floattype(86400.0), ModelParameters(), ConstantMeltInput(), sl; ps = ps))
 
 #=
@@ -49,7 +50,7 @@ runs = map((0.0, 1e-4, 1e-3)) do e_v
     set_ieb_external!(st, fill(9.0 / spy, nx, ny))
     p = ModelParameters(e_v = e_v)
     sim = Simulation(grid, st, nsteps, floattype(dt), p, ConstantMeltInput(), sl;
-                     ps = PicardSolver(200, 1e-6, LUDirectSolver(grid), grid), observer = LiveObserver(["pw", "po"], 0:nsteps))
+                     ps = PicardSolver(max_iter, tol, LUDirectSolver(grid), grid), observer = LiveObserver(["pw", "po"], 0:nsteps))
     run!(sim)
     pw, po = sim.observer.history["pw"], sim.observer.history["po"]
     (e_v = e_v, ratio = [mean(pw[:, :, k][gr] ./ po[:, :, k][gr]) for k in axes(pw, 3)])
