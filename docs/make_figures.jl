@@ -15,7 +15,6 @@ using CairoMakie
 using MAT, NetCDF, JLD2
 using Statistics: mean, quantile, cor
 
-const ROOT = dirname(@__DIR__)
 const FIGS = mkpath(get(ENV, "SHAKTI_FIG_DIR", joinpath(@__DIR__, "src", "figures")))
 const OUT  = mkpath(get(ENV, "SHAKTI_FIG_OUT", joinpath(tempdir(), "shakti_figures")))
 const LS   = get(ENV, "SHAKTI_FIG_LS", "lu")
@@ -189,27 +188,25 @@ end
 
 # Drang Drung: the rasterized v2 data of Thota et al. (2026) (no sliding, no surface input)
 function load_drangdrung(; DX = 100)
-    f = jldopen(joinpath(ROOT, "test", "drangdrung", "data_v2", "DRANGDRUNG$(DX)m_v2.jld2"), "r")
+    f = jldopen(joinpath(@__DIR__, "src", "examples", "input", "DrangDrung", "DRANGDRUNG$(DX)m_v2.jld2"), "r")
     H, zb, A, G, C, mask, xc, yc = f["H"], f["B"], f["A"], f["G"], f["FRIC"], Int.(f["mask"]), f["xc"], f["yc"]
     close(f)
     Nx, Ny = size(H)
     return (; xc, yc, DX = Float64(DX), mask, H, zb, A, G, ub_x = zeros(Nx + 1, Ny), ub_y = zeros(Nx, Ny + 1), C)
 end
 
-# ISSM's own Drang Drung solution (the .mat's last frame) on the same grid: N, gap and Re
+# ISSM's own Drang Drung solution (the last frame of DD_SHAKTI_winter_1yr.mat, kept as its mesh and three fields) on the same grid: N, gap and Re
 function load_drangdrung_issm(xc, yc)
-    md = matread(joinpath(ROOT, "test", "drangdrung", "data_v2", "DD_SHAKTI_winter_1yr.mat"))["md"].d
-    ms = md["mesh"].d
-    ts = md["results"]["TransientSolution"]
-    val(name) = vec(ts.values[findfirst(==(name), ts.names)][1, end])
-    (N,), (b, Re), _ = rasterize(vec(ms["x"]), vec(ms["y"]), Int.(ms["elements"]), xc, yc;
-                                 vertex = (val("EffectivePressure"),), element = (val("HydrologyGapHeight"), val("HydrologyReynolds")))
-    return (; N, b, Re, day = round(Int, only(ts.values[findfirst(==("time"), ts.names)][1, end]) * 365))
+    s = jldopen(joinpath(@__DIR__, "src", "examples", "input", "DrangDrung", "DD_SHAKTI_winter_1yr_last_frame.jld2"), "r") do f
+        (; x = f["x"], y = f["y"], elements = f["elements"], N = f["N"], b = f["b"], Re = f["Re"], time = f["time"])
+    end
+    (N,), (b, Re), _ = rasterize(s.x, s.y, s.elements, xc, yc; vertex = (s.N,), element = (s.b, s.Re))
+    return (; N, b, Re, day = round(Int, s.time * 365))
 end
 
 # Thwaites: the 2 km grid of Kazmierczak et al. (2024), with their inverted friction (regularized Coulomb, constant v0)
 function load_thwaites()
-    dir = joinpath(ROOT, "test", "thwaites", "data")
+    dir = joinpath(@__DIR__, "src", "examples", "input", "Thwaites")
     f = jldopen(joinpath(dir, "THWAITES2km_m3_HAB_toto_trimmed.jld2"), "r")
     H, zb, M, A, G, vx, vy = f["H"], f["B"], f["MASKo"], f["A"], f["G"], f["uxssa"], f["uyssa"]
     close(f)

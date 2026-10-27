@@ -2,7 +2,7 @@
 
 Thwaites Glacier on the 2 km grid of [Kazmierczak2024](@cite), with their inverted friction
 coefficient. The default sheet, one year of 1-day steps. The loader is `load_thwaites` in
-`docs/make_figures.jl`, which also makes the figure.
+`docs/make_figures.jl`, which also makes the figure; the input files are in `docs/src/examples/input/Thwaites`.
 
 * The data's `x` and `y` are swapped so the sea is on the left.
 * Mask: grounded ice from the data, cells with `H = 0` excluded, grounded cells below flotation that
@@ -15,20 +15,47 @@ coefficient. The default sheet, one year of 1-day steps. The loader is `load_thw
 ```julia
 using Shakti
 
-d = load_thwaites()                       # (; xc, yc, DX, mask, H, zb, A, G, ub_x, ub_y, C, v0)
+# Load the data
+d = load_thwaites()
+# d.xc, d.yc     cell-centre coordinates (m)
+# d.DX           grid spacing (m)
+# d.mask         GROUNDED / OCEAN / OTHER_BASIN cell types
+# d.H, d.zb      ice thickness and bed elevation (m)
+# d.A            flow-law parameter (Pa^-3 s^-1)
+# d.G            geothermal heat flux (W m^-2)
+# d.ub_x, d.ub_y sliding speed (m s^-1)
+# d.C            friction coefficient
+# d.v0           regularization speed of the sliding law (m s^-1)
+
+# Grid
 Nx, Ny = size(d.H)
 grid = Grid(Nx, Ny, (Nx - 1) * d.DX, (Ny - 1) * d.DX)
-sl = RegularizedCoulombV0SlidingLaw(grid, d.C, d.v0)
-b = fill(1e-3, Nx, Ny)
 
+# Sliding law
+sl = RegularizedCoulombV0SlidingLaw(grid, d.C, d.v0)
+
+# Model parameters
 p = ModelParameters()                     # defaults
+
+# Initial state: a gap of b0 everywhere, the surface above the gap, no surface input
+b0 = 1e-3                                 # initial gap height (m)
+b  = fill(b0, Nx, Ny)
+zs = d.zb .+ d.H .+ b                     # ice surface elevation (m)
 state = State(grid)
-set_initial_conditions!(state, grid, p, sl, d.mask, d.A, d.zb, d.zb .+ d.H .+ b, b, d.G, d.ub_x, d.ub_y,
+set_initial_conditions!(state, grid, p, sl, d.mask, d.A, d.zb, zs, b, d.G, d.ub_x, d.ub_y,
                         zeros(Nx, Ny), zeros(Nx + 1, Ny), zeros(Nx, Ny + 1))
 
-ps = PicardSolver(500, 1e-6, CUDSSDirectSolver(grid; structure = :general), grid)   # LUDirectSolver(grid) on CPU
-sim = Simulation(grid, state, 365, floattype(86400.0), p, ConstantMeltInput(), sl; ps = ps,
-                 observer = IOObserver(["N", "b", "Re", "po"], [0, 365], NetCDFFileWriter(), "thwaites.nc"))
+# Solver
+max_iter = 500                            # Picard iterations per step
+tol = 1e-6                                # Picard tolerance
+ps = PicardSolver(max_iter, tol, CUDSSDirectSolver(grid; structure = :general), grid)   # LUDirectSolver(grid) on CPU
+
+# Run
+nsteps = 365                              # 1 year
+dt = 86400.0                              # 1 day (s)
+output = ["N", "b", "Re", "po"]           # fields written to file
+observer = IOObserver(output, [0, nsteps], NetCDFFileWriter(), "thwaites.nc")
+sim = Simulation(grid, state, nsteps, floattype(dt), p, ConstantMeltInput(), sl; ps = ps, observer = observer)
 run!(sim)
 ```
 

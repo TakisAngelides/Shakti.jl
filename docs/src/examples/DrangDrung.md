@@ -4,7 +4,7 @@ The winter hydrology of Drang Drung Glacier, a valley glacier in the western Him
 ISSM Shakti run of [Thota2026](@cite), rasterized onto a 100 m grid. One year of 1-hour steps,
 the length of the ISSM run, with the defaults and with the original Shakti equations, against
 ISSM's own solution. The loaders are `load_drangdrung` and `load_drangdrung_issm` in
-`docs/make_figures.jl`, which also makes the figure; the data is in `test/drangdrung/data_v2`.
+`docs/make_figures.jl`, which also makes the figure; the input files are in `docs/src/examples/input/DrangDrung`.
 
 * Geometry, `A`, `G` and the friction coefficient from the ISSM model; no sliding, no surface input.
   The water comes from geothermal melt.
@@ -14,20 +14,46 @@ ISSM's own solution. The loaders are `load_drangdrung` and `load_drangdrung_issm
 ```julia
 using Shakti
 
-d = load_drangdrung()                     # (; xc, yc, DX, mask, H, zb, A, G, ub_x, ub_y, C)
+# Load the data
+d = load_drangdrung()
+# d.xc, d.yc     cell-centre coordinates (m)
+# d.DX           grid spacing (m)
+# d.mask         GROUNDED / OCEAN / OTHER_BASIN cell types
+# d.H, d.zb      ice thickness and bed elevation (m)
+# d.A            flow-law parameter (Pa^-3 s^-1)
+# d.G            geothermal heat flux (W m^-2)
+# d.ub_x, d.ub_y sliding speed (m s^-1)
+# d.C            friction coefficient
+
+# Grid
 Nx, Ny = size(d.H)
 grid = Grid(Nx, Ny, (Nx - 1) * d.DX, (Ny - 1) * d.DX)
-sl = LinearSlidingLaw(grid, d.C)
-b = fill(1e-3, Nx, Ny)
 
-p = ModelParameters(rho_i = 917.0, omega = 1e-3, br = 0.0, lr = 1.0, ct = 0.0)
+# Sliding law
+sl = LinearSlidingLaw(grid, d.C)          # tau_b = C^2 N u_b
+
+# Model parameters
+p = ModelParameters(rho_i = 917.0, omega = 1e-3, br = 0.0, lr = 1.0, ct = 0.0)   # constants of the ISSM run
+
+# Initial state: a gap of b0 everywhere, the surface above the gap, no surface input
+b0 = 1e-3                                 # initial gap height (m)
+b  = fill(b0, Nx, Ny)
+zs = d.zb .+ d.H .+ b                     # ice surface elevation (m)
 state = State(grid)
-set_initial_conditions!(state, grid, p, sl, d.mask, d.A, d.zb, d.zb .+ d.H .+ b, b, d.G, d.ub_x, d.ub_y,
+set_initial_conditions!(state, grid, p, sl, d.mask, d.A, d.zb, zs, b, d.G, d.ub_x, d.ub_y,
                         zeros(Nx, Ny), zeros(Nx + 1, Ny), zeros(Nx, Ny + 1))
 
-ps = PicardSolver(500, 1e-6, CUDSSDirectSolver(grid; structure = :general), grid)   # LUDirectSolver(grid) on CPU
-sim = Simulation(grid, state, 8760, floattype(3600.0), p, ConstantMeltInput(), sl; ps = ps,
-                 observer = IOObserver(["N", "b", "Re", "po"], [0, 8760], NetCDFFileWriter(), "drangdrung.nc"))
+# Solver
+max_iter = 500                            # Picard iterations per step
+tol = 1e-6                                # Picard tolerance
+ps = PicardSolver(max_iter, tol, CUDSSDirectSolver(grid; structure = :general), grid)   # LUDirectSolver(grid) on CPU
+
+# Run
+nsteps = 8760                             # 1 year
+dt = 3600.0                               # 1 hour (s)
+output = ["N", "b", "Re", "po"]           # fields written to file
+observer = IOObserver(output, [0, nsteps], NetCDFFileWriter(), "drangdrung.nc")
+sim = Simulation(grid, state, nsteps, floattype(dt), p, ConstantMeltInput(), sl; ps = ps, observer = observer)
 run!(sim)
 ```
 
