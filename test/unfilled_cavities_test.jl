@@ -226,7 +226,7 @@
             # below min(N_prev, 0) per iteration), so the head stays finite; the first steps may need many iterations. Under
             # implicit_upwind the dry floor had no such limit and the head matrix went singular at step 1 (ARCH-2). With the
             # explicit gap scheme implicit_upwind still diverges (b ~ 1e12 m by step 4): not tested.
-            for gap in (ExplicitGapScheme(), ImplicitGapScheme(), FullyImplicitGapScheme()), kface in ("arithmetic", "implicit_upwind")
+            for gap in (ExplicitGapScheme(), FullyImplicitGapScheme()), kface in ("arithmetic", "implicit_upwind")
               gap isa ExplicitGapScheme && kface == "implicit_upwind" && continue
               @testset "gap $gap, $kface" begin
                 sim = make_sim(FilledCavities(); gap = gap, kface = kface, gcp = ConsistentGapCoupling())
@@ -296,7 +296,7 @@
         end
 
         @testset "water budget closes for every gap scheme (W from the water actually delivered)" begin
-            for gap in (ExplicitGapScheme(), ImplicitGapScheme(), FullyImplicitGapScheme()), stuck in (false, true)
+            for gap in (ExplicitGapScheme(), FullyImplicitGapScheme()), stuck in (false, true)
               @testset "gap $gap, stuck=$stuck" begin
                 sim = make_sim(UnfilledCavities(); stuck = stuck, gap = gap, ieb_scale = 1e-4) # a 3 m^3/s moulin into ice this stiff is a numerical stress test of its own
                 s = sim.state

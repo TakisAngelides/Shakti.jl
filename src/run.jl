@@ -594,7 +594,7 @@ combine diffusion with the local opening/closure terms (closure with `N > 0` and
 opening-by-sliding implicit on the diagonal, melt explicit -- see `b_diffusion_local_terms`,
 `linear_solver.jl`), not one per
 [`AbstractGapScheme`](@ref). Under [`NoDiffusion`](@ref) (the default), behaves exactly as before,
-dispatching on `sim.gs` (`ImplicitGapScheme()`/`ExplicitGapScheme()`/`FullyImplicitGapScheme()`) to
+dispatching on `sim.gs` (`ExplicitGapScheme()`/`FullyImplicitGapScheme()`) to
 [`compute_b!(sim, sim.gs)`](@ref) below.
 
 # Notes
@@ -622,8 +622,7 @@ is gap room, not water mass, and the result is local (no inflow term). Under the
 (`freeze_on_capacity_dry_floor_kernel!`): a gap the update may drain to zero can freeze only the water it holds.
 
 Where each term is evaluated follows the gap scheme in use: [`FullyImplicitGapScheme`](@ref) takes
-opening by sliding and creep at `b_min`, [`ImplicitGapScheme`](@ref) sliding at the old `b` (lagged
-`beta`) and creep at `b_min`, [`ExplicitGapScheme`](@ref) both at the old `b`. Under [`WithDiffusion`](@ref) it follows SUHMO's
+opening by sliding and creep at `b_min`, [`ExplicitGapScheme`](@ref) both at the old `b`. Under [`WithDiffusion`](@ref) it follows SUHMO's
 local terms (`freeze_on_capacity_cell_diffusion`) and ignores the diffusion of `b`, which only
 moves gap volume between grounded cells: `C` is then conservative where `b` is a local minimum and
 generous where it is a local maximum.
@@ -648,8 +647,7 @@ function freeze_on_capacity!(C, sim::Simulation; dt = sim.dt[], water_limited = 
     # of the interval, not on b_min (the end state of a single implicit step), so evaluate them at b.
     subcycled = dt > sim.dt[]
     beta_at_bmin, creep_at_bmin = subcycled ? (false, false) :
-                                  sim.gs isa FullyImplicitGapScheme ? (true, true) :
-                                  sim.gs isa ImplicitGapScheme ? (false, true) : (false, false)
+                                  sim.gs isa FullyImplicitGapScheme ? (true, true) : (false, false)
     @parallel freeze_on_capacity_kernel!(C, s.mask, s.b, s.beta, s.lc, s.abs_ub, s.A_visc, s.N, p.n_minus_1_exp, dt,
                                          p.b_min, s.bump, p.lr, sim.cls, p.b_c, beta_at_bmin, creep_at_bmin, diffusion,
                                          s.W, p.rho_w / p.rho_i, sim.cf isa UnfilledCavities && water_limited)
@@ -672,19 +670,6 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Implicit (backward-Euler) update of `sim.state.b`: implicit on the creep closure term only. Deprecated (removed in 0.3), see
-[`ImplicitGapScheme`](@ref); [`FullyImplicitGapScheme`](@ref) is the default.
-"""
-function compute_b!(sim::Simulation, ::ImplicitGapScheme)
-    dry_floor(sim) && return compute_b_dry_floor!(sim)
-    s, p = sim.state, sim.p
-    @parallel compute_b_implicit_kernel!(s.b, s.mask, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, sim.dt[], p.b_min, p.b_max, sim.cls, p.b_c)
-    return sim
-end
-
-"""
-$(TYPEDSIGNATURES)
-
 Explicit (forward-Euler) update of `sim.state.b`: cheaper per step, but only stable for small enough `sim.dt`.
 """
 function compute_b!(sim::Simulation, ::ExplicitGapScheme)
@@ -699,7 +684,7 @@ $(TYPEDSIGNATURES)
 
 Fully implicit update of `sim.state.b`: both the creep-closure term and the opening-by-sliding
 term are evaluated at the new `b` -- unconditionally stable for any `sim.dt`, regardless of `p.br`.
-Unlike [`ImplicitGapScheme`](@ref), this reads `p.br`/`p.lr` directly instead of `s.beta` (which
+This reads `p.br`/`p.lr` directly instead of `s.beta` (which
 stays lagged by design, see `gap_height.jl`'s module docstring) -- see
 `compute_b_fully_implicit_kernel!` for the closed-form solve (two branches under
 [`StandardCreep`](@ref), four under [`CreepCutoff`](@ref)).
@@ -720,8 +705,6 @@ the same formulas as [`compute_b!`](@ref)'s kernels above (`C = A*|N|^(n-1)*N`),
 """
 @inline gap_update(gu::SchemeGapUpdate{ExplicitGapScheme, CLS}, b, mdot, beta, abs_ub, C, rho_i) where CLS =
     b + gu.dt * (mdot / rho_i + beta * abs_ub - C * creep_length(CLS(), b, gu.b_c, C))
-@inline gap_update(gu::SchemeGapUpdate{ImplicitGapScheme, CLS}, b, mdot, beta, abs_ub, C, rho_i) where CLS =
-    implicit_creep_update(CLS(), b, mdot / rho_i + beta * abs_ub, C, gu.dt, gu.b_c)
 @inline gap_update(gu::SchemeGapUpdate{FullyImplicitGapScheme, CLS}, b, mdot, beta, abs_ub, C, rho_i) where CLS =
     fully_implicit_creep_update(CLS(), b, mdot / rho_i, abs_ub / gu.lr, C, gu.dt, gu.br, gu.b_c)
 

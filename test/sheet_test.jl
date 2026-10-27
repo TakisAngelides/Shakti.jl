@@ -52,33 +52,7 @@
         sim = Simulation(grid, make_state(p), 2, dt, p, ConstantMeltInput(), sl; ps = lu_ps(), observer = LiveObserver(["h", "b_empty"], 0:2))
         run!(sim)
         @test size(sim.observer.history["h"], 3) == 3 && sim.observer.history["h"][:, :, end] == Array(sim.state.h)
-        @test_throws ErrorException Simulation(grid, make_state(p), 1, dt, p, ["h"], ConstantMeltInput(), sl; ps = lu_ps(),
-                                               which_observer = "Live", tracked_times = 0:1, observer = LiveObserver(["h"], 0:1))
         @test_throws ErrorException Simulation(grid, make_state(p), 1, dt, p, ConstantMeltInput(), sl; ps = lu_ps(), observer = LiveObserver(["nope"], 0:1))
-    end
-
-    @testset "the deprecated positional forms warn and run the same as the typed form" begin
-        typed = Simulation(grid, make_state(p), 2, dt, p, ConstantMeltInput(), sl; ps = lu_ps(), gap_scheme = ExplicitGapScheme(),
-                           observer = LiveObserver(["h", "b"], 0:2))
-        named = @test_deprecated r"use Simulation\(grid, state, tsteps, dt, p, mi, sl; gap_scheme = ExplicitGapScheme\(\), observer = LiveObserver\(\[\"h\", \"b\"\], tracked_times\)\)" Simulation(
-                    grid, make_state(p), 2, dt, p, "explicit", ["h", "b"], ConstantMeltInput(), sl; ps = lu_ps(), which_observer = "Live", tracked_times = 0:2)
-        obs_only = @test_deprecated r"use Simulation\(grid, state, tsteps, dt, p, mi, sl; observer = LiveObserver" Simulation(
-                       grid, make_state(p), 2, dt, p, ["h", "b"], ConstantMeltInput(), sl; ps = lu_ps(), gap_scheme = ExplicitGapScheme(),
-                       which_observer = "Live", tracked_times = 0:2)
-        @test options(named) == options(obs_only) == options(typed)
-        @test named.gs isa ExplicitGapScheme && obs_only.gs isa ExplicitGapScheme
-        run!(typed); run!(named); run!(obs_only)
-        @test named.observer.history["h"] == obs_only.observer.history["h"] == typed.observer.history["h"]
-        @test named.observer.history["b"] == typed.observer.history["b"]
-        mktempdir() do dir
-            io = @test_deprecated Simulation(grid, make_state(p), 1, dt, p, ["h"], ConstantMeltInput(), sl; ps = lu_ps(),
-                                             which_observer = "IO", which_file_writer = "CSV", tracked_times = 0:1, path = joinpath(dir, "o.csv"))
-            @test io.observer isa IOObserver{CSVFileWriter} && io.observer.tracked_obs == ["h"]
-        end
-        @test_throws ErrorException Simulation(grid, make_state(p), 1, dt, p, "crank_nicolson", String[], ConstantMeltInput(), sl; ps = lu_ps())
-        @test_throws ErrorException Simulation(grid, make_state(p), 1, dt, p, ["h"], ConstantMeltInput(), sl; ps = lu_ps(), which_observer = "Live")
-        @test_throws ErrorException Simulation(grid, make_state(p), 1, dt, p, ["h"], ConstantMeltInput(), sl; ps = lu_ps(),
-                                               which_observer = "IO", which_file_writer = "XLSX", tracked_times = 0:1, path = "x")
     end
 
     @testset "OPTION_RULES: one table of the refused and warned combinations" begin

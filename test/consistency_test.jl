@@ -95,8 +95,6 @@
             @test Shakti.relax_update(0.01, 1e-7, -1e-14, dt) ≈ Shakti.relax_update(0.01, 1e-7, 0.0, dt) rtol = 1e-8
             # every gap scheme stays finite and positive under deeply negative N with a long step
             for cls in (StandardCreep(), CreepCutoff())
-                b = Shakti.implicit_creep_update(cls, 0.01, 1e-8, -1e-4, 86400.0, 0.05)
-                @test isfinite(b) && b > 0.01
                 b = Shakti.fully_implicit_creep_update(cls, 0.01, 1e-8, 1e-8, -1e-4, 86400.0, 0.1, 0.05)
                 @test isfinite(b) && b > 0.01
             end

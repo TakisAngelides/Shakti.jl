@@ -21,7 +21,7 @@ end
 $(TYPEDSIGNATURES)
 
 How the gap height `b` is time-integrated each timestep -- multiple dispatch on the concrete
-subtype picks between [`ExplicitGapScheme`](@ref), [`ImplicitGapScheme`](@ref), and
+subtype picks between [`ExplicitGapScheme`](@ref) and
 [`FullyImplicitGapScheme`](@ref) (see `compute_b!` in `gap_height.jl`).
 """
 abstract type AbstractGapScheme end
@@ -36,33 +36,14 @@ struct ExplicitGapScheme <: AbstractGapScheme end
 """
 $(TYPEDSIGNATURES)
 
-Implicit (backward-Euler) update of `b`: the creep-closure term is unconditionally stable at any
-`dt`, but the opening-by-sliding term (`beta(b)*|u_b|`, active when `p.br != 0`) is still evaluated
-at the *lagged* `b` (last step's value, via `s.beta`) rather than the new one -- so this scheme
-inherits a real, if usually generous, `dt` cap from that term whenever `p.br != 0` and `b < p.br`
-(`beta = (br - b)/lr`, so the explicit opening overshoots `br` once `dt*|u_b|/lr > 1`). Confirmed in practice,
-not just in theory: a real AIS 32km run hit this at `dt=900s` and blew `b` up to the `b_max` safety
-cap in one cell, something [`FullyImplicitGapScheme`](@ref) -- now the default -- doesn't do.
-Unconditionally stable outright when `p.br == 0`. **Deprecated**: [`FullyImplicitGapScheme`](@ref) has the
-same cost without that cap; selecting it warns, and the scheme will be removed in 0.3.
-"""
-struct ImplicitGapScheme <: AbstractGapScheme end
-
-"""
-$(TYPEDSIGNATURES)
-
 Fully implicit update of `b`: both the creep-closure term AND the opening-by-sliding term are
 evaluated at the new (`k+1`) `b`, not the lagged one -- unconditionally stable for any `dt`,
 regardless of `p.br`. `beta(b) = max(0, (p.br-b)/p.lr)` is piecewise-linear (not smooth, but not
 genuinely nonlinear either), so this doesn't need a Newton iteration: `compute_b_fully_implicit_kernel!`
 solves both linear branches (`b_{k+1} < p.br` and `b_{k+1} >= p.br`) in closed form and picks
-whichever is self-consistent with its own assumption. Same per-step cost as
-[`ImplicitGapScheme`](@ref) (often cheaper in practice, since Picard convergence tends to benefit
-from not carrying the spurious runaway/clamp events `ImplicitGapScheme` is prone to) -- no extra
-iteration. **The default choice** -- confirmed against `ImplicitGapScheme` and `ExplicitGapScheme`
-in a 6-dt/2-domain (AIS/GrIS) sweep: all three agree closely at the finest `dt` (<0.3% relative
-RMSE), and `FullyImplicitGapScheme` tracks `ImplicitGapScheme` far more tightly than
-`ExplicitGapScheme` does as `dt` grows coarser.
+whichever is self-consistent with its own assumption -- no extra iteration. **The default choice**:
+it holds at any `dt`, where a scheme that evaluates the opening at the lagged `b` overshoots `br` once
+`dt*|u_b|/lr > 1` (a real AIS 32 km run blew `b` up to the `b_max` cap in one cell at `dt = 900 s`).
 """
 struct FullyImplicitGapScheme <: AbstractGapScheme end
 
@@ -104,8 +85,7 @@ Optionally `dt` is also capped by the local relaxation rate of the gap equation,
 reduction) or a chosen percentile of it (`UsePercentile=true`, a sort and a host transfer each step, less swayed by one
 outlier cell). This is an accuracy cap only; it is off unless `safety_factor` is given. `UsePercentile` is a type
 parameter, so the choice is two `rate_statistic` methods rather than a branch in the per-step reduction. The rate is
-taken from the previous step's converged `N`/`u_b`, the same lagged-coefficient idiom as `s.beta` in
-[`ImplicitGapScheme`](@ref).
+taken from the previous step's converged `N`/`u_b`, the same lagged-coefficient idiom as `s.beta`.
 
 Build with the [`AdaptiveTimeStep`](@ref) convenience constructor below, not this one directly -- it sizes
 `rate_field`/`host_rate`/`scratch` correctly.
@@ -267,9 +247,6 @@ const OPTION_RULES = (
           o.gcp isa ConsistentGapCoupling && o.ds isa NoDiffusion, :warn_once,
      o -> "k_face_choice = \"implicit_upwind\" on the filled sheet's dry floor with ExplicitGapScheme can run away: the explicit " *
           "gap update overshoots the water depths the faces conduct by. Use FullyImplicitGapScheme (the default)."),
-    (o -> o.gs isa ImplicitGapScheme, :warn_once,
-     o -> "ImplicitGapScheme is deprecated and will be removed in 0.3: FullyImplicitGapScheme (the default) costs the same and is " *
-          "stable at any dt (ImplicitGapScheme's lagged opening is not)"),
 )
 
 """
@@ -335,7 +312,7 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
 - Head scheme: [`PicardHeadScheme`](@ref) (requires `ps`, a [`PicardSolver`](@ref)); with `p.e_v > 0` its rows store
   englacial water (the parabolic head equation).
 - `gap_scheme`: [`FullyImplicitGapScheme`](@ref) (default), [`ExplicitGapScheme`](@ref) (a reference, stable only at
-  short `dt`), or [`ImplicitGapScheme`](@ref) (deprecated); see [`AbstractGapScheme`](@ref). Ignored under
+  short `dt`); see [`AbstractGapScheme`](@ref). Ignored under
   [`WithDiffusion`](@ref), whose gap solve has a single scheme of its own (`solve_b_diffusion!`).
 - Melt-rate terms: [`MeltTerms`](@ref)'s five flags are read directly off `p.mdot_includes_G`/
   `p.mdot_includes_frictional`/`p.mdot_includes_potential`/`p.mdot_includes_sensible`/
@@ -385,7 +362,7 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
   or `LiveObserver(obs, times)` (keeps them in memory).
 - `gap_coupling`: [`ExplicitGapCoupling`](@ref) (legacy: the head rows assume the gap changes by `dt*rate(N, b_old)`) or
   [`ConsistentGapCoupling`](@ref) (they assume the change the gap scheme itself makes, so the head equation and the gap update
-  store the same water at any `dt`; needed with the implicit and fully implicit gap schemes when `dt*A*|N|^(n-1)*N` is not
+  store the same water at any `dt`; needed with the fully implicit gap scheme when `dt*A*|N|^(n-1)*N` is not
   small, and with [`UnfilledCavities`](@ref)/[`IceUplift`](@ref) at large `dt`). Default: `ConsistentGapCoupling()`. Pass `ExplicitGapCoupling()` to reproduce results from before this default. With
   `"implicit_upwind"` the conductance then also takes the end-of-step gap, so the head-gap step is implicit throughout.
   With [`WithDiffusion`](@ref) (SUHMO) `ConsistentGapCoupling()` solves the coupled gap system at every Picard iteration
@@ -406,7 +383,7 @@ Which options go together is decided in one place, `Shakti.OPTION_RULES`, checke
 defaults are resolved. Refused (an error): an averaged face (`Arithmetic`, `Harmonic`) under a free surface
 (`UnfilledCavities` or `IceUplift`); `ImplicitUpwind` without a solver for non-symmetric matrices; a `WithDiffusion`
 gap solver without a gap-system method; `N` clamps tighter than `[0, Inf)` under a free surface. Warned: `Upwind` chosen
-under a free surface, and `ImplicitGapScheme`.
+under a free surface, and `ImplicitUpwind` on the filled dry floor with `ExplicitGapScheme`.
 """
 function Simulation(grid, state, tsteps, dt, p, mi::AbstractMeltInput, sl::AbstractSlidingLaw; gap_scheme::AbstractGapScheme = FullyImplicitGapScheme(), ps = nothing, k_face_choice = nothing, verbose = false, cell_N_clamping::AbstractCellNClamping = NoCellNClamping(), timestep_scheme::AbstractTimeStepScheme = FixedTimeStep(), diffusion_scheme::AbstractDiffusionScheme = NoDiffusion(), head_extrapolation_order::Int = 1, sheet::Sheet = GlaDS2Sheet(), cavity_filling::Union{Nothing, AbstractCavityFilling} = nothing, hydraulic_potential::Union{Nothing, AbstractHydraulicPotential} = nothing, uplift::Union{Nothing, AbstractIceUplift} = nothing, gap_coupling::Union{Nothing, AbstractGapCoupling} = nothing, observer::AbstractObserver = NoObserver())
 
@@ -452,7 +429,7 @@ function Simulation(grid, state, tsteps, dt, p, mi::AbstractMeltInput, sl::Abstr
     he = head_extrapolation_order == 0 ? NoHeadExtrapolation() : HeadExtrapolation(grid; order = head_extrapolation_order)
 
     # Gap coupling: by default the consistent one wherever it is available. The explicit coupling's head rows assume linear
-    # gap growth while the implicit gap schemes apply their own update, so the two store different water: up to 1.8 times
+    # gap growth while the fully implicit gap scheme applies its own update, so the two store different water: up to 1.8 times
     # the melt input of a 1-day step under WithDiffusion (a moulin slab; Helheim at 500 m: 17 % of the melt after 5 days,
     # against 0.1 % consistent), 22190 m^3/s on a GrIS cold start, and at N < 0 (a filled moulin slab, NoDiffusion, 1-day
     # steps) a gap of 1e269 m in one step, where the consistent coupling keeps it at metres (check_gap_height, run.jl); on
@@ -461,67 +438,4 @@ function Simulation(grid, state, tsteps, dt, p, mi::AbstractMeltInput, sl::Abstr
     sim = Simulation(tsteps, Ref(dt), p, hs, gs, mt, oss, cls, diffusion_scheme, observer, grid, state, mi, kfs, sl, verbose, Ref(zero(dt)), cell_N_clamping, timestep_scheme, he, cavity_filling, hydraulic_potential, uplift, gap_coupling, WaterBudget(state))
     return refresh_state!(sim) # the derived fields with this simulation's options (set_initial_conditions! knows none of them)
 
-end
-
-# The observer of the deprecated keywords: which_observer ("IO" or "Live") with which_file_writer, tracked_times and path.
-function legacy_observer(tracked_obs, which_observer, which_file_writer, tracked_times, path)
-    isempty(tracked_obs) && return NoObserver()
-    which_observer === nothing && error("which_observer should be specified as \"IO\" or \"Live\" when tracked_obs is not empty.")
-    which_observer in ("IO", "Live") || error("Unknown which_observer: \"$which_observer\" (expected \"IO\" or \"Live\")")
-    tracked_times === nothing && error("tracked_times should be specified when which_observer is \"$which_observer\".")
-    which_observer == "Live" && return LiveObserver(tracked_obs, tracked_times)
-    fr = which_file_writer == "NetCDF" ? NetCDFFileWriter() :
-         which_file_writer == "HDF5"   ? HDF5FileWriter() :
-         which_file_writer == "JLD2"   ? JLD2FileWriter() :
-         which_file_writer == "CSV"    ? CSVFileWriter() :
-         error("which_file_writer should be \"NetCDF\", \"HDF5\", \"JLD2\", or \"CSV\" when which_observer is \"IO\" (got $(repr(which_file_writer))).")
-    path === nothing && error("path should be specified when which_observer is \"IO\".")
-    return IOObserver(tracked_obs, tracked_times, fr, path)
-end
-
-function legacy_gap_scheme(gap_scheme_choice::AbstractString)
-    gap_scheme_choice == "explicit"       && return ExplicitGapScheme()
-    gap_scheme_choice == "implicit"       && return ImplicitGapScheme()
-    gap_scheme_choice == "fully_implicit" && return FullyImplicitGapScheme()
-    error("Unknown gap_scheme_choice: \"$gap_scheme_choice\" (expected \"explicit\", \"implicit\", or \"fully_implicit\")")
-end
-
-# The observer keyword that replaces the deprecated ones, for the deprecation message ("" for none).
-legacy_observer_expr(tracked_obs, which_observer, which_file_writer) =
-    isempty(tracked_obs) ? "" :
-    which_observer == "Live" ? "observer = LiveObserver($(repr(tracked_obs)), tracked_times)" :
-    "observer = IOObserver($(repr(tracked_obs)), tracked_times, $(which_file_writer)FileWriter(), path)"
-
-"""
-$(TYPEDSIGNATURES)
-
-Deprecated (removed in 0.3): the same [`Simulation`](@ref) with the observables `tracked_obs` positional and the observer named by the
-keywords `which_observer` (`"IO"` or `"Live"`), `which_file_writer` (`"NetCDF"`, `"HDF5"`, `"JLD2"`, `"CSV"`),
-`tracked_times` and `path`. Pass `observer = IOObserver(tracked_obs, tracked_times, NetCDFFileWriter(), path)` or
-`LiveObserver(tracked_obs, tracked_times)` instead.
-"""
-function Simulation(grid, state, tsteps, dt, p, tracked_obs::Vector{String}, mi::AbstractMeltInput, sl::AbstractSlidingLaw; which_observer = nothing, which_file_writer = nothing, tracked_times = nothing, path = nothing, kwargs...)
-    haskey(kwargs, :observer) && error("pass either observer (an object) or tracked_obs with which_observer, not both")
-    observer = legacy_observer(tracked_obs, which_observer, which_file_writer, tracked_times, path)
-    obs = legacy_observer_expr(tracked_obs, which_observer, which_file_writer)
-    Base.depwarn("Simulation(grid, state, tsteps, dt, p, tracked_obs, mi, sl; which_observer, ...) is deprecated and will be removed in 0.3, use " *
-                 "Simulation(grid, state, tsteps, dt, p, mi, sl" * (isempty(obs) ? "" : "; " * obs) * ")", :Simulation)
-    return Simulation(grid, state, tsteps, dt, p, mi, sl; observer, kwargs...)
-end
-
-"""
-$(TYPEDSIGNATURES)
-
-Deprecated (removed in 0.3): the same [`Simulation`](@ref) with the gap scheme named by a string before `tracked_obs`: `"fully_implicit"`
-([`FullyImplicitGapScheme`](@ref), the default), `"explicit"` ([`ExplicitGapScheme`](@ref)) or `"implicit"`
-([`ImplicitGapScheme`](@ref)). Pass `gap_scheme` as a keyword instead, and the observer as an object.
-"""
-function Simulation(grid, state, tsteps, dt, p, gap_scheme_choice::AbstractString, tracked_obs::Vector{String}, mi::AbstractMeltInput, sl::AbstractSlidingLaw; which_observer = nothing, which_file_writer = nothing, tracked_times = nothing, path = nothing, kwargs...)
-    haskey(kwargs, :observer) && error("pass either observer (an object) or tracked_obs with which_observer, not both")
-    gs = legacy_gap_scheme(gap_scheme_choice)
-    observer = legacy_observer(tracked_obs, which_observer, which_file_writer, tracked_times, path)
-    Base.depwarn("Simulation(grid, state, tsteps, dt, p, \"$gap_scheme_choice\", tracked_obs, mi, sl; ...) is deprecated and will be removed in 0.3, use " *
-                 "Simulation(grid, state, tsteps, dt, p, mi, sl; " *
-                 join(filter(!isempty, ["gap_scheme = $(nameof(typeof(gs)))()", legacy_observer_expr(tracked_obs, which_observer, which_file_writer)]), ", ") * ")", :Simulation)
-    return Simulation(grid, state, tsteps, dt, p, mi, sl; gap_scheme = gs, observer, kwargs...)
 end

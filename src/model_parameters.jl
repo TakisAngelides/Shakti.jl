@@ -77,7 +77,7 @@ exceeding ice overburden) is physically invalid under grounded ice, but is a rea
 of the elliptic solve at cells sitting on a steep local bed/thickness gradient the grid can't
 resolve (confirmed on Thwaites: cells far from the grounding line, not just near it), where it
 destabilizes both the sliding law's `taub` and the gap-height closure term (`N`'s sign flips the
-creep-closure denominator, `gap_height.jl`'s `compute_b_implicit_kernel!`, from closing to opening).
+creep-closure denominator, `gap_height.jl`'s `compute_b_fully_implicit_kernel!`, from closing to opening).
 Left off by default for the same reason as `b_max` -- a modeling choice (does clamping `N` mask a
 real resolution problem, or is it a reasonable numerical safeguard, is worth deciding per
 application) -- opt in explicitly (e.g. `ModelParameters(N_min = 0.0)`) where the risk applies.

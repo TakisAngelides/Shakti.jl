@@ -147,7 +147,7 @@
             end
         end
 
-        @testset "gap scheme $gap at dt = 1 day" for gap in (ExplicitGapScheme(), ImplicitGapScheme(), FullyImplicitGapScheme())
+        @testset "gap scheme $gap at dt = 1 day" for gap in (ExplicitGapScheme(), FullyImplicitGapScheme())
             sim = ramp(dt = 86400.0, gap = gap)
             for _ in 1:20
                 step!(sim)
@@ -232,7 +232,7 @@
             # unfilled cavities, implicit water depth, every gap scheme (the explicit one at dt = 3 h: at 1 day creep*dt ~ 2 makes
             # the explicit gap update itself collapse to b_min): the empty volume stays within its limits (no water created or
             # lost by the bookkeeping) and the water budget closes
-            for (gap, dt) in ((ExplicitGapScheme(), 3 * 3600.0), (ImplicitGapScheme(), 86400.0), (FullyImplicitGapScheme(), 86400.0))
+            for (gap, dt) in ((ExplicitGapScheme(), 3 * 3600.0), (FullyImplicitGapScheme(), 86400.0))
                 sim = ramp(dt = dt, gap = gap, gc = ConsistentGapCoupling())
                 for _ in 1:30
                     W_old = water(sim.state)

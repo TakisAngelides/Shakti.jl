@@ -13,6 +13,10 @@ the migration below.
   the only prognostic water field.
 - The lagged flux path and the standalone heat kernels.
 - The 7-argument `fully_implicit_creep_update`.
+- `ImplicitGapScheme` (use `FullyImplicitGapScheme`).
+- The positional `Simulation` forms: the gap scheme as a string before `tracked_obs`, and `tracked_obs` with
+  `which_observer`, `which_file_writer`, `tracked_times` and `path`. Pass `gap_scheme` and `observer` as keywords.
+- `compute_q_and_Re_xy!` (use `compute_face_flux!`) and `compute_K!`.
 - `limit_regime_crossing!` and `limit_filled_step!`: both are now `limit_head_step!`.
 - Parabolic API names: `pps` is now `ps`, `sim.hs.pps` is now `sim.hs.ps`. One Picard loop serves the elliptic and
   parabolic head equations; direct `Picard_loop!` callers pass a `guard`.
@@ -26,13 +30,6 @@ the migration below.
 - The time step's `safety_factor` is an extra cap on dt on top of the Picard-convergence control.
 - `CGIterativeSolver(MatrixFreeLinearSystem)` is preconditioned by `AggregationMultigrid`.
 
-### Deprecated (removed in 0.3)
-
-- `ImplicitGapScheme`: use `FullyImplicitGapScheme`.
-- The positional `Simulation` forms: the gap scheme as a string before `tracked_obs`, and `tracked_obs` with
-  `which_observer`, `which_file_writer`, `tracked_times` and `path`. Pass `gap_scheme` and `observer` as keywords.
-- `compute_q_and_Re_xy!` (use `compute_face_flux!`) and `compute_K!`.
-
 ### New
 
 - `AdaptiveTimeStep`: dt controlled by Picard convergence.
@@ -42,7 +39,11 @@ the migration below.
 - Sheet presets `GlaDS2Sheet` and `ShaktiSheet` with keyword overrides; typed face schemes and observer objects.
 - `OPTION_RULES`: one table of option combinations that are refused or warned about.
 - `FilledCavities` warns once when a full gap leaves its regime (cells at `p_w < 0` or water created).
-- `step!` warns when the head solve ends unconverged.
+- `step!` warns when the head solve ends unconverged and counts the step in `WaterBudget`'s `unconverged`; the budget
+  also keeps `gross_created` and `gross_lost` apart from the net, and the verbose line shows the count.
+- `check_gap_height` errors when `b` exceeds the ice thickness by more than 1 km in a grounded cell (a warning below
+  that); `implicit_upwind` faces on the filled dry floor with `ExplicitGapScheme` warn.
+- Checkpoints keep the water budget's totals and `AdaptiveTimeStep`'s count of rejected steps.
 
 ### Fixed
 
@@ -55,3 +56,5 @@ the migration below.
 - `|u_b|` is refreshed every step.
 - Ice thickness is floored at zero and kept above the uplift layer.
 - `LiveObserver` records each frame's model time.
+- `CreepCutoff`'s fully implicit update checks its last branch and returns a gap that lands on a kink (`b_c` or `br`)
+  there, not a value just below it.

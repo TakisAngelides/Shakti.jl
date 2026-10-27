@@ -32,38 +32,6 @@
             end
         end
 
-        # --- implicit_creep_update: closed-form solve of b_new = b_old + dt*(opening - C*l_c(b_new)) --
-
-        @testset "implicit_creep_update solves its own defining equation" begin
-            residual(cls, b_old, opening, C, dt, b_c, b_new) =
-                b_new - b_old - dt * (opening - C * Shakti.creep_length(cls, b_new, b_c))
-
-            b_c = 0.05
-            cases = [
-                (b_old = 0.001, opening = 0.0,  C = 10.0,  dt = 3600.0), # strong closure, no opening -- must land near 0 (<= b_c)
-                (b_old = 0.001, opening = 1e-3, C = 1e-12, dt = 3600.0), # opening dominates, negligible closure -- must land well above b_c
-                (b_old = 0.05,  opening = 1e-6, C = 1e-6,  dt = 3600.0), # starts exactly at b_c
-                (b_old = 0.01,  opening = 1e-6, C = 0.0,   dt = 3600.0), # C=0 -- exercises the a=0 linear fallback inside the CreepCutoff branch
-            ]
-
-            for c in cases
-                b_new = Shakti.implicit_creep_update(CreepCutoff(), c.b_old, c.opening, c.C, c.dt, b_c)
-                @test isfinite(b_new)
-                @test b_new >= 0
-                @test abs(residual(CreepCutoff(), c.b_old, c.opening, c.C, c.dt, b_c, b_new)) < 1e-8
-
-                # StandardCreep's own (unconditionally linear) formula must also solve ITS OWN equation
-                b_new_std = Shakti.implicit_creep_update(StandardCreep(), c.b_old, c.opening, c.C, c.dt, b_c)
-                @test abs(residual(StandardCreep(), c.b_old, c.opening, c.C, c.dt, b_c, b_new_std)) < 1e-8
-            end
-
-            # Explicit branch coverage: the two extreme cases above must land on opposite sides of b_c.
-            b_below = Shakti.implicit_creep_update(CreepCutoff(), 0.001, 0.0, 10.0, 3600.0, b_c)
-            @test b_below <= b_c
-            b_above = Shakti.implicit_creep_update(CreepCutoff(), 0.001, 1e-3, 1e-12, 3600.0, b_c)
-            @test b_above > b_c
-        end
-
         # --- fully_implicit_creep_update: closed-form solve with beta AND l_c both piecewise ---
 
         @testset "fully_implicit_creep_update solves its own defining equation, either br/b_c ordering" begin
@@ -196,27 +164,24 @@
             @test all(isfinite, Array(sim.state.N))
         end
 
-        @testset "gap_scheme keyword: FullyImplicitGapScheme by default, same run as the deprecated string form" begin
+        @testset "gap_scheme keyword: FullyImplicitGapScheme by default" begin
             p = ModelParameters(e_v = 0.0, b_c = 0.05)
-            function build(args...; kw...)
+            function build(; kw...)
                 state = State(grid)
                 set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b0, G, ub_x, ub_y, ieb, taub_x, taub_y)
                 ps = PicardSolver(50, floattype(1e-6), CholeskyDirectSolver(grid), grid)
-                legacy = isempty(args) ? () : (args..., String[]) # the deprecated form: the gap scheme by name, then tracked_obs
-                return Simulation(grid, state, 3, floattype(3600.0), p, legacy..., ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps, kw...)
+                return Simulation(grid, state, 3, floattype(3600.0), p, ConstantMeltInput(), sl; cavity_filling = FilledCavities(), uplift = NoUplift(), ps = ps, kw...)
             end
             sim_kw = build()
-            sim_str = build("fully_implicit")
+            sim_typed = build(; gap_scheme = FullyImplicitGapScheme())
             @test sim_kw.gs isa FullyImplicitGapScheme
             @test build(; gap_scheme = ExplicitGapScheme()).gs isa ExplicitGapScheme
-            @test build("explicit").gs isa ExplicitGapScheme
-            @test_throws ErrorException build("crank_nicolson")
             for _ in 1:3
                 step!(sim_kw)
-                step!(sim_str)
+                step!(sim_typed)
             end
-            @test Array(sim_kw.state.b) == Array(sim_str.state.b)
-            @test Array(sim_kw.state.h) == Array(sim_str.state.h)
+            @test Array(sim_kw.state.b) == Array(sim_typed.state.b)
+            @test Array(sim_kw.state.h) == Array(sim_typed.state.h)
         end
 
     end

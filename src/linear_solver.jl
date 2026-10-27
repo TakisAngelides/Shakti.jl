@@ -1088,7 +1088,7 @@ end
 # Unlike h's operator, b's has no real Dirichlet boundary: every GROUNDED cell
 # solves the diffusion-coupled equation below, every non-GROUNDED cell gets a
 # frozen identity row (b held at its current value) -- the same "not evolved
-# here" convention compute_b_implicit_kernel!/etc. already use (they only
+# here" convention compute_b_explicit_kernel!/etc. already use (they only
 # ever touch GROUNDED cells), just expressed as a solvable row instead of a
 # skipped one, since every cell needs SOME row in a system sized (nx*ny).
 # Face coupling uses the exact same "neighbour must be GROUNDED" Neumann rule
@@ -1098,9 +1098,8 @@ end
 #
 # Local (opening/closure) terms are evaluated explicitly, at the lagged b/N/
 # beta/lc (matching Eq. 17: only the spatial term is implicit) -- the exact
-# same RHS ImplicitGapScheme's own compute_b_implicit_kernel! would produce
-# under StandardCreep, just here it becomes the right-hand side of a global
-# solve instead of the final per-cell answer.
+# same RHS the per-cell gap update would use, just here it becomes the
+# right-hand side of a global solve instead of the final per-cell answer.
 """
 $(TYPEDSIGNATURES)
 
@@ -1108,7 +1107,7 @@ The local (non-diffusive) part of `b`'s diffusion solve for one `GROUNDED` cell:
 extra diagonal entry and the full right-hand side. Felden et al. (2023)'s Eq. 17 evaluates melt,
 opening-by-sliding and creep closure all explicitly at the old `b`; here the two terms linear in
 the new `b` are moved onto the diagonal instead, matching the stability of
-[`ImplicitGapScheme`](@ref)/[`FullyImplicitGapScheme`](@ref) (it only ever adds non-negative
+[`FullyImplicitGapScheme`](@ref) (it only ever adds non-negative
 diagonal entries, so the operator stays SPD):
 
 - creep closure `C*l_c` with `C > 0`: `dt*C*(l_c/b)` on the diagonal (`l_c/b` from the lagged
@@ -1168,7 +1167,7 @@ shared face's `D` value is read identically from both sides, same reasoning as `
 
             rhs[row] = local_rhs
 
-        else # not evolved: frozen at its current value, same convention as compute_b_implicit_kernel!'s own GROUNDED-only guard
+        else # not evolved: frozen at its current value, same convention as compute_b_explicit_kernel!'s own GROUNDED-only guard
 
             nzval[idxP[ix, iy]] = 1
             rhs[row] = b[ix, iy]

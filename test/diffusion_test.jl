@@ -379,7 +379,7 @@
         end
 
         @testset "sim.gs is truly ignored under WithDiffusion: different gs, identical result" begin
-            # Two Simulations differing ONLY in gap_scheme_choice, both with WithDiffusion active --
+            # Two Simulations differing ONLY in gap_scheme, both with WithDiffusion active --
             # if gs really has no effect while diffusion is on, one full step_b! call must leave
             # both with bit-identical b.
             grid = Grid(4, 4, 1e3, 1e3)

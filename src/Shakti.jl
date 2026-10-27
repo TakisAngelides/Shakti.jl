@@ -200,7 +200,7 @@ export AbstractCreepLengthScheme, StandardCreep, CreepCutoff
 
 # simulation.jl
 export AbstractHeadScheme, PicardHeadScheme
-export AbstractGapScheme, ExplicitGapScheme, ImplicitGapScheme, FullyImplicitGapScheme
+export AbstractGapScheme, ExplicitGapScheme, FullyImplicitGapScheme
 export AbstractTimeStepScheme, FixedTimeStep, AdaptiveTimeStep, target_time
 export AbstractCellNClamping, NoCellNClamping, CellNClamping, apply_cell_N_clamping!
 export Simulation, Sheet, GlaDS2Sheet, ShaktiSheet
@@ -218,7 +218,7 @@ export compute_pw!, compute_N!
 export compute_dhdx!, compute_dhdy!, compute_dhdxy!, compute_dpwdx!, compute_dpwdy!, compute_dpwdxy!
 
 # water_flux.jl
-export compute_Re!, compute_K!, compute_q_and_Re_xy!, compute_face_flux!
+export compute_Re!, compute_face_flux!
 
 # gap_height.jl
 export compute_beta!, compute_lc!, compute_b_x!, compute_b_y!, compute_b!

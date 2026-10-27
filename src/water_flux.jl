@@ -26,28 +26,6 @@ Updates `s.Re` (cell-centered Reynolds number) by averaging the four surrounding
 """
 compute_Re!(s::State) = (@parallel compute_Re_kernel!(s.Re, s.Re_x, s.Re_y); s)
 
-"""
-$(TYPEDSIGNATURES)
-
-Deprecated (removed in 0.3): [`compute_face_flux!`](@ref) with the default [`Arithmetic`](@ref) faces. Kept for old drivers that
-rebuilt the initial fields themselves; [`set_initial_conditions!`](@ref) already does it.
-"""
-function compute_q_and_Re_xy!(s::State, p::ModelParameters)
-    @warn "compute_q_and_Re_xy! is deprecated and will be removed in 0.3: use compute_face_flux!(s, p) (set_initial_conditions! already calls it)" maxlog = 1
-    return compute_face_flux!(s, p)
-end
-
-"""
-$(TYPEDSIGNATURES)
-
-Deprecated (removed in 0.3): updates the cell-centred `s.K` (a diagnostic) only. The face transmissivities `s.K_x`/`s.K_y` the
-linear system assembles are written by [`compute_face_flux!`](@ref); `kfs` is ignored.
-"""
-function compute_K!(s::State, p::ModelParameters, kfs::AbstractKFaceScheme = Arithmetic())
-    @warn "compute_K! is deprecated and will be removed in 0.3: the face transmissivities come from compute_face_flux!, the cell-centred K from set_initial_conditions!" maxlog = 1
-    return compute_cell_K!(s, p)
-end
-
 # Cell-centred K = b^3*g / (12*nu*(1 + omega*Re)), a diagnostic: the linear system assembles the face values
 # K_x/K_y written by compute_face_flux!.
 @parallel_indices (ix, iy) function compute_K_kernel!(K, b, Re, ggrav, nu, omega)

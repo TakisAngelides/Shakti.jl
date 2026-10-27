@@ -94,8 +94,8 @@ the concrete subtype ([`StandardCreep`](@ref)/[`CreepCutoff`](@ref)) picks betwe
 and the piecewise cutoff of Felden et al. (2023, Eq. 7), decided ONCE in `Simulation`'s constructor
 (from `p.b_c`, see `simulation.jl`) -- same "dispatch on a type decided once outside the hot loop"
 idiom as [`AbstractOpenBySlidingScheme`](@ref)/[`MeltTerms`](@ref). `s.lc` (not `s.b` directly) is
-what the creep-closure term reads everywhere downstream: `compute_b_implicit_kernel!`/
-`compute_b_explicit_kernel!`/`compute_b_fully_implicit_kernel!` (this file, which additionally need
+what the creep-closure term reads everywhere downstream: `compute_b_explicit_kernel!`/
+`compute_b_fully_implicit_kernel!` (this file, which additionally need
 `cls`/`p.b_c` directly since they solve for the *new* `b`, so can't just read the lagged `s.lc`) and
 the head assembly kernels (`linear_solver.jl`, which read the lagged `s.lc`
 exactly like they read `s.beta` -- both refreshed once per timestep by `step_b!`, ready for the
@@ -130,7 +130,7 @@ while `b` is still below `b_c`. On Helheim (`b_c=0.05`, `b_max=Inf`), one cell r
 check reproduced the same divergence at the same cell (`b~3.9m` by day 30) from a fresh run,
 confirming this is not an artifact of one earlier run.
 
-**Mechanism** (`implicit_creep_update`, this file): while `b <= b_c` and `N < 0` (so the closure
+**Mechanism** (`fully_implicit_creep_update`, this file): while `b <= b_c` and `N < 0` (so the closure
 coefficient `C = A|N|^(n-1)*N` is negative), the cutoff branch used to return
 `b_below = b_old + dt*opening` directly, dropping the `(1 + dt*C)` implicit-closure term in that
 regime, unlike [`StandardCreep`](@ref). `b` then grew by the bare opening term every step until it
@@ -159,7 +159,7 @@ struct CreepCutoff <: AbstractCreepLengthScheme end
 $(TYPEDSIGNATURES)
 
 `l_c(b)` per [`AbstractCreepLengthScheme`](@ref)'s dispatch -- `@inline`d into every kernel that
-uses it (`compute_lc_kernel!` below, plus `compute_b_implicit_kernel!`/`compute_b_explicit_kernel!`/
+uses it (`compute_lc_kernel!` below, plus `compute_b_explicit_kernel!`/
 `compute_dt_rate_kernel!`, which all need the *current* `b` rather than the lagged `s.lc`).
 """
 @inline creep_length(::StandardCreep, b, b_c) = b
@@ -260,53 +260,6 @@ non-negative for every `dt`, so neither branch imposes a time-step limit.
     return b0 + em * b0 + S * dt * (em / x)
 end
 
-"""
-$(TYPEDSIGNATURES)
-
-Closed-form backward-Euler update of the closure-only ODE `b_{k+1} = b_k + dt*(opening -
-C*l_c(b_{k+1}))`, dispatched on `cls` (see [`AbstractCreepLengthScheme`](@ref)):
-[`StandardCreep`](@ref) is the plain linear solve `compute_b_implicit_kernel!` always used before
-this generalization; [`CreepCutoff`](@ref) additionally has a self-consistent closed form despite
-`l_c` being quadratic (not linear) in `b` below `p.b_c` -- same "solve both branches, keep whichever
-is self-consistent" idea as `compute_b_fully_implicit_kernel!`'s `beta` branches, just for
-`l_c`'s own piecewise definition instead:
-
-  - Branch "`b_{k+1} <= b_c`" (`l_c = b_{k+1}^2/b_c`): `b_{k+1} + dt*C/b_c*b_{k+1}^2 = b_k +
-    dt*opening` is a quadratic in `b_{k+1}` with a unique non-negative root (quadratic formula,
-    positive branch).
-  - Branch "`b_{k+1} > b_c`" (`l_c = b_{k+1}`): reduces to the same linear solve as
-    [`StandardCreep`](@ref).
-"""
-@inline implicit_creep_update(::StandardCreep, b_old, opening, C, dt, b_c) = relax_update(b_old, opening, C, dt)
-
-@inline function implicit_creep_update(::CreepCutoff, b_old, opening, C, dt, b_c)
-    rhs = b_old + dt * opening
-    a = dt * C / b_c
-    # a<=0 (C<=0, i.e. N<=0): the quadratic branch's own derivation (l_c=b^2/b_c) assumes C>0
-    # (an actually-closing force) -- it stops making physical sense once the term is opening
-    # instead. Fall back to the StandardCreep-equivalent form (same formula the b_below>b_c branch
-    # below already uses) rather than skipping the (1+dt*C) closure-feedback term entirely, which
-    # is what caused a real, confirmed runaway (see CreepCutoff's own docstring/project notes).
-    # (relax_update: backward Euler for C >= 0, the exact exponential solution for C < 0.)
-    b_below = a > 0 ? (-one(a) + sqrt(max(zero(a), one(a) + 4 * a * rhs))) / (2 * a) : relax_update(b_old, opening, C, dt)
-    if b_below <= b_c
-        return b_below
-    else # branch 1's own assumption (b_{k+1} <= b_c) failed -- l_c(b_{k+1}) is actually b_{k+1}
-        return relax_update(b_old, opening, C, dt)
-    end
-end
-
-@parallel_indices (ix, iy) function compute_b_implicit_kernel!(b, mask, mdot, beta, abs_ub, A_visc, N, rho_i, n_minus_1, dt, b_min, b_max, cls::AbstractCreepLengthScheme, b_c)
-    if ix <= size(b, 1) && iy <= size(b, 2) && mask[ix, iy] == GROUNDED # we only evolve the water thickness if the cell has grounded ice
-        C = A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy]
-        opening = mdot[ix, iy] / rho_i + beta[ix, iy] * abs_ub[ix, iy]
-        b[ix, iy] = clamp( # b_min/b_max bound the water thickness for numerical stability -- b_max specifically guards against a runaway b->K->q->mdot->b feedback (creep closure, which depends on N, vanishes as N->0, so nothing bounds b from above there without this; see ModelParameters' own docstring)
-            implicit_creep_update(cls, b[ix, iy], opening, C, dt, b_c),
-            b_min, b_max)
-    end
-    return
-end
-
 @parallel_indices (ix, iy) function compute_b_explicit_kernel!(b, mask, mdot, beta, abs_ub, A_visc, N, rho_i, n_minus_1, dt, b_min, b_max, cls::AbstractCreepLengthScheme, b_c)
     if ix <= size(b, 1) && iy <= size(b, 2) && mask[ix, iy] == GROUNDED
         C = A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy]
@@ -326,8 +279,7 @@ max(0, (br-b)/lr)` and (under [`CreepCutoff`](@ref)) `l_c(b)` are piecewise func
 unknown `b_{k+1}`, each switching at its own threshold (`br`/`b_c`, generally unrelated values) --
 solving both simultaneously means checking every combination of "which side of `br`" x "which side
 of `b_c`" the true root falls on, same "solve a branch, keep it only if self-consistent with its
-own assumption" idea as [`compute_b_implicit_kernel!`](@ref)'s `l_c` branches, just with twice as
-many branches to try.
+own assumption" idea, with four branches to try.
 
 Writing `opening0 = b_k + dt*mdot/rho_i` (the part common to every branch) and `gamma = |u_b|/lr`:
 
@@ -336,11 +288,8 @@ Writing `opening0 = b_k + dt*mdot/rho_i` (the part common to every branch) and `
   - `b_{k+1} < br` and `b_{k+1} > b_c` (`beta` active, `l_c` linear): linear,
     `b_{k+1} = (opening0 + dt*gamma*br) / (1 + dt*(gamma+C))`.
   - `b_{k+1} >= br` and `b_{k+1} <= b_c` (`beta` zero, `l_c` cutoff): quadratic,
-    `(dt*C/b_c)*b_{k+1}^2 + b_{k+1} - opening0 = 0` -- the same equation
-    [`compute_b_implicit_kernel!`](@ref)'s `CreepCutoff` branch solves, just with a plain
-    `mdot/rho_i` opening rather than a lagged-`beta` one.
-  - `b_{k+1} >= br` and `b_{k+1} > b_c` (both zero/linear): `b_{k+1} = opening0/(1+dt*C)`, the same
-    closure-only solve [`compute_b_implicit_kernel!`](@ref) always falls back to.
+    `(dt*C/b_c)*b_{k+1}^2 + b_{k+1} - opening0 = 0`.
+  - `b_{k+1} >= br` and `b_{k+1} > b_c` (both zero/linear): `b_{k+1} = opening0/(1+dt*C)`.
 
 `br` and `b_c` needn't be ordered a particular way for this to work: whichever is bigger, one of the
 four combinations above becomes geometrically impossible on the `b_{k+1}` axis, and that branch's
@@ -353,8 +302,7 @@ Every linear branch goes through `relax_update`: backward Euler while its rate (
 `gamma + C`) is non-negative, and the exact exponential solution when it is negative (`N < 0`,
 where "closure" is really opening) -- so no branch ever divides by a vanishing or negative
 `1 + dt*rate`. The quadratic branches only run for `C > 0`. Unconditionally stable for any `dt`,
-unlike [`ImplicitGapScheme`](@ref) (which inherits a `dt` cap from evaluating `beta` at the lagged `b`; see its
-docstring).
+unlike a scheme that evaluates `beta` at the lagged `b`, which inherits a `dt` cap from it.
 """
 # `b0` is the old gap height and `m` the melt-opening rate mdot/rho_i (opening0 = b0 + dt*m); they
 # are passed separately because relax_update's exponential branch needs them apart.
