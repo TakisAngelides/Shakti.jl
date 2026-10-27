@@ -23,6 +23,7 @@ Pkg.add(url = "https://github.com/TakisAngelides/Shakti.jl")
 
 ## Where next
 
+* [Model equations](@ref) and their [Discretization](@ref): the equations from the continuum to the grid.
 * [Tutorial](@ref): every option the user can make is explained here using a synthetic ice-sheet margin.
 * Examples of simulations with real topographies: [Helheim](@ref Helheim), [Drang Drung](@ref DrangDrung), [Thwaites](@ref Thwaites),
   [Greenland](@ref Greenland), [Antarctica](@ref Antarctica)

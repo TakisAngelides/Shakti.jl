@@ -29,6 +29,7 @@ more_pages = [["examples/$example.md" for example in literate_examples]..., "per
 
 PAGES = [
     "index.md",
+    "Model" => ["equations.md", "discretization.md"],
     "tutorial.md",
     "Examples" => example_pages,
     "More" => more_pages,
