@@ -111,6 +111,17 @@ PrescribedSlidingLaw
 LinearSlidingLaw
 RegularizedCoulombV0SlidingLaw
 RegularizedCoulombFieldSlidingLaw
+WeertmanSlidingLaw
+BuddSlidingLaw
+CoulombSlidingLaw
+TsaiSlidingLaw
+SchoofSlidingLaw
+GagliardiniSlidingLaw
+HelanowSlidingLaw
+PseudoPlasticSlidingLaw
+RegelationCreepSlidingLaw
+LinearCombinationSlidingLaw
+FunctionSlidingLaw
 initialize_taub!
 compute_taub_x!
 compute_taub_y!

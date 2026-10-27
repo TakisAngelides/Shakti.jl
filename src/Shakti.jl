@@ -181,6 +181,7 @@ export prepare!, observe!, openfile!, write2file!, finalize!, resume!, reopenfil
 
 # sliding_law.jl
 export AbstractSlidingLaw, RegularizedCoulombSlidingLaw, RegularizedCoulombFieldSlidingLaw, RegularizedCoulombV0SlidingLaw, PrescribedSlidingLaw, LinearSlidingLaw, initialize_taub!
+export WeertmanSlidingLaw, BuddSlidingLaw, CoulombSlidingLaw, TsaiSlidingLaw, SchoofSlidingLaw, GagliardiniSlidingLaw, HelanowSlidingLaw, PseudoPlasticSlidingLaw, RegelationCreepSlidingLaw, LinearCombinationSlidingLaw, FunctionSlidingLaw
 export compute_taub_x!, compute_taub_y!, compute_taub_xy!
 
 # melt_rate.jl

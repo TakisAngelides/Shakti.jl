@@ -41,6 +41,7 @@ makedocs(
         prettyurls = CI,
         collapselevel = 2,
         size_threshold = 1_000_000,
+        assets = ["assets/tables.css"],
     ),
     sitename = "Shakti.jl",
     authors = "Takis Angelides",

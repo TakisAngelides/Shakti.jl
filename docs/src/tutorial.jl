@@ -116,14 +116,42 @@ p = ModelParameters()
 
 #=
 ## 6. Sliding law and melt input
-Sliding law (`tau_b`, which feeds frictional melt):
-* `RegularizedCoulombSlidingLaw(C)`  scalar `C`, `lambda = 1.5 A` from the initial `A_visc`
-* `RegularizedCoulombFieldSlidingLaw(grid, C)`  `C` a cell field
-* `RegularizedCoulombV0SlidingLaw(grid, C, v0; q = 1/3)`  Joughin et al. (2019), `v0` in m/s
-* `LinearSlidingLaw(grid, C)`  `tau_b = C^2 N u_b`
-* `PrescribedSlidingLaw()`  keep the `taub_x`, `taub_y` given in step 4 (e.g. from an ice-flow model)
+### Sliding law
+The sliding law gives the basal shear stress `tau_b`, which feeds the frictional melt. Each law below gives its
+magnitude ``\tau_b`` from the effective pressure ``N`` [Pa] and the sliding speed ``u = \lVert \mathbf{u}_b \rVert``
+[m/s], and points it along ``\mathbf{u}_b``. It is recomputed in every Picard iteration. Coefficients (`C`, `C_max`,
+`mu`, ...) are uniform scalars or cell fields of size `(nx, ny)`. Every law that depends on ``N`` uses ``\max(N, 0)``:
+a bed under water above overburden carries no shear. Some rows show one constructor for another law's form.
 
-Melt input (water from above):
+| Law | ``\tau_b`` | Shakti.jl | Reference |
+|:----|:-----------|:----------|:----------|
+| Weertman | ``C u^m`` | `WeertmanSlidingLaw(grid, C; m = 1/3)` | [Weertman1957](@citet) |
+| Linear viscous | ``\beta u`` | `WeertmanSlidingLaw(grid, beta; m = 1)` | |
+| Linear in ``N`` (ISSM's Shakti law) | ``C^2 N u`` | `LinearSlidingLaw(grid, C)` | [Sommers2023](@citet) |
+| Budd (generalized power law) | ``C N^q u^m`` | `BuddSlidingLaw(grid, C; m = 1/3, q = 1)` | [Budd1979](@citet) |
+| Till deformation | ``u = A \tau_b^a N^{-b}`` | `BuddSlidingLaw(grid, A^(-1/a); m = 1/a, q = b/a)` | [BoultonHindmarsh1987](@citet) |
+| Coulomb (Iken's bound, Mohr-Coulomb ``\mu = \tan\phi``) | ``\mu N`` | `CoulombSlidingLaw(grid, mu)` | [Iken1981](@citet) |
+| Coulomb-capped power law | ``\min\left(C N^q u^m,\; f N\right)`` | `TsaiSlidingLaw(grid, C, f; m = 1/3, q = 0)` | [Tsai2015](@citet) |
+| Pseudo-plastic (PISM) | ``\left(c_0 + N \tan\phi\right) \left(u/u_0\right)^q`` | `PseudoPlasticSlidingLaw(grid, tan(phi); q = 0.25, u0 = 100 m/a, c0 = 0)` | [BuelerBrown2009](@citet) |
+| Cavitation, general family | ``N\, f\!\left(u/N^n\right)`` | `FunctionSlidingLaw(grid, (N, u, C) -> ..., C)` | [Lliboutry1968](@citet), [Fowler1987](@citet) |
+| Schoof | ``\dfrac{C^2 u^m}{\left[1 + \left(\frac{C^2}{C_{\max} N}\right)^{1/m} u\right]^m}`` | `SchoofSlidingLaw(grid, C, C_max; m = 1/3)` | [Schoof2005](@citet) |
+| MISMIP+ Schoof form | ``\dfrac{C \alpha^2 N u^m}{\left[C^{1/m} u + (\alpha^2 N)^{1/m}\right]^m}`` | `SchoofSlidingLaw(grid, sqrt(C), alpha^2)` | [Cornford2020](@citet) |
+| Hydrology-modified Schoof | ``\dfrac{C^2 u^m}{\left[1 + \left(\zeta/N\right)^{1/m} u\right]^m}`` | `SchoofSlidingLaw(grid, C, C .^ 2 ./ zeta)` | [McArthur2026](@citet) |
+| Linear combination | ``\dfrac{C_{\max} N \xi + C^2 u^m}{1 + \xi}``, ``\xi = \alpha u / N^n`` | `LinearCombinationSlidingLaw(grid, C, C_max, alpha; m = 1/3, n = 3)` | [McArthur2026](@citet) |
+| Gagliardini | ``C N \left(\dfrac{\chi}{1 + \alpha \chi^q}\right)^{1/n}``, ``\chi = \dfrac{u}{C^n N^n A_s}``, ``\alpha = \dfrac{(q-1)^{q-1}}{q^q}`` | `GagliardiniSlidingLaw(grid, C, A_s; q = 1, n = 3)` | [Gagliardini2007](@citet) |
+| Regularized Coulomb, Shakti's (Gagliardini at ``q = 1``, ``C^n A_s = \lambda``) | ``C N \left(\dfrac{u}{u + N^n \lambda}\right)^{1/n}``, ``\lambda = 1.5 A`` | `RegularizedCoulombSlidingLaw(C)`, `RegularizedCoulombFieldSlidingLaw(grid, C)` | |
+| Regularized Coulomb, threshold speed | ``C N \left(\dfrac{u}{u + u_0}\right)^q`` | `RegularizedCoulombV0SlidingLaw(grid, C, u0; q = 1/3)` | Joughin et al. (2019), [Kazmierczak2024](@citet) |
+| Till slip law | ``N \tan\phi \left(\dfrac{u}{u + u_t}\right)^{1/p}`` | `RegularizedCoulombV0SlidingLaw(grid, tan(phi), u_t; q = 1/p)` | [ZoetIverson2020](@citet) |
+| Hard-bed slip law | ``C N \left(\dfrac{u}{u + (K N)^m}\right)^{1/m}`` | `HelanowSlidingLaw(grid, C, K; m = 3)` | [Helanow2021](@citet) |
+| Regelation and enhanced creep | ``u = A_R \tau_b + A_C \tau_b^n``, solved for ``\tau_b`` | `RegelationCreepSlidingLaw(grid, A_R, A_C; n = 3)` | [Weertman1957](@citet), [Nye1969](@citet), [Kamb1970](@citet) |
+| Prescribed | from an ice-flow model | `PrescribedSlidingLaw()`  keeps the `taub_x`, `taub_y` of step 4 | |
+
+Speeds (`u0`, `u_t`) are in m/s, like `ub_x`. `FunctionSlidingLaw` takes any magnitude `f(N, u, C)`; on a GPU it must be a
+plain function or a closure over plain numbers.
+
+### Melt input
+
+Water from above:
 * `ConstantMeltInput()`  the `ieb` of step 4, unchanged
 * `SeasonalMeltInput(; t_start, t_end, amplitude, offset, i_min)`  Sommers et al. (2018) Sect. 3.3, see the [Seasonal melt](@ref SeasonalMeltInput) page
 * `GaussianMoulinMeltInput(grid, x0, y0, sigma, Q_max, ramp_duration)`  one moulin [m3/s], ramped up
