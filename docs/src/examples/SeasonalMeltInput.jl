@@ -45,7 +45,8 @@ per step.
 mi = SeasonalMeltInput()
 dt, nsteps = 86400.0, 365
 path = joinpath(mktempdir(), "seasonal.nc")
-ps = PicardSolver(200, 1e-6, LUDirectSolver(grid), grid)
+max_iter, tol = 200, 1e-6   # Picard iterations per step and tolerance
+ps = PicardSolver(max_iter, tol, LUDirectSolver(grid), grid)
 sim = Simulation(grid, state, nsteps, floattype(dt), p, mi, sl;
                  ps = ps, observer = IOObserver(["N", "b", "Re", "ieb"], 0:nsteps, NetCDFFileWriter(), path))
 run!(sim)

@@ -59,7 +59,8 @@ function run_year(gap_coupling, dt)
                             fill(0.05, nx, ny), fill(1e-6, nx + 1, ny), zeros(nx, ny + 1),
                             fill(1.0 / (365 * 86400.0), nx, ny), zeros(nx + 1, ny), zeros(nx, ny + 1))
     ls = LUDirectSolver(grid)
-    ps = PicardSolver(200, 1e-6, ls, grid)
+    max_iter, tol = 200, 1e-6   # Picard iterations per step and tolerance
+    ps = PicardSolver(max_iter, tol, ls, grid)
     sim = Simulation(grid, state, nsteps, floattype(dt), p, ConstantMeltInput(), sl; ps = ps, gap_coupling = gap_coupling)
     run!(sim)
     wb = water_created(sim)

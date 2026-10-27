@@ -42,7 +42,8 @@ function moulin_run(diffusion)
                             zeros(nx, ny), zeros(nx + 1, ny), zeros(nx, ny + 1))
     set_ieb_external!(state, fill(0.1 / spy, nx, ny))
     mi = GaussianMoulinMeltInput(grid, 15000.0, 5000.0, 500.0, 20.0, 30 * 86400.0)
-    ps = PicardSolver(200, 1e-6, LUDirectSolver(grid), grid)
+    max_iter, tol = 200, 1e-6   # Picard iterations per step and tolerance
+    ps = PicardSolver(max_iter, tol, LUDirectSolver(grid), grid)
     ds = diffusion ? WithDiffusion(CholeskyDirectSolver(grid)) : NoDiffusion()
     sim = Simulation(grid, state, 60, floattype(86400.0), ModelParameters(), mi, sl;
                      ps = ps, diffusion_scheme = ds)

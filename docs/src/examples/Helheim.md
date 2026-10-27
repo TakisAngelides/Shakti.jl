@@ -6,32 +6,50 @@ rasterized onto a 500 m grid. 90 days of 30-minute steps, with the defaults and 
 Shakti equations. The loader is `load_helheim` in `docs/make_figures.jl`, which also makes the figure;
 the input files are in `docs/src/examples/input/Helheim`.
 
-* Mask: the mesh interior is `GROUNDED`, the rest `OTHER_BASIN`; boundary cells along the calving
-  front (`terminus13.exp`) are `OCEAN`.
-* `A = B^{-3}` from the mesh's `rheology_B`, `G` from its geothermal flux, sliding speed from its
-  initial velocity.
-* Sliding: `LinearSlidingLaw` (`τ_b = C² N u_b`) with their inverted `C`.
-* Constants of their Table 2: `rho_i = 917`, `omega = 1e-3`, `br = 0`, `lr = 2`, `ct = 0`,
-  `mdot_includes_sensible = false`.
-* No surface input; the water comes from basal melt.
-
 ```julia
 using Shakti
 
-d = load_helheim()                        # (; xc, yc, DX, mask, H, zb, A, G, ub_x, ub_y, C)
+# Load the data
+d = load_helheim()
+# d.xc, d.yc     cell-centre coordinates (m)
+# d.DX           grid spacing (m)
+# d.mask         GROUNDED / OCEAN / OTHER_BASIN cell types
+# d.H, d.zb      ice thickness and bed elevation (m)
+# d.A            flow-law parameter A = B^-3 (Pa^-3 s^-1)
+# d.G            geothermal heat flux (W m^-2)
+# d.ub_x, d.ub_y sliding speed (m s^-1)
+# d.C            friction coefficient
+
+# Grid
 Nx, Ny = size(d.H)
 grid = Grid(Nx, Ny, (Nx - 1) * d.DX, (Ny - 1) * d.DX)
-sl = LinearSlidingLaw(grid, d.C)
-b = fill(1e-3, Nx, Ny)
 
-p = ModelParameters(rho_i = 917.0, omega = 1e-3, br = 0.0, lr = 2.0, ct = 0.0, mdot_includes_sensible = false)
+# Sliding law
+sl = LinearSlidingLaw(grid, d.C)          # tau_b = C^2 N u_b
+
+# Model parameters
+p = ModelParameters(rho_i = 917.0, omega = 1e-3, br = 0.0, lr = 2.0, ct = 0.0,
+                    mdot_includes_sensible = false)   # constants of Table 2 of Sommers et al.
+
+# Initial state: a gap of b0 everywhere, the surface above the gap, no surface input
+b0 = 1e-3                                 # initial gap height (m)
+b  = fill(b0, Nx, Ny)
+zs = d.zb .+ d.H .+ b                     # ice surface elevation (m)
 state = State(grid)
-set_initial_conditions!(state, grid, p, sl, d.mask, d.A, d.zb, d.zb .+ d.H .+ b, b, d.G, d.ub_x, d.ub_y,
+set_initial_conditions!(state, grid, p, sl, d.mask, d.A, d.zb, zs, b, d.G, d.ub_x, d.ub_y,
                         zeros(Nx, Ny), zeros(Nx + 1, Ny), zeros(Nx, Ny + 1))
 
-ps = PicardSolver(500, 1e-6, CUDSSDirectSolver(grid; structure = :general), grid)   # LUDirectSolver(grid) on CPU
-sim = Simulation(grid, state, 4320, floattype(1800.0), p, ConstantMeltInput(), sl; ps = ps,
-                 observer = IOObserver(["N", "b", "Re", "po"], [0, 4320], NetCDFFileWriter(), "helheim.nc"))
+# Solver
+max_iter = 500                            # Picard iterations per step
+tol = 1e-6                                # Picard tolerance
+ps = PicardSolver(max_iter, tol, CUDSSDirectSolver(grid; structure = :general), grid)   # LUDirectSolver(grid) on CPU
+
+# Run
+nsteps = 4320                             # 90 days
+dt = 1800.0                               # 30 minutes (s)
+output = ["N", "b", "Re", "po"]           # fields written to file
+observer = IOObserver(output, [0, nsteps], NetCDFFileWriter(), "helheim.nc")
+sim = Simulation(grid, state, nsteps, floattype(dt), p, ConstantMeltInput(), sl; ps = ps, observer = observer)
 run!(sim)
 ```
 
@@ -48,9 +66,8 @@ Wall times are on the [Performance](@ref) page.
 
 ![Helheim, day 90](../figures/Helheim.png)
 
-* Both runs drain through the same channels in the trunk, with the same largest gap.
 * The original equations keep the gap full of water. Where melt cannot fill it, `p_w` goes far
   below zero and `N/p_o` reaches 30. The defaults leave that gap partly empty with `p_w = 0`, so
-  `N ≤ p_o` everywhere, and the gap there closes below `10^{-3}` m instead of holding at `b_min`.
+  `N ≤ p_o` everywhere, and the gap there closes below ``10^{-3}`` m instead of holding at `b_min`, which the original Shakti sets at ``10^{-3}`` m.
 * The defaults cost more: more than ten Picard iterations a step at the end against one for the
   original equations.

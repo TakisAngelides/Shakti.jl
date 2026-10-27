@@ -71,14 +71,14 @@ The defaults use the default `b_min = 1e-6`. Grid 102 x 200 with 2 695 grounded 
 
 ![Drang Drung, day 365](../figures/DrangDrung.png)
 
-Columns: ISSM, the ISSM reproduction (Shakti equations) and the defaults.
+Columns: ISSM (loaded from [Thota2026](@cite)), the ISSM reproduction (Shakti equations with Shakti.jl simulations) and the defaults.
 
 * The ISSM reproduction matches ISSM's effective pressure, including the cells where `p_w < 0`
   (`N/p_o > 1`) along the margins.
 * The match needs water the melt does not supply. With the gap held at `b_min = 1` mm and full of
   water, the explicit coupling adds water wherever creep would close the gap below `b_min`: the
   outflow at the terminus is about 14 times the geothermal melt, and the extra water carves the
-  channel along the trunk. ISSM's own run also drains more than it melts, about 2.4 times.
+  channel along the trunk.
 * The defaults close the water budget: after about two weeks the outflow equals the melt,
   `0.004 m³/s`. With that little water the gap stays below 1.2 mm everywhere, no channel forms and
   the flow is laminar.
@@ -91,9 +91,13 @@ Columns: ISSM, the ISSM reproduction (Shakti equations) and the defaults.
     not from the clamped gap. To reproduce ISSM itself, use `ExplicitGapCoupling`.
 
 !!! note "`b_min` on the default sheet"
-    On the default (unfilled) sheet `b_min` is a minimum cavity size, not a numerical floor. With ISSM's
-    `b_min = 1e-3` the melt cannot fill a 1 mm gap: after two years every grounded cell is at `b_min`, 74 % are at
-    `p_w = 0` and 88 % have `N > 0.9 p_o`, mean `N` is 2.38 MPa and the correlation with ISSM is -0.70. A run
-    restarted at `b_min = 1e-3` from the wet end state of the `1e-6` run drains to the same state, so `b_min` alone
-    picks the branch. At `1e-6` the two-year run gives mean `N` 0.63 MPa and a correlation of 0.78, with the water
-    budget closed to `1e-16` of the input.
+    Use `b_min = 1e-6` on the default (unfilled) sheet, not ISSM's `1e-3`. ISSM's scheme, which `ExplicitGapCoupling`
+    reproduces, never lets a gap close below `b_min` and counts it as full of water. Where the ice would creep the gap
+    shut, the scheme reopens it to `b_min` every step and fills the reopened cavity with water that nothing supplied
+    (see the bullets above). In ISSM's output nearly all cells sit at `b_min`, so this happens almost everywhere. The
+    default sheet of Shakti.jl creates no water. Its cavity is `b_min` thick, and a cell is pressurized only once the melt has
+    filled it. At `1e-3` the melt cannot fill a 1 mm cavity, so the cells stay partly empty at `p_w = 0` and
+    `N = p_o`: after two years every grounded cell is at `b_min`, 74 % have `p_w = 0`, mean `N` is 2.38 MPa and the
+    correlation with ISSM is -0.70. Starting from the filled end state of the `1e-6` run makes no difference: the
+    water leaves and the cells do not fill again. At `1e-6` the cavity is 1 µm, the melt fills it, and the same two
+    years give a mean `N` of 0.63 MPa, a correlation of 0.78 and a water budget closed to `1e-16` of the input.

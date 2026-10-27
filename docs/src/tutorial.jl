@@ -98,7 +98,7 @@ band!(axg, xg, fill(-100.0, nx), zb[:, 1]; color = (:sienna, 0.6), label = L"\ma
 lines!(axg, xg, zs[:, 1]; color = :steelblue, linewidth = 2)
 lines!(axg, xg, zb[:, 1]; color = :saddlebrown, linewidth = 2)
 ylims!(axg, -100, 600)
-Legend(geo[1, 2], axg; framevisible = false)
+Legend(geo[1, 2], axg; framevisible = false);
 # inset at the top left: the terminus, 0 to 20 m, where the ice is 1 m thick
 xt = range(0.0, 20.0, length = 101)
 zt = [6 * (sqrt(x + 5000.0) - sqrt(5000.0)) + 1 for x in xt]
@@ -308,7 +308,7 @@ Which to choose:
 * Shakti's sheet: `ShaktiSheet()`, with which Cholesky and CG are allowed
 * the original equations bit for bit: `ShaktiSheet(original = true)`
 =#
-sheet = GlaDS2Sheet()
+sheet = GlaDS2Sheet();
 
 #=
 ## 8. Solvers
@@ -316,7 +316,8 @@ The head equation is nonlinear, and a Picard iteration solves it: each iteration
 for the head with the linear solver and repeats until the head stops changing. Both objects are created explicitly:
 ```julia
 ls = LUDirectSolver(grid)                       # linear solver
-ps = PicardSolver(200, 1e-6, ls, grid)           # Picard solver, passed to Simulation as ps = ps
+max_iter, tol = 200, 1e-6   # Picard iterations per step and tolerance
+ps = PicardSolver(max_iter, tol, ls, grid)           # Picard solver, passed to Simulation as ps = ps
 ```
 `PicardSolver(iters, tol, ls, grid; alpha, atol, check_every)` works for any `e_v` (englacial storage), zero or not:
 
@@ -369,23 +370,39 @@ Other solver keywords of `Simulation`:
 * `diffusion_scheme = NoDiffusion()` (default)  `WithDiffusion(ls2)` adds Suhmo's channel-wall diffusion of the gap [Felden2023](@cite). It solves a second linear system, for the gap, so `ls2` is a second solver instance next to the head solver's `ls`; see the [Suhmo page](@ref SUHMO)
 =#
 ls = LUDirectSolver(grid)
-ps = PicardSolver(200, 1e-6, ls, grid);
+max_iter, tol = 200, 1e-6   # Picard iterations per step and tolerance
+ps = PicardSolver(max_iter, tol, ls, grid);
 
 #=
 ## 9. Gap scheme and time step
-`gap_scheme` (keyword):
-* `FullyImplicitGapScheme()` (default)  unconditionally stable for any bump height
-* `ExplicitGapScheme()`  forward Euler; small steps only
+`gap_scheme` (keyword) sets how the gap height ``b`` is advanced in time:
+* `FullyImplicitGapScheme()` (default)  the creep closure and the opening by sliding are both evaluated at the new value of ``b``. It is unconditionally stable: it holds for any time step `dt`, for any bump height `br` and any sliding speed. It needs no iteration, because the sliding opening is piecewise linear in ``b`` and is solved in closed form
+* `ExplicitGapScheme()`  forward Euler, with the opening taken at the old ``b``. It overshoots the bump height `br` once ``dt\, u_b / l_r > 1``, so it is stable for small steps only
 
-Under `WithDiffusion` the choice is ignored: the diffusive gap solve has its own scheme.
+Under `WithDiffusion` this choice is ignored, because the diffusion term involves the spatial derivative of ``b``. The gap equation is then non-local in space: each cell depends on its neighbours, so it must be solved as a linear system ``Ax = b`` for all cells at once, as the head equation is (this is the second solver `ls2` of step 8), and it has its own scheme.
 
-Time step:
+Time step (`timestep_scheme` keyword):
 * `FixedTimeStep()` (default)  `dt` every step; with the default sheet hours to days work
-* `AdaptiveTimeStep(grid, state; dt_min, dt_max, target_time)`  `dt` halved when the head solve does not converge (the step is retried) and grown after fast steps; `safety_factor` adds an optional cap from the creep and sliding rates; `run!` stops at `target_time`
+* `AdaptiveTimeStep(grid, state; dt_min, dt_max, target_time, safety_factor = nothing)`  `dt` is halved when the head solve does not converge (the step is retried) and grown after a few fast steps, always between `dt_min` and `dt_max`
+
+| Argument | Meaning |
+|:---------|:--------|
+| `dt_min`, `dt_max` | smallest and largest step allowed, in seconds |
+| `target_time` | the total simulated time (seconds, counted from the start of this run) that the run should cover. `run!` stops once the simulated time reaches it, and the last step is shortened to land exactly on it. The number of steps is not known in advance, so `nsteps` of the `Simulation` is only an upper bound, e.g. `ceil(target_time / dt_min)` |
+| `safety_factor` | `nothing` (default): no extra cap, `dt` is set by the head solve alone. A number, e.g. `0.3`: also require ``dt \le \text{safety\_factor}/r``, where ``r = A |N|^{n-1} N + |u_b|/l_r`` is the rate (in 1/s) at which the gap relaxes by creep and by sliding, taken as its maximum over the cells with ``b > b_{min}``. So `dt` is at most `safety_factor` times the gap's relaxation time, which keeps the gap accurate (it is an accuracy cap, not needed for stability) |
+| `use_percentile`, `percentile` | take the `percentile`-th quantile of ``r`` instead of its maximum, so that a single stiff cell does not shrink the step for the whole domain (needs a sort each step, so it is slower) |
+
+For example, one year with a step that adapts between 10 minutes and 2 days and is also capped by the gap rate:
+
+```julia
+ts = AdaptiveTimeStep(grid, state; dt_min = 600.0, dt_max = 2 * 86400.0, target_time = 365 * 86400.0, safety_factor = 0.3)
+```
+
+The tutorial uses `FixedTimeStep()`.
 =#
 gs = FullyImplicitGapScheme()
 ts = FixedTimeStep()
-dt, nsteps = 86400.0, 365
+dt, nsteps = 86400.0, 365;
 
 #=
 ## 10. Output
@@ -396,32 +413,36 @@ and the step indices to record them at (`times`, 0 = initial state):
 * `LiveObserver(obs, times)`  kept in memory, for short interactive runs
 * `NoObserver()` (default)  nothing recorded
 
-Checkpoints: `run!(sim; checkpoint_every, checkpoint_path)`, then `restart_path` resumes a killed run
-and `extend_path` continues a finished one into a new file. A checkpoint keeps the state, `dt`, the head-extrapolation
-history, `AdaptiveTimeStep`'s controller (the step it asks for, its fast-step count and its count of rejected steps) and
-the totals of the water budget (`sim.wb`, step 11), so a resumed run continues the counts of an uninterrupted one. A
-checkpoint written before any of these were saved restarts that part from zero.
+To save checkpoints and restart a run, see the end of step 11.
 =#
 path = joinpath(mktempdir(), "tutorial.nc")
 obs = IOObserver(["N", "b", "Re", "po"], 0:nsteps, NetCDFFileWriter(), path)
 sim = Simulation(grid, state, nsteps, floattype(dt), p, mi, sl; ps = ps, sheet = sheet, gap_scheme = gs,
-                 timestep_scheme = ts, observer = obs)
+                 timestep_scheme = ts, observer = obs);
 
 #=
 ## 11. Run and check
 After each gap update `check_gap_height` looks for a gap runaway: it errors if `b` is not finite in a grounded cell or
 exceeds the ice thickness there by more than 1 km (every later step would carry it), and warns once if it exceeds
-the thickness by less. Under `FilledCavities`, `check_filled_sheet` also warns once when cells reach `p_w < 0` or a step
-creates water: a full gap has no other way to meet a closure its inflow cannot supply, and `UnfilledCavities` lets it
-part-empty instead.
+the thickness by less. Under `FilledCavities`, `check_filled_sheet` also warns once when cells reach ``p_w < 0`` or a step creates water. A gap
+that is always full must hold a fixed volume of water. Where the inflow is too small to keep it full against the creep
+closure, it can only create water, drop to a negative water pressure (suction, ``p_w < 0``), or let the gap partly empty.
+`UnfilledCavities` takes the last option, so it creates no water and has no suction.
 
-Every sheet keeps a water budget, `sim.wb`, read with `water_created(sim)`: per step the water created beyond sources
-and fluxes (`created`) against the grounded `input`, and over all steps `total_created` (net), `total_input`,
-`gross_created` and `gross_lost` (summed by sign over cells and steps, so water created in one place and lost in
-another does not cancel) and `unconverged`, the number of steps taken with an unconverged head solve. Such a step also
-warns once. `verbose = true` in `Simulation` prints, per step, the Picard iterations, `dt` under `AdaptiveTimeStep`, the
-water created and its fraction of the input, the count of unconverged steps once there is one, and under `FilledCavities`
-the cells at `p_w < 0`.
+#### Water budget
+Every simulation keeps a record of the water it creates or loses by mistake, `sim.wb`, which is read with
+`water_created(sim)`. The model is correct if the water stored in the gaps changes only by the melt input minus what leaves
+through the outlets, and the budget measures how far it is from that. It reports:
+* per step: `created`, the water created beyond the sources and fluxes, and `input`, the water that enters the grounded
+  region (both in m³)
+* over all steps: `total_input`, and `total_created`, the net created water (created minus lost)
+* `gross_created` and `gross_lost`: created and lost water added up separately, cell by cell and step by step. Water created
+  in one place and lost in another cancels in `total_created` but not here
+* `unconverged`: the number of steps whose head solve did not converge (each such step also warns once)
+
+`verbose = true` in `Simulation` prints, at each step, the Picard iterations, the `dt` under `AdaptiveTimeStep`, the water
+created and its fraction of the input, the count of unconverged steps once there is one, and under `FilledCavities` the
+number of cells with ``p_w < 0``.
 =#
 run!(sim)
 
@@ -429,6 +450,43 @@ gr = Array(state.mask) .== GROUNDED
 (converged = sim.hs.ps.converged,
  N_over_po = extrema(Array(state.N)[gr] ./ Array(state.po)[gr]),
  b = extrema(Array(state.b)[gr]))
+
+#=
+### Checkpoints and restarts
+`run!` can save a checkpoint every few steps, so that a run killed by a job time limit or a crash does not start again from
+day 0. The checkpoint file holds the latest state only: each save overwrites the previous one, and the last step is always
+saved. These code blocks are not run here, because the tutorial run is short:
+
+```julia
+run!(sim; checkpoint_every = 50, checkpoint_path = "checkpoint.nc")   # save every 50 steps
+```
+
+There are two ways to continue from a checkpoint. In both you first build the `Simulation` again exactly as before
+(same grid, parameters, options and output `path`) and then call `run!` with one of these keywords (never both):
+
+| Keyword | Use it when | `nsteps` of the new `Simulation` | Output file |
+|:--------|:------------|:---------------------------------|:------------|
+| `restart_path` | the run was killed before reaching its target | the original total, as the run continues from the saved step up to it | the same file, reopened and appended to |
+| `extend_path` | the run finished and you want to go further | the number of **additional** steps | a new file (give the new `Simulation` a new `path`), whose first frame has the saved time, so day 365 is day 365 and not day 0 |
+
+```julia
+## the run was killed: rebuild `sim` as above, then finish the same 365 steps
+run!(sim; restart_path = "checkpoint.nc", checkpoint_every = 50, checkpoint_path = "checkpoint.nc")
+
+## the run finished: build a new `sim` with nsteps = 365 (one more year) and a new output path, then
+run!(sim; extend_path = "checkpoint.nc")
+```
+
+What a checkpoint stores:
+* the `State`, the time, and the current `dt`
+* the recent heads that `head_extrapolation_order` uses for the first guess of each head solve
+* for `AdaptiveTimeStep`, its controller: the step it asks for next, how many fast steps in a row it has seen, and how many
+  steps it has rejected
+* the water budget totals of `sim.wb`
+
+A resumed run therefore gives the same results and the same counts as one that was never interrupted. A checkpoint written
+by an older version that did not store one of these starts that part again from zero.
+=#
 
 #=
 ## 12. Coupling to an ice-flow model
@@ -444,37 +502,45 @@ Between steps (`step!(sim)` advances one) a host model can:
 
 #=
 ## 13. Plot
-The slab is uniform in `y`, so a profile along `x` says it all: the effective pressure, the gap
-height and the Reynolds number on days 0, 1, 10, 30, 100 and 365, from the NetCDF file.
-* `N` goes to zero at the outlet, where the ice is 1 m thick and the water drains at atmospheric
-  pressure; `N/p_o` there is close to 1.
+The slab is uniform in `y`, so only a profile along `x` is plotted: the effective pressure, the gap
+height and the Reynolds number on days 0, 1, 10, 30 and 100, from the NetCDF file.
+* `N` is smallest at the outlet but not zero. The ice there is thin (11.5 m at the first grounded cell, 1 m at the terminus
+  itself), so ``p_o`` is only 0.1 MPa. The water drains at atmospheric pressure, ``p_w = 0``, so ``N = p_o - p_w = p_o``
+  and `N/p_o = 1` there. ``N`` would reach zero only if ``p_w`` rose to ``p_o``.
 * `N` is set within a day. The gap takes about 100 days: it opens near the outlet, where the
   flux is largest and the thin ice closes it slowly (closure goes as `A N^3 b`), and closes inland.
 * `N` and `Re` start on day 1: on day 0 they come from the starting head, not from a solve.
 =#
 N, bb, Re = (ncread(path, v) for v in ("N", "b", "Re"))
 days = round.(Int, ncread(path, "time") ./ 86400)
-frames = [1, 2, 11, 31, 101, nsteps + 1]             # days 0, 1, 10, 30, 100, 365
+frames = [1, 2, 11, 31, 101]                         # days 0, 1, 10, 30, 100
 jm = ny ÷ 2                                          # one row along x
 ix = findall(gr[:, jm])                              # grounded cells only
 xkm = grid.x[ix] ./ 1e3
-lin = vs -> [L"%$(round(v, digits = 1))" for v in vs]
-pow10 = vs -> [L"10^{%$(round(Int, log10(v)))}" for v in vs]
-decades(v) = 10.0 .^ (floor(Int, log10(minimum(v))):ceil(Int, log10(maximum(v))))   # log ticks at integer powers of ten
-colors = cgrad(:viridis, length(frames); categorical = true)
+
+## tick labels, and log ticks at integer powers of ten
+lin(vs) = [L"%$(round(v, digits = 1))" for v in vs]
+pow10(vs) = [L"10^{%$(round(Int, log10(v)))}" for v in vs]
+decades(v) = 10.0 .^ (floor(Int, log10(minimum(v))):ceil(Int, log10(maximum(v))))
+
+## black lines whose opacity grows with time, from 0.2 on day 0 to 1 on day 100 (a square root of time, so that the
+## early days stay distinguishable: linear in time would make days 1, 10 and 30 almost the same shade)
+opacity(k) = 0.2 + 0.8 * sqrt(days[k] / days[frames[end]])
+
+## one panel per quantity: label, profile along x at frame k, y scale, tick format, frames drawn
+panels = [(L"N\ [\mathrm{MPa}]", k -> N[ix, jm, k] ./ 1e6,  identity, lin,   frames[2:end]),
+          (L"b\ [\mathrm{mm}]",  k -> bb[ix, jm, k] .* 1e3, identity, lin,   frames),
+          (L"\mathrm{Re}",        k -> Re[ix, jm, k],        log10,    pow10, frames[2:end])]
 
 fig = Figure(size = (720, 640))
-rows = [(L"N\ [\mathrm{MPa}]", k -> N[ix, jm, k] ./ 1e6, identity, lin, frames[2:end]),
-        (L"b\ [\mathrm{mm}]", k -> bb[ix, jm, k] .* 1e3, identity, lin, frames),
-        (L"\mathrm{Re}", k -> Re[ix, jm, k], log10, pow10, frames[2:end])]
-for (r, (name, f, scale, fmt, ks)) in enumerate(rows)
-    yticks = scale === log10 ? decades(reduce(vcat, f.(ks))) : Makie.automatic
-    ax = Axis(fig[r, 1]; ylabel = name, yscale = scale, yticks, ytickformat = fmt,
-              xtickformat = vs -> [L"%$(round(Int, v))" for v in vs],
-              xlabel = r == 3 ? L"x\ [\mathrm{km}]" : "", xticklabelsvisible = r == 3)
-    for (c, k) in enumerate(frames)
-        k in ks || continue
-        lines!(ax, xkm, f(k); color = colors[c], linewidth = 2, label = L"\mathrm{day}\ %$(days[k])")
+for (r, (ylabel, profile, yscale, ytickformat, ks)) in enumerate(panels)
+    last_row = r == length(panels)
+    yticks = yscale === log10 ? decades(reduce(vcat, profile.(ks))) : Makie.automatic
+    ax = Axis(fig[r, 1]; ylabel, yscale, yticks, ytickformat,
+              xlabel = last_row ? L"x\ [\mathrm{km}]" : "", xticklabelsvisible = last_row,
+              xtickformat = vs -> [L"%$(round(Int, v))" for v in vs])
+    for k in ks
+        lines!(ax, xkm, profile(k); color = (:black, opacity(k)), linewidth = 2, label = L"\mathrm{day}\ %$(days[k])")
     end
     r == 2 && Legend(fig[1:3, 2], ax; framevisible = false)
 end
