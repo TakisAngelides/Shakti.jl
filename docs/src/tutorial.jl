@@ -107,6 +107,10 @@ geo
 * `e_v = 0`  englacial void ratio; `0` elliptic head equation, `> 0` parabolic (the head stores englacial water, see the [Parabolic scheme](@ref ParabolicScheme) page)
 * `outflow_only_land = true`, `outflow_only_ocean = true`  outlets let water out, never in; `false` for tidal intrusion
 * `b_c = 0`  creep cutoff length (SUHMO); non-zero selects `CreepCutoff`. Dataset-dependent runaways: opt in with care
+* `T_freeze = -1.0`, `T_hysteresis = 0.5`  [K] used by `update_frozen_mask!` (step 12): a cell freezes when its basal temperature relative to pressure melting drops below `T_freeze` and thaws at `T_freeze + T_hysteresis`; `0` hysteresis gives one threshold, at which a cell can flicker
+* `mdot_includes_G`, `_frictional`, `_potential`, `_sensible`, `_qT` (all `true`)  switch one term of the melt rate off: geothermal flux, frictional heating, potential-energy dissipation, sensible heat, conductive heat into the ice
+* `limit_freeze_on = true`  floors the melt rate at the freeze-on the gap can absorb this step (`freeze_on_capacity!`, step 12), so freezing never takes `b` below `b_min` or more water than a cell holds; `false` lets the melt rate freeze as much as the energy balance asks
+* Constants, SI, rarely changed: `rho_w = 1000`, `rho_sw = 1027` (sea water, for the `OCEAN` pressure), `rho_i = 910`, `g = 9.81`, `nu = 1.787e-6` (water viscosity), `n = 3` (Glen's exponent), `L = 334e3` (latent heat), `cw = 4.22e3` (water heat capacity), `p_atm = 0` (the pressure of `LAND` outlets)
 =#
 p = ModelParameters()
 
@@ -140,7 +144,7 @@ The defaults are the GlaDS-2 sheet. Each keyword of `Simulation` has an opt-out:
   * `NoUplift()`  SHAKTI's, `N < 0` allowed
 * `hydraulic_potential = SheetTopPotential()` (default)  `q = -K grad(h + b)`
   * `BedPotential()`  `q = -K grad(h)`, the original equations
-* `k_face_choice = "implicit_upwind"` (default with the two above)  face conductance from the upwind water depth at the end of the step: no time-step limit, needs an LU solver (step 8)
+* `k_face_choice = "implicit_upwind"` (default with the two above)  face conductance from the upwind water depth at the end of the step: no time-step limit, needs an LU solver (step 8); on the filled sheet's dry floor with `ExplicitGapScheme` it warns, because the explicit gap update overshoots the water depths the faces conduct by (use the default `FullyImplicitGapScheme`)
   * `"upwind"`  symmetric matrix (Cholesky, CG, Newton allowed), but stable only for `dt < dx W / (3|q|)` (minutes at 100 m); warns with unfilled cavities or uplift
   * `"arithmetic"` (default with `FilledCavities`/`NoUplift`), `"harmonic"`  averaged faces; refused with unfilled cavities or uplift, where they create water
 * `gap_coupling = ConsistentGapCoupling()` (default with a Picard solver)  the head equation uses the gap change the gap scheme makes: the water budget closes
@@ -167,6 +171,11 @@ Linear solver `ls`:
 * `BiCGStabIterativeSolver(grid)`  matrix-free with a multigrid preconditioner, GPU-resident: the default sheet with fields on the GPU, about 0.2 s per step on an A100 from 800 x 200 to 1600 x 400 cells (`CUDSSDirectSolver` is faster on smaller grids, slower on larger ones)
 
 `Simulation` refuses Cholesky and CG with the default sheet, and names the opt-outs.
+
+Other solver keywords of `Simulation`:
+* `head_extrapolation_order = 1` (default)  the first guess of each head solve is the head extrapolated in time from the last converged steps (`1` linear, `2` quadratic): fewer Picard iterations, the same answer. `0` starts from the previous head
+* `cell_N_clamping = NoCellNClamping()` (default)  `CellNClamping(Dict((i, j) => (nmin, nmax)))` clamps `N` in the named cells only, on top of the global `N_min`/`N_max` of step 5: a patch for a few cells that misbehave, leaving the rest of the domain free to reach low or negative `N`
+* `diffusion_scheme = NoDiffusion()` (default)  `WithDiffusion(ls)` adds SUHMO's channel-wall diffusion of the gap. It solves a second linear system, for the gap, so `ls` is a second solver instance next to the head solver's; see the [SUHMO page](@ref SUHMO)
 =#
 ps = PicardSolver(200, 1e-6, LUDirectSolver(grid), grid)
 
@@ -174,11 +183,7 @@ ps = PicardSolver(200, 1e-6, LUDirectSolver(grid), grid)
 ## 9. Gap scheme and time step
 `gap_scheme` (keyword):
 * `FullyImplicitGapScheme()` (default)  unconditionally stable for any bump height
-* `ImplicitGapScheme()`  implicit creep, explicit opening; deprecated (warns)
 * `ExplicitGapScheme()`  forward Euler; small steps only
-
-Older drivers name it by a string before the tracked observables (`"fully_implicit"`, `"implicit"`,
-`"explicit"`); that form still runs, with a deprecation warning.
 
 Under `WithDiffusion` the choice is ignored: the diffusive gap solve has its own scheme.
 
@@ -197,11 +202,11 @@ and the step indices to record them at (`times`, 0 = initial state):
 * `LiveObserver(obs, times)`  kept in memory, for short interactive runs
 * `NoObserver()` (default)  nothing recorded
 
-Older drivers pass `obs` positionally before `mi` with `which_observer`, `which_file_writer`, `tracked_times`
-and `path`; that form still runs, with a deprecation warning.
-
 Checkpoints: `run!(sim; checkpoint_every, checkpoint_path)`, then `restart_path` resumes a killed run
-and `extend_path` continues a finished one into a new file.
+and `extend_path` continues a finished one into a new file. A checkpoint keeps the state, `dt`, the head-extrapolation
+history, `AdaptiveTimeStep`'s controller (the step it asks for, its fast-step count and its count of rejected steps) and
+the totals of the water budget (`sim.wb`, step 11), so a resumed run continues the counts of an uninterrupted one. A
+checkpoint written before any of these were saved restarts that part from zero.
 =#
 path = joinpath(mktempdir(), "tutorial.nc")
 sim = Simulation(grid, state, nsteps, floattype(dt), p, mi, sl; ps = ps,
@@ -209,10 +214,19 @@ sim = Simulation(grid, state, nsteps, floattype(dt), p, mi, sl; ps = ps,
 
 #=
 ## 11. Run and check
-`run!` warns once if the gap grows taller than the ice (`check_gap_height`), the sign of a gap
-runaway. Under `FilledCavities` it also warns once when cells reach `p_w < 0` or a step creates water
-(`check_filled_sheet`): a full gap has no other way to meet a closure its inflow cannot supply, and
-`UnfilledCavities` lets it part-empty instead. `verbose = true` in `Simulation` prints each step's Picard iterations.
+After each gap update `check_gap_height` looks for a gap runaway: it errors if `b` is not finite in a grounded cell or
+exceeds the ice thickness there by more than 1 km (every later step would carry it), and warns once if it exceeds
+the thickness by less. Under `FilledCavities`, `check_filled_sheet` also warns once when cells reach `p_w < 0` or a step
+creates water: a full gap has no other way to meet a closure its inflow cannot supply, and `UnfilledCavities` lets it
+part-empty instead.
+
+Every sheet keeps a water budget, `sim.wb`, read with `water_created(sim)`: per step the water created beyond sources
+and fluxes (`created`) against the grounded `input`, and over all steps `total_created` (net), `total_input`,
+`gross_created` and `gross_lost` (summed by sign over cells and steps, so water created in one place and lost in
+another does not cancel) and `unconverged`, the number of steps taken with an unconverged head solve. Such a step also
+warns once. `verbose = true` in `Simulation` prints, per step, the Picard iterations, `dt` under `AdaptiveTimeStep`, the
+water created and its fraction of the input, the count of unconverged steps once there is one, and under `FilledCavities`
+the cells at `p_w < 0`.
 =#
 run!(sim)
 

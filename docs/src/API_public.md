@@ -169,7 +169,6 @@ AbstractHeadScheme
 PicardHeadScheme
 AbstractGapScheme
 ExplicitGapScheme
-ImplicitGapScheme
 FullyImplicitGapScheme
 Sheet
 GlaDS2Sheet
@@ -208,8 +207,6 @@ compute_dpwdxy!
 ```@docs
 compute_face_flux!
 compute_Re!
-compute_q_and_Re_xy!
-compute_K!
 ```
 
 ## Gap height

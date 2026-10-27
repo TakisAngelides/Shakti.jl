@@ -80,6 +80,8 @@ state.b   # gap height [m]
 state.h   # hydraulic head [m]
 ```
 
+This is version 0.2.0. [NEWS.md](NEWS.md) lists what it removed and changed, and how to move an old driver over.
+
 Every option, and when to choose it, is explained in the
 [tutorial](https://TakisAngelides.github.io/Shakti.jl/dev/tutorial/). Runs on real glaciers and ice
 sheets are in the [examples](https://TakisAngelides.github.io/Shakti.jl/dev/).

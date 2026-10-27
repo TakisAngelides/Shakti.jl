@@ -4,8 +4,13 @@ SUHMO [Felden2023](@cite) adds a diffusion term `∇·(D ∇b)` to the gap equat
 through a channel melts its walls sideways, so channels widen instead of staying one cell wide.
 `D` follows from the flux and the head gradient, so it is large in channels and close to zero in
 the sheet. Pass `diffusion_scheme = WithDiffusion(ls)` to `Simulation`, where `ls` is a second
-linear solver for the gap system (`CholeskyDirectSolver`, `CUDSSDirectSolver` or `CGIterativeSolver`;
-the system is symmetric positive definite).
+linear solver for the gap system (`CholeskyDirectSolver`, `CUDSSDirectSolver(grid; structure = :spd)` or `CGIterativeSolver`).
+
+## Two linear solvers
+A SUHMO run solves two linear systems, so it takes two solver objects:
+* the head solve, `ls` inside the `PicardSolver` (`ps`): the head equation. On the default sheet its matrix is not symmetric, so it needs an LU solver (`LUDirectSolver`, `CUDSSDirectSolver`)
+* the gap solve, `ls` inside `WithDiffusion(ls)`: the diffusion of `b`. Its matrix is symmetric positive definite, so the cheaper Cholesky (or CG) works
+They are separate instances because each holds its own matrix and factorization, and each can use the method that suits its matrix. With `ConsistentGapCoupling` (the default) the gap system is solved at every Picard iteration, one extra solve per iteration.
 
 This page runs when the docs are built: a moulin on the margin of the [Tutorial](@ref), widened
 to 10 km, 60 days of 1-day steps with and without the diffusion.
@@ -88,5 +93,5 @@ channels on fine grids.
 ## Creep cutoff
 SUHMO also limits creep closure in wide channels: `ModelParameters(b_c = ...)` with `b_c > 0`
 selects `CreepCutoff`. On some datasets it lets a channel grow without bound, so use it with care
-and keep `check_gap_height` warnings on (`b_max = Inf`).
+and keep `b_max = Inf`: `check_gap_height` then stops the run when `b` exceeds the ice thickness by more than 1 km.
 =#
