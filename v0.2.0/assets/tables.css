@@ -1,0 +1,4 @@
+/* Tables drawn as a full grid, so wide rows (the sliding-law table) read cell by cell. */
+.content table { border-collapse: collapse; }
+.content table th, .content table td { border: 1px solid #dbdbdb; padding: 0.45em 0.7em; vertical-align: middle; }
+html.theme--documenter-dark .content table th, html.theme--documenter-dark .content table td { border-color: #5e6d6f; }
