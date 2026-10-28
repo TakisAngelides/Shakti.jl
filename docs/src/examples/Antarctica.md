@@ -1,10 +1,7 @@
 # [Antarctica](@id Antarctica)
 
-The Antarctic Ice Sheet from Yelmo restarts at 32 km and 16 km, the same restarts as the
-FastHydrology.jl examples. The default sheet, one year of 1-day steps. The setup is the one of
-[Greenland](@ref Greenland): `load_yelmo` in `docs/make_figures.jl`, `RegularizedCoulombSlidingLaw(0.25)`
-with Yelmo's basal speed, no surface input. Grounded cells below flotation that connect to the
-ocean are set to `OCEAN`, so the grounding line is where Yelmo's ice would float.
+The Antarctic Ice Sheet from Yelmo restart files at 32 km and 16 km grid resolution. The default sheet is simulated for one year of 1-day steps. The setup is similar to the one of
+[Greenland](@ref Greenland).
 
 | Grid | Cells | Grounded | Steps | `N/p_o` | Mean `N` | Max `b` |
 |---|---|---|---|---|---|---|

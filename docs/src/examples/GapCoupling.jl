@@ -9,6 +9,23 @@ this step. `gap_coupling` chooses that assumption:
 * `ExplicitGapCoupling()`: the head equation assumes `db = dt * rate(N, b_old)`, the gap rate at
   the new effective pressure `N` times the old gap `b_old`, as Shakti [Sommers2018](@cite) does.
 
+`rate(N, b)` is the rate at which the gap changes: opening by melt of the walls and by sliding over
+bed bumps, minus creep closure,
+
+```math
+\mathrm{rate}(N, b) = \frac{\dot m}{\rho_i} + \beta(b)\,|\mathbf{u}_b| - A\,|N|^{n-1} N\, l_c(b) ,
+```
+
+with ``\beta`` the bump-height factor and ``l_c`` the creep length, both functions of the gap.
+`ExplicitGapCoupling` evaluates `b` at the start of the step (`b_old`) but ``N`` at the end of it.
+That does not need ``N^{n+1}`` to be known beforehand, because ``N = p_o - \rho_w g (h - z_b)`` is a
+function of the head, and the head ``h^{n+1}`` is exactly what the head equation solves for. The
+creep term ``A |N|^{n-1} N\, l_c(b_\mathrm{old})`` is therefore written into the row as a function of
+the unknown ``h``. Each Picard iterate recomputes ``N`` from the current ``h`` and linearizes the term
+about it (this puts ``n \rho_w g A |N|^{n-1} l_c`` on the diagonal), so that at convergence it is
+evaluated at ``N^{n+1}``. Only the gap is lagged. The melt and sliding terms are likewise
+recomputed at the iterate, since ``\dot m`` depends on the flux and the basal drag, which depend on ``h``.
+
 When the two disagree, the water the head equation put into or took out of the gap is not the water
 the gap update stores. The difference is water created or lost from nothing. This page shows when that
 happens and how large it is. A *closed water budget* means that, per step, the change of stored water
@@ -22,7 +39,7 @@ using CairoMakie
 
 #=
 ## Setup
-The ice-sheet margin of the [Tutorial](@ref), with the default sheet.
+The ice-sheet margin glacier of the [Tutorial](@ref), with the default sheet.
 =#
 nx, ny = 80, 20
 grid = Grid(nx, ny, 20000.0, 5000.0)
@@ -36,7 +53,7 @@ zb = zeros(nx, ny)
 zs = [6 * (sqrt(x + 5000.0) - sqrt(5000.0)) + 1 for x in grid.x, y in grid.y]
 A_visc = 5e-25
 p  = ModelParameters()
-sl = RegularizedCoulombSlidingLaw(0.25)
+sl = RegularizedCoulombSlidingLaw(0.25);
 
 #=
 ## Why the two couplings differ
@@ -50,7 +67,7 @@ water. Where the ice is thick and `N` is large, `dt A N^3` is largest.
 ## Run
 The same year of simulation, once with each coupling, for time steps of 1, 2, 5 and 10 days.
 `water_created(sim)` returns the budget: `total_created` is the water created over all steps (net) and
-`total_input` is the water supplied over all steps, both in m3.
+`total_input` is the water supplied over all steps, both in ``m^3``.
 =#
 function run_year(gap_coupling, dt)
     nsteps = round(Int, 365 * 86400 / dt)

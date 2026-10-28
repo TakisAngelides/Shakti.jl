@@ -4,7 +4,7 @@ The seasonal experiment of [Sommers2018](@cite) (Sect. 3.3) on the ice-sheet mar
 [Tutorial](@ref), with the default sheet. `SeasonalMeltInput()` holds the input at 1 m/a in winter
 and raises it along a cosine to almost 1000 m/a in the melt season, from day 146 to day 256.
 
-This page runs when the docs are built: one year of 1-day steps. The winter before the melt
+This page runs when the docs are built to simulate one year of 1-day steps. The winter before the melt
 season is the spin-up.
 =#
 
@@ -50,7 +50,7 @@ ps = PicardSolver(max_iter, tol, LUDirectSolver(grid), grid)
 sim = Simulation(grid, state, nsteps, floattype(dt), p, mi, sl;
                  ps = ps, observer = IOObserver(["N", "b", "Re", "ieb"], 0:nsteps, NetCDFFileWriter(), path))
 run!(sim)
-sim.hs.ps.converged
+sim.hs.ps.converged;
 
 #=
 ## Through the year

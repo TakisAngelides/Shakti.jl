@@ -216,8 +216,8 @@ The default values of `ModelParameters`:
 | ``c_t``, ``c_w`` | `ct`, `cw` | 7.5 × 10⁻⁸ K Pa⁻¹, 4220 J kg⁻¹ K⁻¹ | change of melting point with pressure, heat capacity of water |
 | ``e_v`` | `e_v` | 0 | englacial void ratio |
 | ``p_\mathrm{atm}`` | `p_atm` | 0 Pa | pressure at `LAND` and of the sea surface |
-| ``b_\min``, ``b_\max`` | `b_min`, `b_max` | 10⁻⁶ m, ∞ | bounds on ``b`` |
-| ``N_\min``, ``N_\max`` | `N_min`, `N_max` | −∞, ∞ | bounds on ``N`` |
+| ``b_{min}``, ``b_\max`` | `b_min`, `b_max` | 10⁻⁶ m, ∞ | bounds on ``b`` |
+| ``N_{min}``, ``N_\max`` | `N_min`, `N_max` | −∞, ∞ | bounds on ``N`` |
 
 The fields ``z_b``, ``z_s``, ``\mathbf{u}_b``, ``A``, ``G``, ``q_T`` and ``i_{eb}`` are inputs, set in the
 `State` (step 4 of the tutorial) or by a coupled ice-flow model.

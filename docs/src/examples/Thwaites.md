@@ -1,16 +1,8 @@
 # [Thwaites](@id Thwaites)
 
 Thwaites Glacier on the 2 km grid of [Kazmierczak2024](@cite), with their inverted friction
-coefficient. The default sheet, one year of 1-day steps. The loader is `load_thwaites` in
+coefficient. The default sheet is simulated for one year of 1-day steps. The loader is `load_thwaites` in
 `docs/make_figures.jl`, which also makes the figure; the input files are in `docs/src/examples/input/Thwaites`.
-
-* The data's `x` and `y` are swapped so the sea is on the left.
-* Mask: grounded ice from the data, cells with `H = 0` excluded, grounded cells below flotation that
-  connect to the ocean set to `OCEAN`.
-* `A` per second, smoothed over three passes (the data has jumps between hardness classes).
-* Sliding: the regularized Coulomb law of Kazmierczak et al. with their `C` and `v0`
-  (`RegularizedCoulombV0SlidingLaw`), speeds from the SSA velocity.
-* No surface input; the water comes from basal melt.
 
 ```julia
 using Shakti
@@ -69,5 +61,5 @@ Wall times are on the [Performance](@ref) page.
 
 Over most of the bed the water pressure is close to the overburden (`N/p_o` near 0), as in
 Kazmierczak et al. The water drains through a branching network that converges on the main trunk, where the
-flow is turbulent (`Re` up to `10^4`). In the isolated patches at `N/p_o = 1` the gap is open but holds no water, so
+flow is turbulent (`Re` up to ``10^4``). In the isolated patches at `N/p_o = 1` the gap is open but holds no water, so
 `p_w = 0`: unfilled cavities allow this, filled cavities would put a negative `p_w` there.

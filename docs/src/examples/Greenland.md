@@ -1,17 +1,9 @@
 # [Greenland](@id Greenland)
 
-The Greenland Ice Sheet from Yelmo restarts at 16 km and 8 km, the same restarts as the FastHydrology.jl
-examples. The default sheet, one year of 1-day steps. The loader is `load_yelmo` in
+The Greenland Ice Sheet from Yelmo restart files at 16 km and 8 km grid resolution. 
+The default sheet is simulated for one year of 1-day steps. The loader is `load_yelmo` in
 `docs/make_figures.jl`, which also makes the figures; the restart paths are local
 (`docs/figure_paths.jl`).
-
-* Mask: grounded where `f_ice > 0`, `f_grnd > 0` and `H > 0`; ice-free land above sea level is
-  `LAND` (an outlet at atmospheric pressure), the rest `OCEAN`. Grounded cells below flotation that
-  connect to the ocean are set to `OCEAN`.
-* `A` from Yelmo's `ATT` (depth mean, per year to per second), smoothed over three passes;
-  `G` from `Q_geo`.
-* Sliding: `RegularizedCoulombSlidingLaw(0.25)` with Yelmo's basal speed (`ux_b`, `uy_b`).
-* No surface input; the water comes from basal melt.
 
 ```julia
 using Shakti
@@ -75,6 +67,4 @@ Wall times are on the [Performance](@ref) page.
 
 In the interior the water pressure is close to the overburden; towards the margins, where the ice
 thins and the water drains to `LAND` at atmospheric pressure, `N/p_o` rises to 1. The sheet is
-laminar under the divides and turbulent in the outlet systems. The small ice caps detached from the
-sheet hold the largest gaps on the 8 km grid. On the 16 km grid one
-cell, where the ice is 9 mm thick, ends with a gap larger than the ice thickness.
+laminar under the divides and turbulent in the outlet systems.
