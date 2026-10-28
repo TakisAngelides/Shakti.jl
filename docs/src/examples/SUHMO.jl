@@ -13,64 +13,69 @@ A Suhmo run solves two linear systems, so it takes two solver objects:
 They are separate instances because each holds its own matrix and factorization, and each can use the method that suits its matrix. With `ConsistentGapCoupling` (the default) the gap system is solved at every Picard iteration, one extra solve per iteration.
 
 The diffusion changes the result only where `sqrt(D t)` approaches the cell size: wide, wet
-channels on fine grids. This page runs such a case when the docs are built.
+channels on fine grids.
 
 ## Felden et al. (2023) channelized test
 Fig. 4 of [Felden2023](@cite) tests the diffusion with a moulin at `(16, 8)` m on a 64 m x 16 m bed sloping at 2 %
 under 500 m of ice, `x = 0` the outlet. Without diffusion the channel below the moulin is one cell wide
 and 12 m deep; with it the channel is metres wide. Here Shakti runs the test with the parameters of Suhmo's
 shipped input (`exec/0_convergence_channelized`): the original SHAKTI sheet, `b_min = 1` mm, Suhmo's
-friction heat `20² u_b² N` and its tanh-ramped moulin, at `Δx = 0.5` m in 1-hour steps for 30 days.
-The paper reaches steady state in about 20 days.
+friction heat `20² u_b² N` and its tanh-ramped moulin, at the paper's `Δx = 0.125` m (513 x 129 cells) in 1-hour
+steps for 125 days. The paper reaches steady state in about 20 days.
+
+The run takes a few minutes on a GPU (cuDSS solvers), so the docs load its saved result instead of running it.
+Uncomment the block below to run it; it writes the `x = 10` m transect to `shakti_0125.csv`.
+=#
+## using Shakti
+## dx = 0.125
+## nx, ny = round(Int, 64 / dx) + 1, round(Int, 16 / dx) + 1
+## grid = Grid(nx, ny, 64.0, 16.0)
+## zb = [0.02 * x for x in grid.x, y in grid.y]
+## mask = fill(GROUNDED, nx, ny)
+## mask[1, :] .= OCEAN
+## p = ModelParameters(b_min = 1e-3, rho_i = 910.0, nu = 1.787e-6, omega = 1e-3, br = 0.1, lr = 2.0, ct = 7.5e-8,
+##                     cw = 4.22e3, b_c = 0.0)
+## sl = LinearSlidingLaw(grid, fill(20.0, nx, ny))            # friction heat C² u_b² N with C = 20, as in Suhmo
+## state = State(grid)
+## set_initial_conditions!(state, grid, p, sl, mask, fill(2.5e-25, nx, ny), zb, zb .+ 500.0, fill(0.01, nx, ny),
+##                         fill(0.05, nx, ny), fill(1e-6, nx + 1, ny), zeros(nx, ny + 1), zeros(nx, ny),
+##                         zeros(nx + 1, ny), zeros(nx, ny + 1))
+## set_ieb_external!(state, fill(1e-11, nx, ny))                # Suhmo's distributed input [m/s]
+## month = 2635200.0                                            # Suhmo's month [s]
+## mi = TanhRampMoulinMeltInput(grid, 16.0, 8.0, 1.0, 30.0, 0.5 * month, 0.1 * month; floor = 0.001)
+## sim = Simulation(grid, state, 125 * 24, floattype(3600.0), p, mi, sl;
+##                  ps = PicardSolver(200, 1e-6, CUDSSDirectSolver(grid), grid),
+##                  diffusion_scheme = WithDiffusion(CUDSSDirectSolver(grid; structure = :spd)),
+##                  sheet = ShaktiSheet(original = true))
+## run!(sim)
+## ix = argmin(abs.(grid.x .- 10.0))
+## b, h = Array(state.b)[ix, :], Array(state.h)[ix, :]
+## open("shakti_0125.csv", "w") do io
+##     println(io, "y,b,h")
+##     foreach(j -> println(io, grid.y[j], ",", b[j], ",", h[j]), eachindex(grid.y))
+## end
+
+#=
+The first step warns about suction: the gap starts at 1 cm, too small for the moulin's water, and the head
+drops below the bed. The gap opens within days, and no cell is in suction at the end.
+
+### Shakti, Suhmo and the paper
+The transect at `x = 10` m (the blue line of the paper's Fig. 4a) compared with
+* Suhmo as released (Zenodo, commit `001ef39`), run with its shipped input `5lev` (`Δx = 0.125` m, the paper's
+  resolution) for the same 125 days of 1-hour steps;
+* the paper's Fig. 4b ("with D"), digitized from the published figure (about ±0.025 m in `b`, ±0.002 m in `h`).
+The files are in `docs/src/examples/input/SUHMO`.
 =#
 using Shakti
 using CairoMakie
 
-dxc = 0.5
-nxc, nyc = round(Int, 64 / dxc) + 1, round(Int, 16 / dxc) + 1
-gc = Grid(nxc, nyc, 64.0, 16.0)
-zbc = [0.02 * x for x in gc.x, y in gc.y]
-maskc = fill(GROUNDED, nxc, nyc)
-maskc[1, :] .= OCEAN
-pc = ModelParameters(b_min = 1e-3, rho_i = 910.0, nu = 1.787e-6, omega = 1e-3, br = 0.1, lr = 2.0, ct = 7.5e-8,
-                     cw = 4.22e3, b_c = 0.0)
-slc = LinearSlidingLaw(gc, fill(20.0, nxc, nyc))            # friction heat C² u_b² N with C = 20, as in Suhmo
-sc = State(gc)
-set_initial_conditions!(sc, gc, pc, slc, maskc, fill(2.5e-25, nxc, nyc), zbc, zbc .+ 500.0, fill(0.01, nxc, nyc),
-                        fill(0.05, nxc, nyc), fill(1e-6, nxc + 1, nyc), zeros(nxc, nyc + 1), zeros(nxc, nyc),
-                        zeros(nxc + 1, nyc), zeros(nxc, nyc + 1))
-set_ieb_external!(sc, fill(1e-11, nxc, nyc))                # Suhmo's distributed input [m/s]
-month = 2635200.0                                           # Suhmo's month [s]
-mic = TanhRampMoulinMeltInput(gc, 16.0, 8.0, 1.0, 30.0, 0.5 * month, 0.1 * month; floor = 0.001)
-simc = Simulation(gc, sc, 30 * 24, floattype(3600.0), pc, mic, slc;
-                  ps = PicardSolver(200, 1e-6, LUDirectSolver(gc), gc),
-                  diffusion_scheme = WithDiffusion(CholeskyDirectSolver(gc)), sheet = ShaktiSheet(original = true))
-run!(simc)
-simc.hs.ps.converged
-
-#=
-The run warns once, in its first step: the gap starts at 1 cm, too small for the moulin's water, and the
-head drops below the bed. The gap opens within days, and no cell is in suction at the end:
-=#
-Shakti.suction_cells(sc)
-
-#=
-### Shakti, Suhmo and the paper
-The transect at `x = 10` m (the blue line of the paper's Fig. 4a) compared with
-* Suhmo as released (Zenodo, commit `001ef39`), was run here with its shipped inputs `5lev` (`Δx = 0.125` m,
-  the paper's resolution) and `3lev` (`Δx = 0.5` m, this run's), 125 days of 1-hour steps;
-* the paper's Fig. 4b ("with D"), digitized from the published figure (about ±0.025 m in `b`, ±0.002 m in `h`).
-The files are in `docs/src/examples/input/SUHMO`.
-=#
 function read_transect(name)
     rows = [parse.(Float64, split(l, ',')) for l in eachline(pkgdir(Shakti, "docs", "src", "examples", "input", "SUHMO", name))
             if !startswith(l, '#') && !startswith(l, 'y')]
     return (y = getindex.(rows, 1), b = getindex.(rows, 2), h = getindex.(rows, 3))
 end
-ix = argmin(abs.(gc.x .- 10.0))
-cases = ["Shakti, Δx = 0.5 m" => (y = collect(gc.y), b = Array(sc.b)[ix, :], h = Array(sc.h)[ix, :]),
-         "Suhmo release, Δx = 0.125 m" => read_transect("suhmo_release_5lev.csv"),
-         "Suhmo release, Δx = 0.5 m" => read_transect("suhmo_release_3lev.csv"),
+cases = ["Shakti" => read_transect("shakti_0125.csv"),
+         "Suhmo release" => read_transect("suhmo_release_5lev.csv"),
          "Felden et al. (2023), Fig. 4b" => read_transect("felden2023_fig4b.csv")]
 
 function half_width(y, b)                  # width where b > max/2, edges interpolated linearly
@@ -89,16 +94,14 @@ function texticks(vs)                     # LaTeX tick labels with the decimals 
     fixed(v) = (t = string(round(v, digits = d)); rpad(t, findfirst('.', t) + d, '0'))
     return [L"%$(d == 0 ? round(Int, v) : fixed(v))" for v in vs]
 end
-labels = [L"\mathrm{Shakti},\ \Delta x = 0.5\ \mathrm{m}", L"\mathrm{Suhmo\ release},\ \Delta x = 0.125\ \mathrm{m}",
-          L"\mathrm{Suhmo\ release},\ \Delta x = 0.5\ \mathrm{m}", L"\mathrm{Felden\ et\ al.\ (2023),\ Fig.\ 4b}"]
-styles = [(color = colors[1], linestyle = :solid, marker = :circle),
-          (color = colors[2], linestyle = :solid, marker = nothing),
+labels = [L"\mathrm{Shakti}", L"\mathrm{Suhmo\ release}", L"\mathrm{Felden\ et\ al.\ (2023),\ Fig.\ 4b}"]
+styles = [(color = colors[1], linestyle = :solid, marker = nothing),
           (color = colors[2], linestyle = :dash, marker = nothing),
           (color = :black, linestyle = nothing, marker = :utriangle)]
 fig = Figure(size = (900, 360))
-axb = Axis(fig[1, 1]; xlabel = L"y\ [\mathrm{m}]", ylabel = L"b\ [\mathrm{m}]", title = L"\mathrm{gap\ height\ at}\ x = 10\ \mathrm{m}",
+axb = Axis(fig[1, 1]; xlabel = L"y\ [\mathrm{m}]", ylabel = L"b\ [\mathrm{m}]", title = L"\mathrm{gap\ height\ at}\ x = 10\ \mathrm{m},\ \Delta x = 0.125\ \mathrm{m}",
            xtickformat = texticks, ytickformat = texticks)
-axh = Axis(fig[1, 2]; xlabel = L"y\ [\mathrm{m}]", ylabel = L"h\ [\mathrm{m}]", title = L"\mathrm{head\ at}\ x = 10\ \mathrm{m}",
+axh = Axis(fig[1, 2]; xlabel = L"y\ [\mathrm{m}]", ylabel = L"h\ [\mathrm{m}]", title = L"\mathrm{head\ at}\ x = 10\ \mathrm{m},\ \Delta x = 0.125\ \mathrm{m}",
            xtickformat = texticks, ytickformat = texticks)
 for ((_, c), s, name) in zip(cases, styles, labels), (ax, v) in ((axb, c.b), (axh, c.h))
     s.linestyle === nothing || lines!(ax, c.y, v; color = s.color, linestyle = s.linestyle, linewidth = 2, label = name)
@@ -108,9 +111,10 @@ Legend(fig[2, 1:2], axb; orientation = :horizontal, merge = true, framevisible =
 fig
 
 #=
-Shakti and the released Suhmo agree: a channel 0.85 to 0.9 m deep and 4 to 4.7 m wide, with the head across it
-flat to within 2 cm. Suhmo gives the same at both resolutions. The published figure does not: its channel is 1.47 m
-deep and 2.2 m wide, and the head dips by 0.17 m over it. Neither code reproduces that with the released inputs.
+Shakti and the released Suhmo agree on the channel: 0.83 and 0.89 m deep, 4.9 and 4.2 m wide. Their heads differ
+by a few centimetres: Shakti's dips by 5 cm over the channel, from 1.20 m at the edges, while Suhmo's rises by 1 cm, from 1.15 m.
+The published figure differs from both: its channel is 1.47 m deep and 2.2 m wide, and the head dips by 0.17 m over it,
+from 1.12 m at the edges. Neither code reproduces that with the released inputs.
 =#
 
 #=
