@@ -356,6 +356,11 @@
             @test Shakti.face_mean(Arithmetic(), 1.0, 5.0, +1.0) == 3.0 # other schemes ignore the head difference
             @test Shakti.face_conductance(Upwind(), 1.0, GROUNDED, 5.0, GROUNDED, +1.0) == 5.0
             @test Shakti.face_conductance(Arithmetic(), 1.0, GROUNDED, 5.0, GROUNDED) == 3.0
+            # GapMean: K of the mean gap (K goes as b^3), so a gap of 2 next to one of 0 gives 1^3 = 1, not (8 + 0)/2 = 4
+            @test Shakti.face_mean(GapMean(), 8.0, 0.0) == 1.0
+            @test Shakti.face_mean(GapMean(), 8.0, 8.0) == 8.0
+            @test Shakti.face_mean(GapMean(), 1.0, 27.0) == 8.0 # gaps 1 and 3 -> 2 -> 8
+            @test Shakti.k_face_scheme("gap_mean") isa GapMean
 
             # through the face kernel: a nearly empty cell next to a full one
             sim = make_sim(UnfilledCavities())

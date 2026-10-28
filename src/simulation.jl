@@ -190,10 +190,11 @@ k_face_scheme(kfs::AbstractKFaceScheme) = kfs
 k_face_scheme(name::AbstractString) =
     name == "arithmetic"      ? Arithmetic() :
     name == "harmonic"        ? Harmonic() :
+    name == "gap_mean"        ? GapMean() :
     name == "upwind"          ? Upwind() :
     name == "implicit_upwind" ? ImplicitUpwind() :
-    error("Unknown k_face_choice: \"$name\" (expected \"arithmetic\", \"harmonic\", \"upwind\" or \"implicit_upwind\")")
-k_face_name(kfs::AbstractKFaceScheme) = kfs isa ImplicitUpwind ? "implicit_upwind" : lowercase(string(nameof(typeof(kfs))))
+    error("Unknown k_face_choice: \"$name\" (expected \"arithmetic\", \"harmonic\", \"gap_mean\", \"upwind\" or \"implicit_upwind\")")
+k_face_name(kfs::AbstractKFaceScheme) = kfs isa ImplicitUpwind ? "implicit_upwind" : kfs isa GapMean ? "gap_mean" : lowercase(string(nameof(typeof(kfs))))
 
 sheet_name(o) = "$(nameof(typeof(o.cf)))/$(nameof(typeof(o.up)))"
 
@@ -209,9 +210,9 @@ const OPTION_RULES = (
     # neighbour's conductance, and the water it then delivers is created by the W >= 0 floor of update_water_budget!
     # (Thwaites 2 km, uplift, dt = 1 h: 1.7e7 m^3/s after 12 h against 500 m^3/s of melt, lifting the ice by hundreds of
     # metres). The harmonic mean closes every face of a dry cell, so it never wets again.
-    (o -> o.free_surface && (o.kfs isa Arithmetic || o.kfs isa Harmonic), :error,
+    (o -> o.free_surface && (o.kfs isa Arithmetic || o.kfs isa GapMean || o.kfs isa Harmonic), :error,
      o -> "k_face_choice = \"$(k_face_name(o.kfs))\" with $(sheet_name(o)) does not conserve water: " *
-          (o.kfs isa Arithmetic ? "a dry cell discharges through half its neighbour's conductance and the water it lacks is created. " :
+          ((o.kfs isa Arithmetic || o.kfs isa GapMean) ? "a dry cell discharges through half its neighbour's conductance and the water it lacks is created. " :
                                   "a dry cell's faces have no conductance, so it never refills. ") *
           "Use \"implicit_upwind\" (the default), or cavity_filling = FilledCavities(), uplift = NoUplift() for SHAKTI's original filled sheet."),
     # "upwind" lags the water depth: correct, but stable only for dt < dx*W/(3|q|), minutes at 100 m (at 3 h a non-finite
@@ -329,7 +330,7 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
   second, independent [`AbstractLinearSolver`](@ref) instance for `b`'s own diffusion operator.
 - `sheet`: [`GlaDS2Sheet`](@ref) (default) or [`ShaktiSheet`](@ref), a [`Sheet`](@ref) bundling `cavity_filling`, `uplift`,
   `hydraulic_potential` and `gap_coupling`. Each of these keywords, when passed, overrides the sheet's field.
-- `k_face_choice`: `"arithmetic"`, `"harmonic"`, `"upwind"` or `"implicit_upwind"`, or the scheme itself (`Arithmetic()`,
+- `k_face_choice`: `"arithmetic"`, `"harmonic"`, `"gap_mean"` ([`GapMean`](@ref)), `"upwind"` or `"implicit_upwind"`, or the scheme itself (`Arithmetic()`,
   `ImplicitUpwind()`, ...; see [`AbstractKFaceScheme`](@ref));
   by default `"implicit_upwind"` under [`UnfilledCavities`](@ref) or [`IceUplift`](@ref) (so with the default sheet),
   `"arithmetic"` otherwise. Where the water depth is free (a free surface or an uplift layer) the flux is a kinematic

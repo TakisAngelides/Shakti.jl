@@ -77,4 +77,14 @@
             @test Array(sim_ext.state.h) == Array(sim_own.state.h)
             @test Array(sim_ext.state.b) == Array(sim_own.state.b)
         end
+
+        @testset "TanhRampMoulinMeltInput: SUHMO's smooth step from floor*Q_max to Q_max" begin
+            mi = TanhRampMoulinMeltInput(grid, 3e2, 3e2, 2e2, 30.0, 1e5, 1e4; floor = 0.001)
+            state = State(grid)
+            discharge(t) = (update_ieb!(mi, state, t); sum(Array(state.ieb_own)) * grid.dx * grid.dy)
+            full = sum(mi.shape) * grid.dx * grid.dy * 30.0
+            @test discharge(0.0) ≈ 0.001 * full rtol = 1e-4
+            @test discharge(1e5) ≈ (0.001 + 0.999 / 2) * full rtol = 1e-6
+            @test discharge(1e6) ≈ full rtol = 1e-6
+        end
     end

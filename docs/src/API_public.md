@@ -57,6 +57,7 @@ ConstantMeltInput
 SeasonalMeltInput
 update_ieb!
 GaussianMoulinMeltInput
+TanhRampMoulinMeltInput
 combine_ieb!
 set_ieb_external!
 ```
@@ -67,6 +68,7 @@ set_ieb_external!
 AbstractKFaceScheme
 Arithmetic
 Harmonic
+GapMean
 Upwind
 ImplicitUpwind
 compute_K_face

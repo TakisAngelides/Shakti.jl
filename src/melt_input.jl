@@ -159,9 +159,13 @@ as `grid.x`/`grid.y`) with spatial standard deviation `sigma`, ramping up to `Q_
 """
 function GaussianMoulinMeltInput(grid::Grid, x0, y0, sigma, Q_max, ramp_duration)
     F = floattype
+    return GaussianMoulinMeltInput(F.(gaussian_shape(grid, x0, y0, sigma)), F(Q_max), F(ramp_duration))
+end
+
+# The 2D Gaussian footprint of a moulin at (x0, y0), normalized so sum(shape)*dx*dy = 1 (m^-2).
+function gaussian_shape(grid::Grid, x0, y0, sigma)
     shape = [exp(-((xi - x0)^2 + (yi - y0)^2) / (2 * sigma^2)) for xi in grid.x, yi in grid.y]
-    shape ./= sum(shape) * grid.dx * grid.dy
-    return GaussianMoulinMeltInput(F.(shape), F(Q_max), F(ramp_duration))
+    return shape ./ (sum(shape) * grid.dx * grid.dy)
 end
 
 """
@@ -173,6 +177,51 @@ footprint scaled by the current point on the linear ramp (elapsed simulation tim
 @inline function update_ieb!(mi::GaussianMoulinMeltInput, state::State, t)
     F = eltype(state.ieb)
     ramp = min(t / mi.ramp_duration, one(F))
+    state.ieb_own .= mi.shape .* mi.Q_max .* ramp
+    return combine_ieb!(state)
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+A single moulin with the same fixed 2D Gaussian footprint as [`GaussianMoulinMeltInput`](@ref), but with SUHMO's own
+smooth temporal ramp (Felden et al. 2023, `AmrHydro.cpp`): the discharge is
+`Q_max * (floor + (1 - floor) * (tanh((t - t_mid) / width) + 1) / 2)`, a smooth step from `floor * Q_max` up to `Q_max`
+centred on `t_mid`, whose rise takes a few `width`. SUHMO's channelized test case uses `t_mid = 0.5` month, `width = 0.1`
+month and `floor = 0.001`, with months of 2 635 200 s.
+
+`shape` is the precomputed spatial footprint (m^-2), `Q_max` the peak discharge (m^3 s^-1), `t_mid` and `width` in
+seconds, `floor` the fraction of `Q_max` before the step.
+"""
+struct TanhRampMoulinMeltInput{A <: AbstractArray, F <: AbstractFloat} <: AbstractMeltInput
+    shape::A
+    Q_max::F
+    t_mid::F
+    width::F
+    floor::F
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Builds a [`TanhRampMoulinMeltInput`](@ref) centred at `(x0, y0)` (grid coordinates) with spatial standard deviation
+`sigma`, peak discharge `Q_max` (m^3/s) and a ramp centred on `t_mid` seconds with width `width` seconds, starting from
+`floor * Q_max`.
+"""
+function TanhRampMoulinMeltInput(grid::Grid, x0, y0, sigma, Q_max, t_mid, width; floor = 0.0)
+    F = floattype
+    return TanhRampMoulinMeltInput(F.(gaussian_shape(grid, x0, y0, sigma)), F(Q_max), F(t_mid), F(width), F(floor))
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Updates `state.ieb_own` to `mi.shape * Q_max * (floor + (1 - floor) * (tanh((t - t_mid) / width) + 1) / 2)` at the
+elapsed simulation time `t` (seconds).
+"""
+@inline function update_ieb!(mi::TanhRampMoulinMeltInput, state::State, t)
+    F = eltype(state.ieb)
+    ramp = mi.floor + (one(F) - mi.floor) * (tanh((t - mi.t_mid) / mi.width) + one(F)) / 2
     state.ieb_own .= mi.shape .* mi.Q_max .* ramp
     return combine_ieb!(state)
 end

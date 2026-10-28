@@ -86,10 +86,19 @@ term in `h`'s RHS): `D` is refreshed every Picard iteration from the current
 coupled linear system using `ls` -- a *second*, independent [`AbstractLinearSolver`](@ref) instance
 from whatever solves `h` (`CholeskyDirectSolver`/`CGIterativeSolver`, same types, just built on
 `b`'s own operator).
+
+`D_min` (m^2/s, default `0`) floors `D` on every face between two `GROUNDED` cells. SUHMO's own code floors it at
+`5e-6` (`Dcoeff = max(b*melt/rho, 5.0e-6)` in its Fortran kernel, not stated in the paper), so a wall spreads by about
+`sqrt(D_min*t)` even where the water melts nothing: 5 m in 62 days.
+`D_faces = true` evaluates `D` on each face as SUHMO does, the mean gap of the two cells times the mean of their heats, instead
+of the mean of the cells' own `D`.
 """
 struct WithDiffusion{LS <: AbstractLinearSolver} <: AbstractDiffusionScheme
     ls::LS
+    D_min::Float64
+    D_faces::Bool
 end
+WithDiffusion(ls::AbstractLinearSolver; D_min = 0.0, D_faces = false) = WithDiffusion(ls, Float64(D_min), Bool(D_faces))
 
 """
 $(TYPEDSIGNATURES)

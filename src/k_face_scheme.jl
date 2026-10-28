@@ -26,6 +26,17 @@ struct Harmonic <: AbstractKFaceScheme end
 """
 $(TYPEDSIGNATURES)
 
+Face conductance of the mean gap: `K` at the arithmetic mean of the two cells' gaps, which is `((cbrt(K1) + cbrt(K2)) / 2)^3`
+since the laminar `K` goes as `b^3`. SUHMO's own face rule (Felden et al. 2023: the gap is averaged onto the face, then
+cubed). Next to a dry or thin neighbour it gives a channel cell an eighth of its conductance where [`Arithmetic`](@ref)
+gives a half, so less water leaves a channel sideways. Like `Arithmetic` it lets an unfilled cell's outflow outgrow its
+water, so it is refused under a free surface.
+"""
+struct GapMean <: AbstractKFaceScheme end
+
+"""
+$(TYPEDSIGNATURES)
+
 Face conductance between cells `(i1,j1)` and `(i2,j2)` from `face_mean`: `(K[i1,j1] + K[i2,j2]) / 2` under
 [`Arithmetic`](@ref), `2*K[i1,j1]*K[i2,j2] / (K[i1,j1] + K[i2,j2] + eps)` under [`Harmonic`](@ref), and the smaller of the
 two under [`Upwind`](@ref) when no head difference is given (the donor's otherwise, see the four-argument `face_mean`).
@@ -41,6 +52,7 @@ Scalar form of [`compute_K_face`](@ref): the arithmetic or harmonic mean of two 
 """
 @inline face_mean(::Arithmetic, a, b) = (a + b) / 2
 @inline face_mean(::Harmonic, a, b) = (2 * a * b) / (a + b + eps(typeof(a)))
+@inline face_mean(::GapMean, a, b) = ((cbrt(a) + cbrt(b)) / 2)^3
 
 """
 $(TYPEDSIGNATURES)

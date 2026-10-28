@@ -172,28 +172,43 @@ end
 # layer, or the water the budget keeps above the gap, update_water_budget!), and the wall the water touches is at most b.
 @inline wet_gap(b, W) = clamp(W, zero(b), b)
 
-@inline function cell_D(mask, b, W, q_x, q_y, dhdx, dhdy, dpwdx, dpwdy, scale, rho_w, ggrav, ct, cw, ix, iy,
-                        ::MeltTerms{Geothermal,Frictional,Potential,Sensible,Conductive}) where {Geothermal,Frictional,Potential,Sensible,Conductive}
-    heat = zero(scale)
+@inline function cell_heat(mask, q_x, q_y, dhdx, dhdy, dpwdx, dpwdy, rho_w, ggrav, ct, cw, ix, iy,
+                           ::MeltTerms{Geothermal,Frictional,Potential,Sensible,Conductive}) where {Geothermal,Frictional,Potential,Sensible,Conductive}
+    heat = zero(rho_w)
     if Potential
         heat += rho_w * ggrav * abs(cell_face_sum(mask, q_x, dhdx, q_y, dhdy, ix, iy))
     end
     if Sensible
         heat += ct * cw * rho_w * cell_face_sum(mask, q_x, dpwdx, q_y, dpwdy, ix, iy)
     end
-    return max(zero(heat), wet_gap(b[ix, iy], W[ix, iy]) * scale * heat) # floored at 0, see above
+    return heat
 end
 
-@parallel_indices (ix, iy) function compute_D_kernel!(D_x, D_y, mask, b, W, q_x, q_y, dhdx, dhdy, dpwdx, dpwdy, scale, rho_w, ggrav, ct, cw, mt)
+@inline cell_D(mask, b, W, q_x, q_y, dhdx, dhdy, dpwdx, dpwdy, scale, rho_w, ggrav, ct, cw, ix, iy, mt) =
+    max(zero(scale), wet_gap(b[ix, iy], W[ix, iy]) * scale * cell_heat(mask, q_x, q_y, dhdx, dhdy, dpwdx, dpwdy, rho_w, ggrav, ct, cw, ix, iy, mt)) # floored at 0, see above
+
+# D on the face between cells (ix, iy) and (jx, jy): the mean of the two cells' D, or with `D_faces` SUHMO's form, the mean
+# gap of the two cells times the mean of their heats (each floored at 0), which is a quarter of a channel cell's D at the face
+# to a dry neighbour where the mean of the cells' D is a half.
+@inline function face_D(D_faces, mask, b, W, q_x, q_y, dhdx, dhdy, dpwdx, dpwdy, scale, rho_w, ggrav, ct, cw, ix, iy, jx, jy, D_min, mt)
+    if D_faces
+        hi = max(zero(scale), cell_heat(mask, q_x, q_y, dhdx, dhdy, dpwdx, dpwdy, rho_w, ggrav, ct, cw, ix, iy, mt))
+        hj = max(zero(scale), cell_heat(mask, q_x, q_y, dhdx, dhdy, dpwdx, dpwdy, rho_w, ggrav, ct, cw, jx, jy, mt))
+        bf = (wet_gap(b[ix, iy], W[ix, iy]) + wet_gap(b[jx, jy], W[jx, jy])) / 2
+        return max(bf * scale * (hi + hj) / 2, D_min)
+    end
+    return max((cell_D(mask, b, W, q_x, q_y, dhdx, dhdy, dpwdx, dpwdy, scale, rho_w, ggrav, ct, cw, ix, iy, mt) +
+                cell_D(mask, b, W, q_x, q_y, dhdx, dhdy, dpwdx, dpwdy, scale, rho_w, ggrav, ct, cw, jx, jy, mt)) / 2, D_min)
+end
+
+@parallel_indices (ix, iy) function compute_D_kernel!(D_x, D_y, mask, b, W, q_x, q_y, dhdx, dhdy, dpwdx, dpwdy, scale, rho_w, ggrav, ct, cw, D_min, D_faces, mt)
     if ix > 1 && ix < size(D_x, 1) && iy <= size(D_x, 2)
         D_x[ix, iy] = (mask[ix, iy] == GROUNDED && mask[ix-1, iy] == GROUNDED) ?
-            (cell_D(mask, b, W, q_x, q_y, dhdx, dhdy, dpwdx, dpwdy, scale, rho_w, ggrav, ct, cw, ix, iy, mt) +
-             cell_D(mask, b, W, q_x, q_y, dhdx, dhdy, dpwdx, dpwdy, scale, rho_w, ggrav, ct, cw, ix-1, iy, mt)) / 2 : zero(scale)
+            face_D(D_faces, mask, b, W, q_x, q_y, dhdx, dhdy, dpwdx, dpwdy, scale, rho_w, ggrav, ct, cw, ix, iy, ix-1, iy, D_min, mt) : zero(scale)
     end
     if iy > 1 && iy < size(D_y, 2) && ix <= size(D_y, 1)
         D_y[ix, iy] = (mask[ix, iy] == GROUNDED && mask[ix, iy-1] == GROUNDED) ?
-            (cell_D(mask, b, W, q_x, q_y, dhdx, dhdy, dpwdx, dpwdy, scale, rho_w, ggrav, ct, cw, ix, iy, mt) +
-             cell_D(mask, b, W, q_x, q_y, dhdx, dhdy, dpwdx, dpwdy, scale, rho_w, ggrav, ct, cw, ix, iy-1, mt)) / 2 : zero(scale)
+            face_D(D_faces, mask, b, W, q_x, q_y, dhdx, dhdy, dpwdx, dpwdy, scale, rho_w, ggrav, ct, cw, ix, iy, ix, iy-1, D_min, mt) : zero(scale)
     end
     return
 end
@@ -211,12 +226,12 @@ compute_D!(s::State, p::ModelParameters, mt::MeltTerms, ::NoDiffusion) = s
 $(TYPEDSIGNATURES)
 
 Updates `s.D_x`/`s.D_y` (the channel-wall diffusion coefficient, SUHMO Eq. 10) under [`WithDiffusion`](@ref)
-(`linear_solver.jl`): one scalar per cell, `D = min(W, b)/(rho_i L) * (Q_diss + Q_sens)` floored at 0, from the
+(`linear_solver.jl`): one scalar per cell, `D = min(W, b)/(rho_i L) * (Q_diss + Q_sens)` floored at 0 (and at `ds.D_min` on a face between two `GROUNDED` cells, default 0), from the
 current `s.b`/`s.W` (the filled part of the gap) and `s.q_x`/`s.q_y`/`s.dhdx`/`s.dhdy`/`s.dpwdx`/`s.dpwdy`, averaged
 onto the faces between two `GROUNDED` cells (zero elsewhere), so it is the same across and along a channel -- its two terms (potential-energy dissipation, sensible-heat exchange) gated
 by `mt`'s own `Potential`/`Sensible` flags, exactly like [`compute_mdot!`](@ref)'s matching terms.
 """
-function compute_D!(s::State, p::ModelParameters, mt::MeltTerms, ::WithDiffusion)
-    @parallel compute_D_kernel!(s.D_x, s.D_y, s.mask, s.b, s.W, s.q_x, s.q_y, s.dhdx, s.dhdy, s.dpwdx, s.dpwdy, 1 / (p.rho_i * p.L), p.rho_w, p.g, p.ct, p.cw, mt)
+function compute_D!(s::State, p::ModelParameters, mt::MeltTerms, ds::WithDiffusion)
+    @parallel compute_D_kernel!(s.D_x, s.D_y, s.mask, s.b, s.W, s.q_x, s.q_y, s.dhdx, s.dhdy, s.dpwdx, s.dpwdy, 1 / (p.rho_i * p.L), p.rho_w, p.g, p.ct, p.cw, convert(eltype(s.D_x), ds.D_min), ds.D_faces, mt)
     return s
 end
