@@ -7,9 +7,7 @@ parabolic and `h` takes time to follow a change in the input. The same [`PicardS
 both: with `e_v > 0` its rows also store the englacial water `e_v (h - z_b)`, between the bed and the
 overburden head where the sheet has unfilled cavities and uplift (whose water is the sheet's own).
 
-This page runs when the docs are built. It spins up the margin of the [Tutorial](@ref), then
-raises the input from 1 to 10 m/a and follows the water pressure for ten days with
-`e_v = 0`, `1e-4` and `1e-3`.
+The glacier is simulated with a spin up as in the [Tutorial](@ref), then raises the input from 1 to 10 m/a and follows the water pressure for ten days with `e_v = 0`, `1e-4` and `1e-3`.
 =#
 
 using Shakti
@@ -18,7 +16,7 @@ using Statistics: mean
 
 #=
 ## Spin-up
-The tutorial's margin with the defaults, 100 days of 1-day steps at 1 m/a.
+The tutorial's glacier with the defaults simulated for 100 days of 1-day steps at 1 m/a.
 =#
 nx, ny = 80, 20
 grid = Grid(nx, ny, 20000.0, 5000.0)
@@ -58,7 +56,7 @@ end;
 
 #=
 ## Results
-The mean `p_w/p_o` over the margin. All runs end near the same pressure, about 0.22, set by the gap.
+The mean `p_w/p_o` over the glacier. All runs end near the same pressure, about 0.22, set by the gap.
 * `e_v = 0`: the pressure jumps from 0.08 to 0.48 in the first step, because the gap is still sized
   for 1 m/a, peaks at 0.53 after nine hours and falls back over about three days as the gap opens.
 * `e_v = 1e-4`: the water first fills the englacial voids; the pressure peaks at 0.34 after about a
