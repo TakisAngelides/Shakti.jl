@@ -146,18 +146,23 @@ The head matrix is a five-point stencil. It is symmetric and positive definite w
 except `"implicit_upwind"`, whose Newton terms make it non-symmetric (it keeps the sign pattern of an
 M-matrix). The solvers:
 
-| Solver | Matrix | Where |
-|:-------|:-------|:------|
-| `LUDirectSolver` | any | CPU |
-| `CholeskyDirectSolver` | symmetric | CPU |
-| `CUDSSDirectSolver` | any (`structure = :general`, LU) or symmetric (`:spd`, Cholesky) | NVIDIA GPU |
-| `CGIterativeSolver` | symmetric | CPU (assembled) or GPU (matrix-free) |
-| `BiCGStabIterativeSolver` | any | CPU or GPU (matrix-free) |
+| Solver | Matrix it solves | Representation | Fields on |
+|:-------|:-----------------|:---------------|:----------|
+| `LUDirectSolver` | any | assembled | CPU |
+| `CholeskyDirectSolver` | symmetric | assembled | CPU |
+| `CUDSSDirectSolver` | any (`structure = :general`, LU) or symmetric (`:spd`, Cholesky) | assembled on the CPU, factorized on an NVIDIA GPU | CPU |
+| `CGIterativeSolver(grid, SparseAssembledLinearSystem)` | symmetric | assembled | CPU |
+| `CGIterativeSolver(grid, MatrixFreeLinearSystem)` | symmetric | matrix-free | CPU or GPU |
+| `BiCGStabIterativeSolver` | any | matrix-free | CPU or GPU |
 
-The direct solvers assemble a sparse matrix whose pattern is built once, so each iterate only rewrites its
-values. The iterative solvers warm-start from the current head. A matrix-free solver works from the stencil
-coefficients and is preconditioned by an aggregation-multigrid V-cycle by default (or Jacobi; CG also takes
-Chebyshev); CG on the assembled matrix uses algebraic multigrid by default. `LUDirectSolver(grid; lagged = true)` reuses its last
+An assembled solver builds the sparse matrix explicitly, which only the CPU can do, so its fields stay on the
+CPU. A matrix-free solver never forms the matrix: it applies the five-point stencil from the per-cell
+coefficients, so it runs wherever the fields live, and it is the only kind that runs with the fields on a GPU.
+
+The assembled matrix's sparsity pattern is built once, so each iterate only rewrites its values. The
+iterative solvers warm-start from the current head. A matrix-free solver is preconditioned by an
+aggregation-multigrid V-cycle by default (or Jacobi; CG also takes Chebyshev), and CG on the assembled matrix
+by algebraic multigrid. `LUDirectSolver(grid; lagged = true)` reuses its last
 factorization as the preconditioner of a GMRES solve and refactorizes only when GMRES stalls. Under
 `WithDiffusion` the gap system is symmetric positive definite, and takes its own solver (Cholesky, cuDSS
 with `:spd`, or CG). See [the tutorial](@ref "8. Solvers") for when to use which.
