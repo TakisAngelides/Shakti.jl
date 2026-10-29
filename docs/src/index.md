@@ -2,7 +2,7 @@
 
 Shakti.jl is a Julia implementation of the transient subglacial hydrology model Shakti
 [Sommers2018](@cite). On a regular grid it evolves the water-filled gap between ice and bed and gives
-the hydraulic head, the water flux and the effective pressure at the ice base. One set of equations
+the reduced head, the water flux and the effective pressure at the ice base. One set of equations
 covers distributed (laminar) and channelized (turbulent) drainage.
 
 By default the physics represented by the code follows GlaDS-2 [Wells2026](@cite), where cavities can be partly empty and water

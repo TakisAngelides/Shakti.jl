@@ -1,39 +1,40 @@
 # Model equations
 
-This page states the continuum model that Shakti.jl solves. The sheet is Shakti's
+This page describes the continuum model solved by Shakti.jl. The sheet is Shakti's
 [Sommers2018](@cite), extended to cavities that are partly empty and to ice that is lifted off the bed,
 as in GlaDS-2 [Wells2026](@cite) and [SchoofHewittWerder2012](@cite). Each extension can be turned
-off (see [the tutorial](@ref "7. The sheet")), and the equations then reduce to those of Shakti.
+off (see [the tutorial](@ref "7. The sheet")), and the equations then reduce to those of the original Shakti.
 The [Discretization](@ref) page shows how the equations are solved on the grid.
 
 ## Unknowns and geometry
 
 The model is two-dimensional in the horizontal coordinates ``\mathbf{x} = (x, y)``. Between the bed
 ``z_b(\mathbf{x})`` and the ice base there is a gap of height ``b(\mathbf{x}, t)``, which holds a depth
-``W(\mathbf{x}, t)`` of water per unit bed area. The unknowns are
+``W(\mathbf{x}, t)`` of water volume per unit bed area. The unknowns are
 
 | Symbol | Meaning | Unit | `State` field |
 |:-------|:--------|:-----|:--------------|
 | ``b`` | gap height (space between the bed and the ice base) | m | `b` |
-| ``W`` | water depth (water volume per unit bed area) | m | `W` |
-| ``h`` | hydraulic head, referenced to the bed | m | `h` |
+| ``h`` | reduced head, ``h = z_b + (W - b) + p_w / (\rho_w g)`` | m | `h` |
 
-and the derived fields are
+and the derived fields are the water depth ``W`` (water volume per unit bed area, stored in the
+`State` field `W`), given by ``b`` and ``h`` through the closure below, and
 
 ```math
-H = \max\!\left(0,\; z_s - z_b - b - (W - b)_+\right), \qquad
+H = \max\!\left(0,\; z_s - z_b - b\right), \qquad
 p_o = \rho_i g H, \qquad
 N = p_o - p_w ,
 ```
 
-where ``z_s`` is the ice surface, ``H`` the ice thickness above the gap and the lifted water,
-``p_o`` the overburden pressure, ``p_w`` the water pressure, ``N`` the effective pressure and
-``(x)_+ = \max(x, 0)``. It is useful to write the overburden as a head,
+where ``z_s`` is the ice surface, ``H`` the ice thickness above the gap, ``p_o`` the overburden pressure,
+``p_w`` the water pressure, ``N`` the effective pressure and ``(x)_+ = \max(x, 0)``. Water above the gap
+in the uplifted regime lifts the ice without thinning it, so it does not enter ``H`` and leaves ``p_o``
+unchanged. It will be useful to also express the overburden as a reduced head,
 ``h_o = z_b + p_o / (\rho_w g)``.
 
 ## Three regimes of the sheet
 
-The head and the water pressure are related by
+The reduced head and the water pressure are related by
 
 ```math
 p_w = \rho_w g \,\operatorname{clamp}\!\left(h - z_b,\; 0,\; \frac{p_o}{\rho_w g}\right), \qquad
@@ -42,7 +43,7 @@ W = b + (h - z_b) - \frac{p_w}{\rho_w g} .
 
 This one closure covers three regimes:
 
-| Regime | Head | Pressure | Water |
+| Regime | Reduced head | Pressure | Water |
 |:-------|:-----|:---------|:------|
 | unfilled (cavity partly empty) | ``h < z_b`` | ``p_w = 0``, ``N = p_o`` | ``W = b - (z_b - h) < b`` |
 | filled | ``z_b \le h \le h_o`` | ``p_w = \rho_w g (h - z_b)`` | ``W = b`` |
@@ -55,30 +56,32 @@ so ``N < 0`` (water above the overburden) and ``p_w < 0`` (suction) are both pos
 
 ## Water flux
 
-The water moves as a thin viscous layer driven by the gradient of the potential
+The water moves as a thin viscous layer driven by the gradient of the hydraulic head ``\hat{h}``, which is related to the reduced head by
 
 ```math
-\phi = h + b \quad (\texttt{SheetTopPotential}), \qquad \phi = h \quad (\texttt{BedPotential}),
+\hat{h} = h + b \quad (\texttt{SheetTopPotential}), \qquad \hat{h} = h \quad (\texttt{BedPotential}).
 ```
 
-the head of the top of the water, in metres. In the unfilled regime ``\phi = z_b + W`` and in the
-uplifted regime ``\phi = h_o + W``. ``\rho_w g \phi`` is the potential of [Wells2026](@cite) Eq. 7.
-`BedPotential` is the potential of [Sommers2018](@cite), which leaves out the thickness of the water layer.
+With `SheetTopPotential`, ``\hat{h} = z_b + W + p_w / (\rho_w g)`` is the height the water would reach in a borehole
+drilled to the bed (filled and uplifted regimes) or the elevation of the water surface (unfilled regime): in the unfilled
+regime ``\hat{h} = z_b + W`` and in the uplifted regime ``\hat{h} = h_o + W``. Multiplied by ``\rho_w g`` it is the hydraulic
+potential, the energy density of the water, and the water flows to decrease it. The ``+ W`` term accounts for the thickness
+of the water layer, as in [Wells2026](@cite) Eq. 7. `BedPotential` leaves it out, ``\hat{h} = h``, as in [Sommers2018](@cite).
 The flux per unit width is
 
 ```math
-\mathbf{q} = -K \nabla \phi, \qquad
+\mathbf{q} = -K \nabla \hat{h}, \qquad
 K = \frac{g\, W^3}{12 \nu \left(1 + \omega \,\mathrm{Re}\right)}, \qquad
 \mathrm{Re} = \frac{|\mathbf{q}|}{\nu} .
 ```
 
 At small Reynolds numbers this is laminar Poiseuille flow between parallel plates. As ``\mathrm{Re}`` grows,
-the factor ``1 + \omega \mathrm{Re}`` takes the flux to the turbulent limit ``|\mathbf{q}| \propto |\nabla\phi|^{1/2}``.
+the factor ``1 + \omega \mathrm{Re}`` takes the flux to the turbulent limit ``|\mathbf{q}| \propto |\nabla\hat{h}|^{1/2}``.
 So the same equations describe distributed and channelized drainage, without a separate channel
 network [Sommers2018](@cite). The transmissivity is built from the water depth ``W``, which equals
 ``b`` in a filled gap, so an empty cavity carries no water. Since ``\mathrm{Re}`` depends on
 ``\mathbf{q}``, the two relations above make an implicit equation for ``|\mathbf{q}|``. Writing
-``D = g W^3 |\nabla\phi| / (12 \nu^2)``, it is the quadratic
+``D = g W^3 |\nabla\hat{h}| / (12 \nu^2)``, the implicit equation is the quadratic equation
 ``\omega \mathrm{Re}^2 + \mathrm{Re} - D = 0``, whose positive root is
 
 ```math
@@ -87,7 +90,7 @@ network [Sommers2018](@cite). The transmissivity is built from the water depth `
 
 ## Water mass balance
 
-The water per unit bed area changes by divergence of the flux, melt and input from above:
+The water volume per unit bed area changes by divergence of the flux, melt and input from above:
 
 ```math
 \frac{\partial W}{\partial t} + \frac{\partial E}{\partial t} + \nabla \cdot \mathbf{q}
@@ -98,8 +101,9 @@ The water per unit bed area changes by divergence of the flux, melt and input fr
 that enters the bed from above (surface melt through moulins and crevasses, `ieb`). ``E`` is the
 water stored in the ice above the bed, ``E = e_v (h - z_b)`` with the englacial void ratio ``e_v``
 ([Sommers2018](@cite) Eq. 13, `e_v = 0` by default). Where the unfilled and uplifted regimes are
-allowed, ``E`` takes ``h - z_b`` clamped to ``[0, p_o/(\rho_w g)]``: outside that range the
-water is in ``W``.
+allowed, ``E`` uses ``h - z_b`` clamped to ``[0, p_o/(\rho_w g)]``, which is the pressure head
+``p_w/(\rho_w g)``. Outside that range the change in head is stored in ``W``, not in ``E``, so the same water is not
+counted twice: ``E = 0`` in an unfilled cell and ``E = e_v\, p_o / (\rho_w g)``, constant in time, in an uplifted one.
 
 ## Gap height
 
@@ -114,7 +118,7 @@ creep of the ice:
   \;\left[ + \nabla \cdot (\mathcal{D} \nabla b) \right] .
 ```
 
-``\mathbf{u}_b`` is the sliding velocity, ``A`` the ice softness (`A_visc`) and ``n`` the exponent of Glen's law.
+``\mathbf{u}_b`` is the sliding velocity of the ice at its base, ``A`` the ice softness (`A_visc`) and ``n`` the exponent of Glen's law.
 The opening by sliding is that of a cavity in the lee of bumps of height ``b_r`` and spacing ``l_r``,
 
 ```math
@@ -143,15 +147,15 @@ The heat available at the bed melts the ice at the rate
 L \dot m
   = G
   + \underbrace{|\mathbf{u}_b \cdot \boldsymbol{\tau}_b|}_{Q_b}
-  \underbrace{- \rho_w g\, \mathbf{q} \cdot \nabla \phi}_{Q_\mathrm{diss}}
+  \underbrace{- \rho_w g\, \mathbf{q} \cdot \nabla \hat{h}}_{Q_\mathrm{diss}}
   + \underbrace{c_t c_w \rho_w\, \mathbf{q} \cdot \nabla p_w}_{Q_\mathrm{sens}}
   - q_T ,
 ```
 
 with the geothermal flux ``G``, the frictional heat ``Q_b`` of sliding with basal shear stress
-``\boldsymbol{\tau}_b``, the heat ``Q_\mathrm{diss} = \rho_w g K |\nabla\phi|^2 \ge 0`` dissipated by the
+``\boldsymbol{\tau}_b``, the heat ``Q_\mathrm{diss} = \rho_w g K |\nabla\hat{h}|^2 \ge 0`` dissipated by the
 flow, the sensible heat ``Q_\mathrm{sens}`` needed to keep the water at the pressure-melting point
-(which falls by ``c_t`` per pascal), and the heat ``q_T`` conducted into the ice. Water that flows
+(which falls by ``c_t`` per Pascal), and the heat ``q_T`` conducted into the ice. We assume that water is always at its pressure-melting point temperature, so that water that flows
 towards lower pressure, ``\mathbf{q} \cdot \nabla p_w < 0``, is warmed to its rising melting point, which
 takes heat from melting. Each term can be turned off (`mdot_includes_*` in `ModelParameters`).
 ``\boldsymbol{\tau}_b`` comes from a sliding law in ``N`` and ``\mathbf{u}_b`` (table in
@@ -172,16 +176,38 @@ gives an equation for the head. In a filled cell (``W = b``) it reads
   + i_{eb} ,
 ```
 
-with ``N = p_o - \rho_w g (h - z_b)``. On the left is the outflow of water and its englacial storage;
-on the right is the water that the gap cannot take up: the melt water less the room the melt makes
-(negative, since ``\rho_w > \rho_i``), less the room that sliding opens, plus the water that creep pushes out, plus the input.
-With ``e_v = 0`` the equation is elliptic at each time and nonlinear in ``h``, through ``N`` in the
-creep term and through ``\mathrm{Re}`` and ``\dot m`` in ``K`` and on the right. With ``\phi = h`` it is the head
-equation of [Sommers2018](@cite). In an unfilled or
-uplifted cell, ``N`` is fixed at ``p_o`` or ``0`` and the water depth takes up the balance instead:
-the ``\partial W / \partial t`` that the gap does not carry stays on the left as a storage term in
-``h`` (``W - b = h - z_b`` or ``h - h_o``). The head equation and the gap equation are coupled through
-``b`` in ``K`` and through ``N`` in the closure; [Discretization](@ref) shows how a time step solves them.
+with ``N = p_o - \rho_w g (h - z_b)``. The left side is the net outflow of water plus its englacial
+storage. The right side is the net source of water to the cell once the change in gap volume has been
+subtracted. Its terms are:
+
+- melt: the water ``\dot m / \rho_w`` produced minus the gap volume ``\dot m / \rho_i`` opened. This is
+  negative, since ``\rho_w > \rho_i``: the gap grows by more than the water it receives,
+- sliding: ``-\beta |\mathbf{u}_b|``, since the cavities that sliding opens add gap volume but no water,
+- creep: ``+A |N|^{n-1} N\, l_c``, the water pushed out as the ice closes the gap,
+- the input ``i_{eb}``.
+
+With ``e_v = 0`` the equation is elliptic in ``h`` at each time. It is nonlinear because ``N`` enters the
+creep term, and because ``\mathrm{Re}`` and ``\dot m`` enter ``K`` and the right side. With
+``\hat{h} = h`` it is the head equation of [Sommers2018](@cite).
+
+In an unfilled or uplifted cell the water depth and the gap height differ, ``W \ne b``, and the equation
+changes in two ways.
+
+First, ``N`` is fixed (at ``p_o`` in an unfilled cell, at ``0`` in an uplifted one), so the creep term no
+longer depends on ``h``.
+
+Second, a storage term appears on the left. The water depth changes in time as
+``\partial W / \partial t = \partial b / \partial t + \partial (W - b) / \partial t``. The gap equation gives
+``\partial b / \partial t``, and that part is what the equation above already contains. The second part,
+``\partial (W - b) / \partial t``, is zero in a filled cell because ``W - b = 0``. It is not zero here, and the
+closure ties it to the head: ``W - b = h - z_b`` in an unfilled cell and ``W - b = h - h_o`` in an uplifted
+one. So a change in ``W - b`` is a change in ``h``, and the term is a storage term
+``\partial h / \partial t`` on the left, like the englacial one but with coefficient 1 instead of ``e_v``.
+
+The head equation and the gap equation depend on each other's unknown, so they cannot be solved one after
+the other. The head equation needs the gap height ``b``, which sets the conductivity ``K``. The gap equation needs
+the effective pressure ``N``, which is set by the head ``h`` through ``N = p_o - \rho_w g (h - z_b)``.
+[Discretization](@ref) shows how a time step solves them together.
 
 ## Boundary conditions
 
@@ -192,12 +218,13 @@ boundary conditions:
 |:-----|:----------|
 | `OCEAN` | ``h = z_b + \left(p_\mathrm{atm} - \rho_{sw} g \min(z_b, 0)\right) / (\rho_w g)``: the pressure of the ocean at the bed |
 | `LAND` | ``h = z_b + p_\mathrm{atm} / (\rho_w g)``: water leaves at atmospheric pressure |
-| `OTHER_BASIN`, `FROZEN_BED` | no flux across the face; the head is held. On a frozen bed ``p_w = 0`` and ``N = p_o`` |
-| edge of the grid | no flux |
+| `OTHER_BASIN` | no flux across the face, ``\mathbf{q}\cdot\mathbf{n} = 0``, i.e. ``\partial \hat{h} / \partial n = 0``; the cell is not solved, so its head ``h`` stays at its initial value for the whole run, which is the one of `LAND`, ``h = z_b + p_\mathrm{atm} / (\rho_w g)`` |
+| `FROZEN_BED` | no flux across the face, ``\mathbf{q}\cdot\mathbf{n} = 0``, i.e. ``\partial \hat{h} / \partial n = 0``; the cell is not solved and holds no water: ``b = 0``, ``W = 0``, ``p_w = 0``, so ``h = z_b`` and ``N = p_o`` |
+| edge of the grid | no flux, ``\mathbf{q}\cdot\mathbf{n} = 0``, i.e. ``\partial \hat{h} / \partial n = 0`` |
 
 By default `OCEAN` and `LAND` faces are outflow only (`outflow_only_land`, `outflow_only_ocean`): the
-face closes when the boundary head is above the water level ``\phi`` of the grounded cell, so the
-boundary takes water from the bed but does not feed it.
+face closes when the boundary head is above the hydraulic head ``\hat{h}`` of the grounded cell, so water
+can only flow out of the grounded cell into the ocean or land, never from the boundary into the grounded cell.
 
 ## Parameters
 
@@ -216,8 +243,8 @@ The default values of `ModelParameters`:
 | ``c_t``, ``c_w`` | `ct`, `cw` | 7.5 × 10⁻⁸ K Pa⁻¹, 4220 J kg⁻¹ K⁻¹ | change of melting point with pressure, heat capacity of water |
 | ``e_v`` | `e_v` | 0 | englacial void ratio |
 | ``p_\mathrm{atm}`` | `p_atm` | 0 Pa | pressure at `LAND` and of the sea surface |
-| ``b_{min}``, ``b_\max`` | `b_min`, `b_max` | 10⁻⁶ m, ∞ | bounds on ``b`` |
-| ``N_{min}``, ``N_\max`` | `N_min`, `N_max` | −∞, ∞ | bounds on ``N`` |
+| ``b_\mathrm{min}``, ``b_\mathrm{max}`` | `b_min`, `b_max` | 10⁻⁶ m, ∞ | bounds on ``b`` |
+| ``N_\mathrm{min}``, ``N_\mathrm{max}`` | `N_min`, `N_max` | −∞, ∞ | bounds on ``N`` |
 
 The fields ``z_b``, ``z_s``, ``\mathbf{u}_b``, ``A``, ``G``, ``q_T`` and ``i_{eb}`` are inputs, set in the
 `State` (step 4 of the tutorial) or by a coupled ice-flow model.

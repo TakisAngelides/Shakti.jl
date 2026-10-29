@@ -52,3 +52,4 @@ Thumbs.db
 
 # Local input paths of docs/make_figures.jl
 /docs/figure_paths.jl
+/docs/build_preview_src/
