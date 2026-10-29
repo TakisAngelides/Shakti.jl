@@ -703,11 +703,11 @@ Whether the head rows add the wall diffusion of the start-of-step gap as a sourc
 diffusion_in_head(ds::AbstractDiffusionScheme, gc::AbstractGapCoupling) = Val(ds isa WithDiffusion && !(gc isa DiffusiveGapUpdate))
 
 # Englacial storage of the head rows (p.e_v > 0, Sommers et al. 2018 Eq. 13's ∂(e_v(h - zb))/∂t): the water a cell holds in
-# the ice above its bed, E(h) = e_v*(h - zb), taken between the bed and the overburden head only where the sheet has the
+# the ice above its bed, b_e(h) = e_v*(h - zb), taken between the bed and the overburden head only where the sheet has the
 # unfilled (stor > 0) and uplifted (stor_up > 0) regimes, whose water is in the sheet's W instead (the empty depth below
-# the bed, the uplift layer above the overburden head). Backward Euler, (E(h_new) - E(h_old))/dt with h_old the head at
-# the start of the step, Newton-linearised at the iterate h: the row's diagonal gets E'(h)/dt and its right-hand side
-# (E'(h)*h - E(h) + E(h_old))/dt. The storage keeps every row's diagonal positive, so a closed cell needs no exact head
+# the bed, the uplift layer above the overburden head). Backward Euler, (b_e(h_new) - b_e(h_old))/dt with h_old the head at
+# the start of the step, Newton-linearised at the iterate h: the row's diagonal gets b_e'(h)/dt and its right-hand side
+# (b_e'(h)*h - b_e(h) + b_e(h_old))/dt. The storage keeps every row's diagonal positive, so a closed cell needs no exact head
 # (closed_cell_head). Nothing for e_v = 0, or without a time step (dt = 0: a head solve called on its own).
 storage_e_v(p::ModelParameters, dt) = dt > 0 ? p.e_v : zero(p.e_v)
 @inline englacial_water(e_v, h, zb, po, stor, stor_up, rho_w, ggrav) =

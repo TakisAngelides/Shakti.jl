@@ -314,10 +314,10 @@ limit_head_step!(guard::PicardGuard, s::State, h_prev, p::ModelParameters; fille
             div = (q_x[ix+1, iy] - q_x[ix, iy]) / dx + (q_y[ix, iy+1] - q_y[ix, iy]) / dy
             W, _ = iterate_water(iterate_gap(gc, bump[ix, iy], b_next[ix, iy], zero(dt), false), b[ix, iy], Wo[ix, iy], h[ix, iy], zb[ix, iy], po[ix, iy], N[ix, iy], stor[ix, iy], stor_up[ix, iy],
                                  b_min, b_max, rho_w, ggrav, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], rho_i, n_minus_1)
-            dE = englacial_water(e_v, h[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], stor_up[ix, iy], rho_w, ggrav) -
+            db_e = englacial_water(e_v, h[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], stor_up[ix, iy], rho_w, ggrav) -
                  englacial_water(e_v, h_old[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], stor_up[ix, iy], rho_w, ggrav)
-            res = W + dE - (Wo[ix, iy] + dt * (mdot[ix, iy] / rho_w + ieb[ix, iy] - div))
-            scale = W + abs(dE) + abs(Wo[ix, iy]) + dt * (abs(mdot[ix, iy] / rho_w) + abs(ieb[ix, iy]) + (abs(q_x[ix+1, iy]) + abs(q_x[ix, iy])) / dx + (abs(q_y[ix, iy+1]) + abs(q_y[ix, iy])) / dy)
+            res = W + db_e - (Wo[ix, iy] + dt * (mdot[ix, iy] / rho_w + ieb[ix, iy] - div))
+            scale = W + abs(db_e) + abs(Wo[ix, iy]) + dt * (abs(mdot[ix, iy] / rho_w) + abs(ieb[ix, iy]) + (abs(q_x[ix+1, iy]) + abs(q_x[ix, iy])) / dx + (abs(q_y[ix, iy+1]) + abs(q_y[ix, iy])) / dy)
             r[ix, iy] = relative ? res / (scale + floatmin(scale)) : res
         else
             r[ix, iy] = zero(dt)
@@ -330,9 +330,9 @@ end
     if ix <= size(W, 1) && iy <= size(W, 2)
         if mask[ix, iy] == GROUNDED
             div = (q_x[ix+1, iy] - q_x[ix, iy]) / dx + (q_y[ix, iy+1] - q_y[ix, iy]) / dy
-            dE = englacial_water(e_v, h[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], stor_up[ix, iy], rho_w, ggrav) -
+            db_e = englacial_water(e_v, h[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], stor_up[ix, iy], rho_w, ggrav) -
                  englacial_water(e_v, h_old[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], stor_up[ix, iy], rho_w, ggrav)
-            W[ix, iy] = max(zero(dt), W[ix, iy] + dt * (mdot[ix, iy] / rho_w + ieb[ix, iy] - div) - dE)
+            W[ix, iy] = max(zero(dt), W[ix, iy] + dt * (mdot[ix, iy] / rho_w + ieb[ix, iy] - div) - db_e)
         else
             W[ix, iy] = b[ix, iy]
         end
@@ -344,8 +344,8 @@ end
 $(TYPEDSIGNATURES)
 
 Advances the water `s.W` by one step from the water budget on `GROUNDED` cells, `W = max(0, W + dt*(mdot/rho_w + ieb -
-div(q)) - dE)` with the step's converged fluxes (what the solve actually delivered, so the budget closes for every cell and
-every gap scheme), `dE` the change of the englacial water over the step (`p.e_v > 0`: `e_v (h - zb)` between the bed and
+div(q)) - db_e)` with the step's converged fluxes (what the solve actually delivered, so the budget closes for every cell and
+every gap scheme), `db_e` the change of the englacial water over the step (`p.e_v > 0`: `e_v (h - zb)` between the bed and
 the overburden head, from the head `h_old` at its start to `s.h`; see `englacial_storage_terms`), and sets it to the gap `b`
 elsewhere. Where the gap update and the head equation disagree (the
 implicit gap schemes change the gap by a different amount than the head equation assumed, a held `b_max`/`b_min`, ...)
@@ -362,8 +362,8 @@ update_water_budget!(s::State, g::Grid, p::ModelParameters, dt, h_old = s.h) =
 $(TYPEDSIGNATURES)
 
 The water budget of a [`Simulation`](@ref)'s steps (`sim.wb`), for every sheet: per step, the water the step created
-on `GROUNDED` cells beyond what its sources and fluxes deliver, `created = sum(W_new + dE - (W_old + dt*(mdot/rho_w +
-ieb - div(q)))) * dx*dy` [m^3] (`dE` the change of the englacial water, `p.e_v > 0`), and that step's grounded input
+on `GROUNDED` cells beyond what its sources and fluxes deliver, `created = sum(W_new + db_e - (W_old + dt*(mdot/rho_w +
+ieb - div(q)))) * dx*dy` [m^3] (`db_e` the change of the englacial water, `p.e_v > 0`), and that step's grounded input
 `dt*sum(mdot/rho_w + ieb) * dx*dy` [m^3]. Over all steps since the `Simulation` was built (kept in checkpoints):
 `total_created` (net), `gross_created` and `gross_lost` (summed over cells and steps by sign, so water created in one
 cell or step and lost in another does not cancel; `gross_lost <= 0`), `total_input`, and `unconverged`, the number of
@@ -376,7 +376,7 @@ Under [`UnfilledCavities`](@ref) (the default sheet) `created` is the water the 
 water lost. Mask changes are not part of it (their water is the `discarded_b` of [`set_mask!`](@ref)/`update_frozen_bed!`).
 """
 struct WaterBudget{F <: AbstractFloat, A <: AbstractArray{F}}
-    expected::A # per cell, the water the budget leaves, W_old + dt*(mdot/rho_w + ieb - div q) - dE, then the step's excess over it
+    expected::A # per cell, the water the budget leaves, W_old + dt*(mdot/rho_w + ieb - div q) - db_e, then the step's excess over it
     src::A      # per cell, the step's input dt*(mdot/rho_w + ieb)
     created::Base.RefValue{F}
     input::Base.RefValue{F}
@@ -396,10 +396,10 @@ const WATER_BUDGET_TOTALS = (:total_created, :total_input, :gross_created, :gros
     if ix <= size(Wx, 1) && iy <= size(Wx, 2)
         if mask[ix, iy] == GROUNDED
             div = (q_x[ix+1, iy] - q_x[ix, iy]) / dx + (q_y[ix, iy+1] - q_y[ix, iy]) / dy
-            dE = englacial_water(e_v, h[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], stor_up[ix, iy], rho_w, ggrav) -
+            db_e = englacial_water(e_v, h[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], stor_up[ix, iy], rho_w, ggrav) -
                  englacial_water(e_v, h_old[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], stor_up[ix, iy], rho_w, ggrav)
             src[ix, iy] = dt * (mdot[ix, iy] / rho_w + ieb[ix, iy])
-            Wx[ix, iy] = W[ix, iy] + src[ix, iy] - dt * div - dE
+            Wx[ix, iy] = W[ix, iy] + src[ix, iy] - dt * div - db_e
         else
             src[ix, iy] = zero(dt)
             Wx[ix, iy] = zero(dt)

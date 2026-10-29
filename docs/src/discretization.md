@@ -108,8 +108,8 @@ Integrating the mass balance over the cell and over the step gives the row of ce
 
 ```math
 \sum_f \frac{K_f}{\Delta_f^2} \left( h_P - h_F \right)
-  + \frac{E(h_P) - E(h_P^n)}{\Delta t}
-  = \frac{\dot m_P}{\rho_w} + i_{eb,P}
+  + \frac{b_e(h_P) - b_e(h_P^n)}{\Delta t}
+  = \frac{\dot m_P}{\rho_w} + i_{e\to b,P}
   - \frac{\mathcal{W}_P(h_P) - W^n_P}{\Delta t}
   - \sum_f \frac{K_f}{\Delta_f^2} \left( b^n_P - b^n_F \right) ,
 ```
@@ -136,9 +136,9 @@ grows with ``N``), computed by a central difference. On the filled sheet's dry f
 moves the water ``W^n`` instead of the gap, with no lower clamp at ``b_\min``, so a drained cell keeps a
 storage slope.
 
-The englacial storage is ``E(h) = e_v (h - z_b)``. With unfilled cavities it stops at the bed, and with
+The englacial storage is ``b_e(h) = e_v (h - z_b)``. With unfilled cavities it stops at the bed, and with
 uplift at the overburden head, since beyond them the water is in ``W`` instead; on the GlaDS-2 sheet
-``E(h) = e_v \min(\max(h - z_b, 0),\, p_o/(\rho_w g))``. It is Newton-linearized at the iterate and adds
+``b_e(h) = e_v \min(\max(h - z_b, 0),\, p_o/(\rho_w g))``. It is Newton-linearized at the iterate and adds
 ``e_v / \Delta t`` to the diagonal where its slope is not zero.
 
 Under `ExplicitGapCoupling` the end-of-step water is replaced by the gap rate at ``b^n``. The term
@@ -155,7 +155,7 @@ the uplifted branch, where the slope-1 storage stays. In a filled cell this is t
 Some rows are special:
 
 - A grounded cell whose four faces are all closed, with ``e_v = 0``, exchanges no water. Its water at the
-  end of the step, ``W^n + \Delta t (\dot m / \rho_w + i_{eb})``, is known, and ``\mathcal{W}_P(h)`` equal
+  end of the step, ``W^n + \Delta t (\dot m / \rho_w + i_{e\to b})``, is known, and ``\mathcal{W}_P(h)`` equal
   to it is solved for ``h`` exactly: by bisection, or under `ExplicitGapCoupling` by inverting the creep
   law in closed form.
 - An `OCEAN` or `LAND` neighbour's head is known, so its term moves to the right-hand side. This keeps the
@@ -273,7 +273,7 @@ neighbours' new gaps held) as the Newton term. This costs one extra linear solve
 Under `UnfilledCavities` the water is advanced with the converged fluxes,
 
 ```math
-W^{n+1}_P = \max\!\left(0,\; W^n_P + \Delta t \left( \frac{\dot m_P}{\rho_w} + i_{eb,P} - (\nabla\cdot\mathbf{q})_P \right) - \left( E(h^{n+1}_P) - E(h^n_P) \right) \right),
+W^{n+1}_P = \max\!\left(0,\; W^n_P + \Delta t \left( \frac{\dot m_P}{\rho_w} + i_{e\to b,P} - (\nabla\cdot\mathbf{q})_P \right) - \left( b_e(h^{n+1}_P) - b_e(h^n_P) \right) \right),
 ```
 
 so the empty part of the gap is ``b^{n+1} - W^{n+1}``, and any water above the gap is the uplift layer.

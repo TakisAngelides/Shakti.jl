@@ -72,7 +72,7 @@ A grounded cell whose four faces are all closed (frozen or `OTHER_BASIN` neighbo
 faces, the domain edge) exchanges no water. With ``e_v = 0`` its row has no off-diagonal entries, and its
 diagonal, the slope of its stored water, is zero at ``N = 0`` and tiny near it, where a Newton step
 overshoots by orders of magnitude. Its head is therefore solved exactly. The water at the end of the step
-is known, ``T = W^n + \Delta t\,(\dot m/\rho_w + i_{eb})``, less the wall diffusion under `WithDiffusion`.
+is known, ``T = W^n + \Delta t\,(\dot m/\rho_w + i_{e\to b})``, less the wall diffusion under `WithDiffusion`.
 
 - Under `ConsistentGapCoupling`, if uplift is allowed and ``T > \mathcal{G}(0)``, the ice is lifted:
   ``h = h_o + T - \mathcal{G}(0)``. If unfilled cavities are allowed and ``T < \mathcal{G}(p_o)``, the gap is
@@ -80,7 +80,7 @@ is known, ``T = W^n + \Delta t\,(\dot m/\rho_w + i_{eb})``, less the wall diffus
   60 bisections, on ``[0, p_o]`` on the GlaDS-2 sheet, and on ``[-10 p_o, 10 p_o]`` on the filled sheet
   (``1000\, p_o`` on its dry floor), within ``[N_\min, N_\max]``.
 - Under `ExplicitGapCoupling` the creep must close the gap as fast as sliding and melt open it,
-  ``A |N|^{n-1} N\, l_c = R`` with ``R = \beta |\mathbf{u}_b| - \dot m (1/\rho_w - 1/\rho_i) - i_{eb}`` (plus
+  ``A |N|^{n-1} N\, l_c = R`` with ``R = \beta |\mathbf{u}_b| - \dot m (1/\rho_w - 1/\rho_i) - i_{e\to b}`` (plus
   ``(b^n - W^n)/\Delta t`` on the GlaDS-2 sheet), so ``N = \operatorname{sign}(R)\,(|R| / (A l_c))^{1/n}``,
   clamped to ``[N_\min, N_\max]``. Without creep (``A l_c = 0``) the gap cannot close, and ``N = p_o`` if
   ``R > 0``, else 0. The unfilled and uplifted cases are taken first, as above: the gap is partly empty if

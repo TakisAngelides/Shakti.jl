@@ -587,10 +587,10 @@ end
                 @test out[OTHER_BASIN] == 0 && out[FROZEN_BED] == 0 && out[:edge] == 0
                 @test out[LAND] + out[OCEAN] > 0
                 # the change of the englacial water (e_v > 0), as WaterBudget counts it
-                dE = sum(Shakti.englacial_water(p.e_v, Array(s.h)[i], Array(s.zb)[i], Array(s.po)[i], Array(s.stor)[i], Array(s.stor_up)[i], p.rho_w, p.g) -
+                db_e = sum(Shakti.englacial_water(p.e_v, Array(s.h)[i], Array(s.zb)[i], Array(s.po)[i], Array(s.stor)[i], Array(s.stor_up)[i], p.rho_w, p.g) -
                          Shakti.englacial_water(p.e_v, h_old[i], Array(s.zb)[i], Array(s.po)[i], Array(s.stor)[i], Array(s.stor_up)[i], p.rho_w, p.g) for i in findall(g))
                 wc = water_created(sim)
-                dV = (sum(Array(s.W)[g] .- W_old[g]) + dE) * area
+                dV = (sum(Array(s.W)[g] .- W_old[g]) + db_e) * area
                 @test dV ≈ wc.input - sim.dt[] * (out[LAND] + out[OCEAN]) + wc.created atol = 1e-12 * wc.input
                 @test abs(wc.created) <= 1e-12 * wc.input
             end

@@ -93,17 +93,17 @@ network [Sommers2018](@cite). The transmissivity is built from the water depth `
 The water volume per unit bed area changes by divergence of the flux, melt and input from above:
 
 ```math
-\frac{\partial W}{\partial t} + \frac{\partial E}{\partial t} + \nabla \cdot \mathbf{q}
-  = \frac{\dot m}{\rho_w} + i_{eb} .
+\frac{\partial W}{\partial t} + \frac{\partial b_e}{\partial t} + \nabla \cdot \mathbf{q}
+  = \frac{\dot m}{\rho_w} + i_{e\to b} .
 ```
 
-``\dot m`` [kg m⁻² s⁻¹] is the melt rate of the ice at the base and ``i_{eb}`` [m s⁻¹] the water
-that enters the bed from above (surface melt through moulins and crevasses, `ieb`). ``E`` is the
-water stored in the ice above the bed, ``E = e_v (h - z_b)`` with the englacial void ratio ``e_v``
-([Sommers2018](@cite) Eq. 13, `e_v = 0` by default). Where the unfilled and uplifted regimes are
-allowed, ``E`` uses ``h - z_b`` clamped to ``[0, p_o/(\rho_w g)]``, which is the pressure head
-``p_w/(\rho_w g)``. Outside that range the change in head is stored in ``W``, not in ``E``, so the same water is not
-counted twice: ``E = 0`` in an unfilled cell and ``E = e_v\, p_o / (\rho_w g)``, constant in time, in an uplifted one.
+``\dot m`` [kg m⁻² s⁻¹] is the melt rate of the ice at the base and ``i_{e\to b}`` [m s⁻¹] the water
+that enters the bed from above (surface melt through moulins and crevasses, `ieb`). ``b_e`` is the
+water stored in the ice above the bed, ``b_e = e_v (h - z_b)`` with the englacial void ratio ``e_v``
+(the englacial storage of [Sommers2018](@cite), `e_v = 0` by default). Where the unfilled and uplifted regimes are
+allowed, ``b_e`` uses ``h - z_b`` clamped to ``[0, p_o/(\rho_w g)]``, which is the pressure head
+``p_w/(\rho_w g)``. Outside that range the change in head is stored in ``W``, not in ``b_e``, so the same water is not
+counted twice: ``b_e = 0`` in an unfilled cell and ``b_e = e_v\, p_o / (\rho_w g)``, constant in time, in an uplifted one.
 
 ## Gap height
 
@@ -173,7 +173,7 @@ gives an equation for the head. In a filled cell (``W = b``) it reads
   - \beta |\mathbf{u}_b|
   + A |N|^{n-1} N \, l_c
   \left[ - \nabla \cdot (\mathcal{D} \nabla b) \right]
-  + i_{eb} ,
+  + i_{e\to b} ,
 ```
 
 with ``N = p_o - \rho_w g (h - z_b)``. The left side is the net outflow of water plus its englacial
@@ -184,7 +184,7 @@ subtracted. Its terms are:
   negative, since ``\rho_w > \rho_i``: the gap grows by more than the water it receives,
 - sliding: ``-\beta |\mathbf{u}_b|``, since the cavities that sliding opens add gap volume but no water,
 - creep: ``+A |N|^{n-1} N\, l_c``, the water pushed out as the ice closes the gap,
-- the input ``i_{eb}``.
+- the input ``i_{e\to b}``.
 
 With ``e_v = 0`` the equation is elliptic in ``h`` at each time. It is nonlinear because ``N`` enters the
 creep term, and because ``\mathrm{Re}`` and ``\dot m`` enter ``K`` and the right side. With
@@ -246,5 +246,5 @@ The default values of `ModelParameters`:
 | ``b_\mathrm{min}``, ``b_\mathrm{max}`` | `b_min`, `b_max` | 10⁻⁶ m, ∞ | bounds on ``b`` |
 | ``N_\mathrm{min}``, ``N_\mathrm{max}`` | `N_min`, `N_max` | −∞, ∞ | bounds on ``N`` |
 
-The fields ``z_b``, ``z_s``, ``\mathbf{u}_b``, ``A``, ``G``, ``q_T`` and ``i_{eb}`` are inputs, set in the
+The fields ``z_b``, ``z_s``, ``\mathbf{u}_b``, ``A``, ``G``, ``q_T`` and ``i_{e\to b}`` are inputs, set in the
 `State` (step 4 of the tutorial) or by a coupled ice-flow model.
