@@ -157,12 +157,11 @@
             step!(sim) # b evolves
             Shakti.prepare_head_solve!(sim) # H/po are refreshed from it before the next head solve
             s = sim.state
-            b_up = sim.up isa IceUplift ? max.(Array(s.W) .- Array(s.b), 0) : zero(Array(s.b))
-            @test Array(s.H) ≈ max.(Array(s.zs) .- (Array(s.zb) .+ Array(s.b) .+ b_up), 0) rtol = 1e-12
+            @test Array(s.H) ≈ max.(Array(s.zs) .- (Array(s.zb) .+ Array(s.b)), 0) rtol = 1e-12
             @test Array(s.po) ≈ sim.p.rho_i * sim.p.g .* Array(s.H) rtol = 1e-12
         end
 
-        @testset "overburden: the uplift layer lifts the ice, and a thin margin gives no negative po" begin
+        @testset "overburden: the uplift layer does not thin the ice, and a thin margin gives no negative po" begin
             sim = fresh_sim(; order = 0)
             s = sim.state
             zs, zb, b = Array(s.zs), Array(s.zb), Array(s.b)
@@ -171,14 +170,12 @@
             zs[4, 2] = zb[4, 2] + b[4, 2] / 2 # ice thinner than the gap
             copyto!(s.W, W)
             copyto!(s.zs, zs)
-            compute_H!(s, IceUplift())
+            compute_H!(s)
             compute_po!(s, sim.p)
             H = Array(s.H)
-            @test H[3, 3] ≈ zs[3, 3] - zb[3, 3] - b[3, 3] - 2.0 rtol = 1e-12
+            @test H[3, 3] ≈ zs[3, 3] - zb[3, 3] - b[3, 3] rtol = 1e-12 # the uplift layer lifts the ice without thinning it
             @test H[4, 2] == 0 && Array(s.po)[4, 2] == 0
             @test all(H .>= 0)
-            compute_H!(s, NoUplift()) # without uplift the water above the gap is not a layer under the ice
-            @test Array(s.H)[3, 3] ≈ zs[3, 3] - zb[3, 3] - b[3, 3] rtol = 1e-12
         end
 
         @testset "per-cell clamps act in place on just the listed cells" begin
