@@ -705,20 +705,32 @@ diffusion_in_head(ds::AbstractDiffusionScheme, gc::AbstractGapCoupling) = Val(ds
 # Englacial storage of the head rows (p.e_v > 0, Sommers et al. 2018 Eq. 13's ∂(e_v(h - zb))/∂t): the water a cell holds in
 # the ice above its bed, b_e(h) = e_v*(h - zb), taken between the bed and the overburden head only where the sheet has the
 # unfilled (stor > 0) and uplifted (stor_up > 0) regimes, whose water is in the sheet's W instead (the empty depth below
-# the bed, the uplift layer above the overburden head). Backward Euler, (b_e(h_new) - b_e(h_old))/dt with h_old the head at
-# the start of the step, Newton-linearised at the iterate h: the row's diagonal gets b_e'(h)/dt and its right-hand side
-# (b_e'(h)*h - b_e(h) + b_e(h_old))/dt. The storage keeps every row's diagonal positive, so a closed cell needs no exact head
+# the bed, the uplift layer above the overburden head). Backward Euler, (b_e(h_new) - be_old)/dt with be_old the englacial
+# water at the start of the step (State.b_e, what the last step ended with: not b_e(h_old), since po comes from the
+# start-of-step gap and surface and can differ from the last step's, which in an uplifted cell would create or lose
+# e_v*dpo/(rho_w g)), Newton-linearised at the iterate h: the row's diagonal gets b_e'(h)/dt and its right-hand side
+# (b_e'(h)*h - b_e(h) + be_old)/dt. The storage keeps every row's diagonal positive, so a closed cell needs no exact head
 # (closed_cell_head). Nothing for e_v = 0, or without a time step (dt = 0: a head solve called on its own).
 storage_e_v(p::ModelParameters, dt) = dt > 0 ? p.e_v : zero(p.e_v)
 @inline englacial_water(e_v, h, zb, po, stor, stor_up, rho_w, ggrav) =
     e_v * clamp(h - zb, stor > 0 ? zero(h) : typemin(h), stor_up > 0 ? po / (rho_w * ggrav) : typemax(h))
-@inline function englacial_storage_terms(e_v, dt, h, h_old, zb, po, stor, stor_up, rho_w, ggrav)
+@inline function englacial_storage_terms(e_v, dt, h, be_old, zb, po, stor, stor_up, rho_w, ggrav)
     e_v > 0 || return zero(h), zero(h)
-    stor <= 0 && stor_up <= 0 && return e_v / dt, (e_v / dt) * h_old # SHAKTI's rows: e_v*(h - h_old)/dt for any h
     x = h - zb
     slope = (stor > 0 && x < 0) || (stor_up > 0 && x > po / (rho_w * ggrav)) ? zero(e_v) : e_v
-    return slope / dt, (slope * h - englacial_water(e_v, h, zb, po, stor, stor_up, rho_w, ggrav) + englacial_water(e_v, h_old, zb, po, stor, stor_up, rho_w, ggrav)) / dt
+    return slope / dt, (slope * h - englacial_water(e_v, h, zb, po, stor, stor_up, rho_w, ggrav) + be_old) / dt
 end
+
+"""
+$(TYPEDSIGNATURES)
+
+Stores the englacial water at the current head, `s.b_e = e_v*clamp(h - zb, 0, po/(rho_w g))` (the clamp only where the
+sheet has the unfilled and uplifted regimes), as the start-of-step value of the next step's englacial storage. Called at
+the end of every step ([`step!`](@ref)) and at the setup (the first `refresh_state!`, and [`load_checkpoint!`](@ref) for a
+checkpoint without it); zero for `p.e_v = 0`.
+"""
+store_englacial_water!(s::State, p::ModelParameters) =
+    (@. s.b_e = englacial_water(p.e_v, s.h, s.zb, s.po, s.stor, s.stor_up, p.rho_w, p.g); s)
 
 """
 $(TYPEDSIGNATURES)
@@ -859,7 +871,7 @@ end
 # range from the elementwise max size over ALL array arguments, and the flat
 # length-(nx*ny) nzval/rhs vectors would make that (nx*ny, ny) -- nx*ny^2
 # iterations, almost all failing the bounds check (measured 19x slower at 512x512).
-@parallel_indices (ix, iy) function update_SALS_elliptic_kernel!(mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, zb, h, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, b, b_min, b_max, D_x, D_y, diffusion_on, po, N_min, N_max, stor, db_x, db_y, stor_up, Jw_x, Jw_y, newton_on, dx, dy, W, gc, bump, b_next, db_next, h_old, e_v, dt)
+@parallel_indices (ix, iy) function update_SALS_elliptic_kernel!(mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, zb, h, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, b, b_min, b_max, D_x, D_y, diffusion_on, po, N_min, N_max, stor, db_x, db_y, stor_up, Jw_x, Jw_y, newton_on, dx, dy, W, gc, bump, b_next, db_next, be_old, e_v, dt)
 
     nx, ny = size(mask, 1), size(mask, 2)
 
@@ -912,7 +924,7 @@ end
                                             A_visc[ix, iy], lc[ix, iy], rho_w, rho_i, ggrav, n, n_minus_1, N_min, N_max, stor[ix, iy], stor_up[ix, iy], W[ix, iy])
             else
                 gs, gd = head_gap_terms(cell_gap(gc, bump[ix, iy]), b[ix, iy], b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], N[ix, iy], lc[ix, iy], h[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], rho_w, rho_i, ggrav, n, n_minus_1, stor_up[ix, iy], W[ix, iy], b_next[ix, iy], db_next[ix, iy])
-                sd, srhs = englacial_storage_terms(e_v, dt, h[ix, iy], h_old[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], stor_up[ix, iy], rho_w, ggrav)
+                sd, srhs = englacial_storage_terms(e_v, dt, h[ix, iy], be_old[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], stor_up[ix, iy], rho_w, ggrav)
                 aP = (aE + aW + aN + aS) + sd + gd # diffusion + englacial storage (zero for e_v = 0) + the gap terms' diagonal (the Newton-linearised creep closure)
 
                 # Update the non-zero values of the M sparse matrix. A GROUNDED
@@ -970,7 +982,7 @@ folding their known head into `rhs` rather than left as a one-sided matrix coupl
 [`ImplicitUpwind`](@ref) the rows also get the Newton terms of the donors' water depths
 (`add_water_depth_newton!`), and `M` is no longer symmetric ([`LUDirectSolver`](@ref)).
 """
-function update_SALS_elliptic!(sals::SparseAssembledLinearSystem, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), dt = 0, h_old = s.h)
+function update_SALS_elliptic!(sals::SparseAssembledLinearSystem, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), dt = 0, be_old = s.b_e)
 
     # Unpack the solver's preallocated matrix/rhs/index-map workspace (see CholeskyDirectSolver's docstring)
     rhs = sals.rhs
@@ -981,7 +993,7 @@ function update_SALS_elliptic!(sals::SparseAssembledLinearSystem, s::State, g::G
     fill!(nzval, 0)
     fill!(rhs, 0)
 
-    @parallel (1:g.nx, 1:g.ny) update_SALS_elliptic_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.zb, s.h, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, s.b, p.b_min, p.b_max, s.D_x, s.D_y, diffusion_in_head(ds, gc), s.po, p.N_min, p.N_max, s.stor, s.db_x, s.db_y, s.stor_up, s.Jw_x, s.Jw_y, Val(kfs isa ImplicitUpwind), g.dx, g.dy, s.W, gc, s.bump, s.b_next, s.db_next, h_old, storage_e_v(p, dt), floattype(dt))
+    @parallel (1:g.nx, 1:g.ny) update_SALS_elliptic_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.zb, s.h, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, s.b, p.b_min, p.b_max, s.D_x, s.D_y, diffusion_in_head(ds, gc), s.po, p.N_min, p.N_max, s.stor, s.db_x, s.db_y, s.stor_up, s.Jw_x, s.Jw_y, Val(kfs isa ImplicitUpwind), g.dx, g.dy, s.W, gc, s.bump, s.b_next, s.db_next, be_old, storage_e_v(p, dt), floattype(dt))
 
     return
 
@@ -993,7 +1005,7 @@ end
 # stored as the raw positive face conductances -- stencil_matvec_kernel!
 # below applies the minus sign when it uses them, matching the sign
 # convention update_SALS_elliptic_kernel! bakes directly into nzval.
-@parallel_indices (ix, iy) function update_MFLS_elliptic_kernel!(mask, aP, aE, aW, aN, aS, rhs, zb, h, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, b, b_min, b_max, D_x, D_y, diffusion_on, po, N_min, N_max, stor, db_x, db_y, stor_up, Jw_x, Jw_y, newton_on, dx, dy, W, gc, bump, b_next, db_next, h_old, e_v, dt)
+@parallel_indices (ix, iy) function update_MFLS_elliptic_kernel!(mask, aP, aE, aW, aN, aS, rhs, zb, h, K_x, K_y, A_visc, N, lc, mdot, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, b, b_min, b_max, D_x, D_y, diffusion_on, po, N_min, N_max, stor, db_x, db_y, stor_up, Jw_x, Jw_y, newton_on, dx, dy, W, gc, bump, b_next, db_next, be_old, e_v, dt)
 
     nx, ny = size(mask, 1), size(mask, 2)
 
@@ -1029,7 +1041,7 @@ end
                                             A_visc[ix, iy], lc[ix, iy], rho_w, rho_i, ggrav, n, n_minus_1, N_min, N_max, stor[ix, iy], stor_up[ix, iy], W[ix, iy])
             else
                 gs, gd = head_gap_terms(cell_gap(gc, bump[ix, iy]), b[ix, iy], b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], N[ix, iy], lc[ix, iy], h[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], rho_w, rho_i, ggrav, n, n_minus_1, stor_up[ix, iy], W[ix, iy], b_next[ix, iy], db_next[ix, iy])
-                sd, srhs = englacial_storage_terms(e_v, dt, h[ix, iy], h_old[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], stor_up[ix, iy], rho_w, ggrav)
+                sd, srhs = englacial_storage_terms(e_v, dt, h[ix, iy], be_old[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], stor_up[ix, iy], rho_w, ggrav)
                 aP[ix, iy] = (aE_ij + aW_ij + aN_ij + aS_ij) + sd + gd
 
                 # As in update_SALS_elliptic_kernel!: an OCEAN/LAND neighbour's known head
@@ -1076,7 +1088,7 @@ Rebuilds `mfls.aP`/`aE`/`aW`/`aN`/`aS`/`rhs` in place from the current `s`/`p` -
 [`MatrixFreeLinearSystem`](@ref) counterpart of `update_SALS_elliptic!` (same per-cell logic, no
 sparse matrix to address into).
 """
-function update_MFLS_elliptic!(mfls::MatrixFreeLinearSystem, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), dt = 0, h_old = s.h)
+function update_MFLS_elliptic!(mfls::MatrixFreeLinearSystem, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), dt = 0, be_old = s.b_e)
 
     fill!(mfls.aP, 0)
     fill!(mfls.aE, 0)
@@ -1085,7 +1097,7 @@ function update_MFLS_elliptic!(mfls::MatrixFreeLinearSystem, s::State, g::Grid, 
     fill!(mfls.aS, 0)
     fill!(mfls.rhs, 0)
 
-    @parallel (1:g.nx, 1:g.ny) update_MFLS_elliptic_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.zb, s.h, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, s.b, p.b_min, p.b_max, s.D_x, s.D_y, diffusion_in_head(ds, gc), s.po, p.N_min, p.N_max, s.stor, s.db_x, s.db_y, s.stor_up, s.Jw_x, s.Jw_y, Val(kfs isa ImplicitUpwind), g.dx, g.dy, s.W, gc, s.bump, s.b_next, s.db_next, h_old, storage_e_v(p, dt), floattype(dt))
+    @parallel (1:g.nx, 1:g.ny) update_MFLS_elliptic_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.zb, s.h, s.K_x, s.K_y, s.A_visc, s.N, s.lc, s.mdot, s.beta, s.abs_ub, s.ieb, g.dx2, g.dy2, p.p_atm, p.rho_w, p.rho_sw, p.rho_i, p.g, p.n, p.n_minus_1_exp, s.b, p.b_min, p.b_max, s.D_x, s.D_y, diffusion_in_head(ds, gc), s.po, p.N_min, p.N_max, s.stor, s.db_x, s.db_y, s.stor_up, s.Jw_x, s.Jw_y, Val(kfs isa ImplicitUpwind), g.dx, g.dy, s.W, gc, s.bump, s.b_next, s.db_next, be_old, storage_e_v(p, dt), floattype(dt))
 
     return
 
@@ -1412,12 +1424,12 @@ $(TYPEDSIGNATURES)
 Solves the linearized head equation for `h`, storing the result in `s.h` -- the
 [`CholeskyDirectSolver`](@ref) method: rebuilds the system (`update_SALS_elliptic!`),
 refactorizes in place, and solves via `\\` (see the module note on why not `ldiv!`). With `p.e_v > 0` the rows store
-englacial water over the time step `dt` from the head `h_old` at its start (`englacial_storage_terms`); the
+englacial water over the time step `dt` from `be_old`, the englacial water at its start (`englacial_storage_terms`); the
 `dt = 0` default leaves the storage out (every solver method takes the same two arguments).
 """
-function solve_elliptic_linear_system!(ls::CholeskyDirectSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), dt = 0, h_old = s.h)
+function solve_elliptic_linear_system!(ls::CholeskyDirectSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), dt = 0, be_old = s.b_e)
 
-    update_SALS_elliptic!(ls.sals, s, g, p, kfs, ds, gc, dt, h_old) # prepare the new linear system sparse matrix M and rhs
+    update_SALS_elliptic!(ls.sals, s, g, p, kfs, ds, gc, dt, be_old) # prepare the new linear system sparse matrix M and rhs
 
     cholesky!(ls.fact, Symmetric(ls.sals.M)) # refactorizes in-place, reusing ls.fact's symbolic factorization since the sparsity pattern never changes across Picard iterations/timesteps
 
@@ -1475,8 +1487,8 @@ $(TYPEDSIGNATURES)
 Solves the linearized elliptic equation for `h` with an [`LUDirectSolver`](@ref): rebuilds the system
 (`update_SALS_elliptic!`), refactorizes in place and solves (lagged: by GMRES on the last factors, see the type).
 """
-function solve_elliptic_linear_system!(ls::LUDirectSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), dt = 0, h_old = s.h)
-    update_SALS_elliptic!(ls.sals, s, g, p, kfs, ds, gc, dt, h_old)
+function solve_elliptic_linear_system!(ls::LUDirectSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), dt = 0, be_old = s.b_e)
+    update_SALS_elliptic!(ls.sals, s, g, p, kfs, ds, gc, dt, be_old)
     lu_solve!(ls, vec(s.h))
     s.h .= reshape(ls.h_vec, g.nx, g.ny)
 end
@@ -1648,9 +1660,9 @@ Solves the linearized elliptic equation for `h`, storing the result in `s.h` -- 
 [`CGIterativeSolver`](@ref) over [`SparseAssembledLinearSystem`](@ref) method: rebuilds the
 system, refreshes the preconditioner, and runs `cg!` warm-started from the current `s.h`.
 """
-function solve_elliptic_linear_system!(ls::CGIterativeSolver{<:SparseAssembledLinearSystem}, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), dt = 0, h_old = s.h)
+function solve_elliptic_linear_system!(ls::CGIterativeSolver{<:SparseAssembledLinearSystem}, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), dt = 0, be_old = s.b_e)
 
-    update_SALS_elliptic!(ls.lsy, s, g, p, kfs, ds, gc, dt, h_old) # prepare the new linear system sparse matrix M and rhs
+    update_SALS_elliptic!(ls.lsy, s, g, p, kfs, ds, gc, dt, be_old) # prepare the new linear system sparse matrix M and rhs
     update_diag_precond!(ls.precond_diag, ls.lsy)
     precond_matrix = _cg_precond!(ls)
 
@@ -1693,9 +1705,9 @@ Solves the linearized elliptic equation for `h`, storing the result in `s.h` -- 
 [`CGIterativeSolver`](@ref) over [`MatrixFreeLinearSystem`](@ref) method, using
 `StencilOperator` as `cg!`'s matvec.
 """
-function solve_elliptic_linear_system!(ls::CGIterativeSolver{<:MatrixFreeLinearSystem}, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), dt = 0, h_old = s.h)
+function solve_elliptic_linear_system!(ls::CGIterativeSolver{<:MatrixFreeLinearSystem}, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), dt = 0, be_old = s.b_e)
 
-    update_MFLS_elliptic!(ls.lsy, s, g, p, kfs, ds, gc, dt, h_old)
+    update_MFLS_elliptic!(ls.lsy, s, g, p, kfs, ds, gc, dt, be_old)
     update_diag_precond!(ls.precond_diag, ls.lsy)
     precond_matrix = _cg_precond!(ls)
 
@@ -1781,9 +1793,9 @@ Solves the linearized head equation for `h`, storing the result in `s.h` -- the 
 method: rebuilds the stencil coefficients (with the water-depth Newton terms under [`ImplicitUpwind`](@ref)) and runs
 `bicgstab!` warm-started from the current `s.h`.
 """
-function solve_elliptic_linear_system!(ls::BiCGStabIterativeSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), dt = 0, h_old = s.h)
+function solve_elliptic_linear_system!(ls::BiCGStabIterativeSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), dt = 0, be_old = s.b_e)
 
-    update_MFLS_elliptic!(ls.lsy, s, g, p, kfs, ds, gc, dt, h_old)
+    update_MFLS_elliptic!(ls.lsy, s, g, p, kfs, ds, gc, dt, be_old)
     refresh_precond!(ls.precond, ls.lsy)
 
     bicgstab!(ls.ws, StencilOperator(ls.lsy), ls.lsy.rhs, vec(s.h); M = ls.precond, ldiv = true, rtol = ls.rtol, atol = ls.atol, itmax = ls.itmax)

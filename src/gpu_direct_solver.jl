@@ -118,8 +118,8 @@ Solves the elliptic head equation's linear system under [`CUDSSDirectSolver`](@r
 matrix in place, refactorizes on the GPU reusing the symbolic analysis, solves, and copies the
 result back into `s.h`.
 """
-function solve_elliptic_linear_system!(ls::CUDSSDirectSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), dt = 0, h_old = s.h)
-    update_SALS_elliptic!(ls.sals, s, g, p, kfs, ds, gc, dt, h_old) # refresh sals.M/rhs on CPU
+function solve_elliptic_linear_system!(ls::CUDSSDirectSolver, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), dt = 0, be_old = s.b_e)
+    update_SALS_elliptic!(ls.sals, s, g, p, kfs, ds, gc, dt, be_old) # refresh sals.M/rhs on CPU
     cudss_solve!(ls)
     s.h .= reshape(ls.h_vec, g.nx, g.ny)
     return s

@@ -571,7 +571,7 @@ end
             area = grid.dx * grid.dy
             for _ in 1:3
                 s = sim.state
-                W_old, h_old = Array(s.W), Array(s.h)
+                W_old, be_old = Array(s.W), Array(s.b_e)
                 step!(sim)
                 @test first(Shakti.picard_status(sim.hs))
                 qx, qy = Array(s.q_x), Array(s.q_y)
@@ -587,8 +587,7 @@ end
                 @test out[OTHER_BASIN] == 0 && out[FROZEN_BED] == 0 && out[:edge] == 0
                 @test out[LAND] + out[OCEAN] > 0
                 # the change of the englacial water (e_v > 0), as WaterBudget counts it
-                db_e = sum(Shakti.englacial_water(p.e_v, Array(s.h)[i], Array(s.zb)[i], Array(s.po)[i], Array(s.stor)[i], Array(s.stor_up)[i], p.rho_w, p.g) -
-                         Shakti.englacial_water(p.e_v, h_old[i], Array(s.zb)[i], Array(s.po)[i], Array(s.stor)[i], Array(s.stor_up)[i], p.rho_w, p.g) for i in findall(g))
+                db_e = sum(Array(s.b_e)[g] .- be_old[g]) # stored at the end of each step
                 wc = water_created(sim)
                 dV = (sum(Array(s.W)[g] .- W_old[g]) + db_e) * area
                 @test dV ≈ wc.input - sim.dt[] * (out[LAND] + out[OCEAN]) + wc.created atol = 1e-12 * wc.input

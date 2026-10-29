@@ -99,11 +99,27 @@ The water volume per unit bed area changes by divergence of the flux, melt and i
 
 ``\dot m`` [kg m⁻² s⁻¹] is the melt rate of the ice at the base and ``i_{e\to b}`` [m s⁻¹] the water
 that enters the bed from above (surface melt through moulins and crevasses, `ieb`). ``b_e`` is the
-water stored in the ice above the bed, ``b_e = e_v (h - z_b)`` with the englacial void ratio ``e_v``
-(the englacial storage of [Sommers2018](@cite), `e_v = 0` by default). Where the unfilled and uplifted regimes are
-allowed, ``b_e`` uses ``h - z_b`` clamped to ``[0, p_o/(\rho_w g)]``, which is the pressure head
-``p_w/(\rho_w g)``. Outside that range the change in head is stored in ``W``, not in ``b_e``, so the same water is not
-counted twice: ``b_e = 0`` in an unfilled cell and ``b_e = e_v\, p_o / (\rho_w g)``, constant in time, in an uplifted one.
+water stored in the ice above the bed, the englacial storage of [Sommers2018](@cite):
+
+```math
+b_e = e_v \frac{p_w}{\rho_w g} = e_v \left( h - z_b - (W - b) \right),
+```
+
+with the englacial void ratio ``e_v`` (`e_v = 0` by default). The second form follows from the definition
+of ``h``. The closure makes ``W - b`` a function of ``h`` in each regime, so ``b_e`` is a function of ``h``
+and ``p_o``:
+
+| Regime | ``W - b`` | ``b_e`` | ``\partial b_e / \partial t`` |
+|:-------|:----------|:--------|:------------------------------|
+| unfilled | ``h - z_b`` | ``0`` | ``0`` |
+| filled | ``0`` | ``e_v (h - z_b)`` | ``e_v\, \partial h / \partial t`` |
+| uplifted | ``h - h_o`` | ``e_v\, p_o / (\rho_w g)`` | ``e_v\, \partial p_o / \partial t \,/\, (\rho_w g)`` |
+
+that is, ``b_e = e_v \operatorname{clamp}(h - z_b,\, 0,\, p_o/(\rho_w g))``. Outside the filled range a
+change in head is a change in ``W``, not in ``b_e``, so the same water is not counted twice. In an uplifted
+cell ``b_e`` still changes when the overburden does, since ``p_o`` depends on ``b`` and ``z_s`` through ``H``:
+water drains from the ice to the bed as ``p_o`` falls. On Shakti's sheet (`FilledCavities()`, `NoUplift()`)
+there is no clamp and ``b_e = e_v (h - z_b)``.
 
 ## Gap height
 
@@ -203,6 +219,8 @@ Second, a storage term appears on the left. The water depth changes in time as
 closure ties it to the head: ``W - b = h - z_b`` in an unfilled cell and ``W - b = h - h_o`` in an uplifted
 one. So a change in ``W - b`` is a change in ``h``, and the term is a storage term
 ``\partial h / \partial t`` on the left, like the englacial one but with coefficient 1 instead of ``e_v``.
+The englacial term itself no longer depends on ``h`` there (see [Water mass balance](@ref)): it is zero in an
+unfilled cell and ``e_v\, \partial p_o / \partial t \,/\, (\rho_w g)``, a source of water, in an uplifted one.
 
 The head equation and the gap equation depend on each other's unknown, so they cannot be solved one after
 the other. The head equation needs the gap height ``b``, which sets the conductivity ``K``. The gap equation needs

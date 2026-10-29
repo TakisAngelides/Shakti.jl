@@ -171,6 +171,7 @@ function step!(sim::Simulation)
     store_start_of_step_melt!(sim.kfs, sim.state) # ImplicitUpwind: the converged melt, the next step's start-of-step melt (unfilled_cavities.jl); taken here so that a refresh_state! between steps cannot replace it
     record_head!(sim.he, sim.state, sim.dt[], first(picard_status(sim.hs)))
     step_b!(sim)
+    store_englacial_water!(sim.state, sim.p) # the englacial water the step ends with, the next step's start-of-step value (po changes between steps)
     check_gap_height(sim)
     check_convergence(sim)
     check_filled_sheet(sim)
@@ -191,7 +192,7 @@ water_is_budgeted(sim::Simulation) = sim.cf isa UnfilledCavities
 # which sets W under the dry floor.
 function expect_water!(sim::Simulation)
     s, p, g, wb = sim.state, sim.p, sim.grid, sim.wb
-    @parallel expected_water_kernel!(wb.expected, wb.src, s.mask, s.W, s.q_x, s.q_y, s.mdot, s.ieb, g.dx, g.dy, sim.dt[], p.rho_w, s.h, sim.hs.ps.h_old, s.zb, s.po, s.stor, s.stor_up, p.e_v, p.g)
+    @parallel expected_water_kernel!(wb.expected, wb.src, s.mask, s.W, s.q_x, s.q_y, s.mdot, s.ieb, g.dx, g.dy, sim.dt[], p.rho_w, s.h, s.b_e, s.zb, s.po, s.stor, s.stor_up, p.e_v, p.g)
     return sim
 end
 function account_water!(sim::Simulation)
@@ -208,7 +209,7 @@ end
 water_created(sim::Simulation) = water_created(sim.wb)
 
 function update_water!(sim::Simulation)
-    water_is_budgeted(sim) && return update_water_budget!(sim.state, sim.grid, sim.p, sim.dt[], sim.hs.ps.h_old)
+    water_is_budgeted(sim) && return update_water_budget!(sim.state, sim.grid, sim.p, sim.dt[])
     dry_floor(sim) && return sim.state # compute_b! set it
     return water_from_head!(sim.state, sim.p, sim.cf, sim.up)
 end
@@ -341,7 +342,7 @@ has just been evolved by the previous [`step_b!`](@ref), and an ice-flow model m
 function prepare_head_solve!(sim::Simulation)
     s = sim.state
     prepare_step_inputs!(sim)
-    copyto!(sim.hs.ps.h_old, s.h) # the head at the start of the step, for the englacial storage and the water test, before the guess replaces it
+    copyto!(sim.hs.ps.h_old, s.h) # the head at the start of the step, for a retry (retry_step!), before the guess replaces it
     extrapolate_head!(sim.he, s, sim.dt[])
     fill!(s.dh_it, 0) # the oscillation damping of the guess limiter must not see the previous step's last head step (14 % fewer iterations at 6 h steps)
     limit_head_guess!(picard_guard(sim), sim.he, s, sim.p) # the extrapolated head obeys the regime and outflow stops of the iteration
@@ -395,6 +396,7 @@ function refresh_state!(sim::Simulation)
     sim.total_time[] == 0 && store_start_of_step_melt!(sim.kfs, sim.state) # the first step's start-of-step melt: the setup's, at the start-of-step gap
     compute_abs_ub!(sim.state)
     prepare_step_inputs!(sim) # also brings the water W within this simulation's sheet (a setup, a mask change)
+    sim.total_time[] == 0 && store_englacial_water!(sim.state, sim.p) # the first step's start-of-step englacial water: the setup's head, with this sheet's clamps
     refresh_from_head!(sim)
     return sim
 end
@@ -565,7 +567,7 @@ end
 $(TYPEDSIGNATURES)
 
 Solves for the new hydraulic head: runs the Picard loop ([`elliptic_solver!`](@ref)) with the englacial storage over
-`sim.dt[]` from the head at the start of the step that `prepare_head_solve!` stored in `hs.ps.h_old` (`sim.mi`'s
+`sim.dt[]` from the englacial water the last step ended with (`State.b_e`) (`sim.mi`'s
 melt input for the current time was already refreshed by [`step!`](@ref)).
 """
 function step_h!(hs::PicardHeadScheme, sim::Simulation)

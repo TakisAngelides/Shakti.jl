@@ -110,6 +110,7 @@ function load_checkpoint!(sim::Simulation, path::String)
         # rebuild both from the loaded b, h and W when the checkpoint predates it
         haskey(file, "bump") || compute_beta!(state, sim.p, sim.oss)
         haskey(file, "mdot0") || copyto!(state.mdot0, state.mdot) # older checkpoints: the start-of-step melt of ImplicitUpwind is the saved melt
+        haskey(file, "b_e") || store_englacial_water!(state, sim.p) # older checkpoints: the englacial water at the saved head and overburden
         load_head_history!(sim.he, file)
         load_timestep_control!(sim.ts, file)
         for name in WATER_BUDGET_TOTALS # an older checkpoint without them leaves the totals counting from the restart

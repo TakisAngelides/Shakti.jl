@@ -151,18 +151,35 @@
             g = Array(s.mask) .== GROUNDED
             E(h) = p.e_v .* clamp.(h .- Array(s.zb), 0, Array(s.po) ./ (p.rho_w * p.g))
             for _ in 1:3
-                W_old, h_old = copy(Array(s.W)), copy(Array(s.h))
+                W_old, be_old = copy(Array(s.W)), copy(Array(s.b_e)) # b_e: the englacial water the last step ended with
                 step!(sim)
                 @test first(Shakti.picard_status(sim.hs))
                 qx, qy = Array(s.q_x), Array(s.q_y)
                 dv = [(qx[i+1, j] - qx[i, j]) / grid.dx + (qy[i, j+1] - qy[i, j]) / grid.dy for i in 1:nx, j in 1:ny]
                 src = Array(s.mdot) ./ p.rho_w .+ Array(s.ieb)
-                res = (Array(s.W) .- W_old .+ E(Array(s.h)) .- E(h_old)) ./ dt .+ dv .- src
+                res = (Array(s.W) .- W_old .+ E(Array(s.h)) .- be_old) ./ dt .+ dv .- src
                 @test maximum(abs, res[g]) < 1e-9 * maximum(abs, src[g])
                 @test any(E(Array(s.h))[g] .> 0)
+                @test Array(s.b_e) == E(Array(s.h)) # stored for the next step
             end
             N = Array(s.N)[g]
             @test all(0 .<= N .<= Array(s.po)[g] .* (1 + 1e-9))
+
+            # The overburden falls between steps (the ice thins by 300 m, as a coupled ice model may make it): the cells
+            # whose head is now above the new overburden head hold less englacial water, e_v*p_o/(rho_w g), and the rest
+            # drains to the sheet. The step starts from the englacial water the last one ended with, so the budget closes;
+            # the englacial water recomputed from the start-of-step head at the new p_o would lose that drainage.
+            s.zs .-= 300.0
+            W_old, h_old, be_old = copy(Array(s.W)), copy(Array(s.h)), copy(Array(s.b_e))
+            step!(sim)
+            @test first(Shakti.picard_status(sim.hs))
+            @test maximum((be_old .- E(h_old))[g]) > 0.01 # the overburden fell: e_v*dp_o/(rho_w g) of englacial water drains
+            qx, qy = Array(s.q_x), Array(s.q_y)
+            dv = [(qx[i+1, j] - qx[i, j]) / grid.dx + (qy[i, j+1] - qy[i, j]) / grid.dy for i in 1:nx, j in 1:ny]
+            src = Array(s.mdot) ./ p.rho_w .+ Array(s.ieb)
+            res = (Array(s.W) .- W_old .+ E(Array(s.h)) .- be_old) ./ dt .+ dv .- src
+            @test maximum(abs, res[g]) < 1e-9 * maximum(abs, src[g])
+            @test abs(water_created(sim).created) <= 1e-12 * water_created(sim).input
         end
 
         @testset "SUHMO's coupled gap (WithDiffusion) with the consistent coupling" begin
