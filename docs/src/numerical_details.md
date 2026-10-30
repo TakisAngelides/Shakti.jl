@@ -62,7 +62,7 @@ jumps by `fs_factor` (4) where its head reaches the bed. Near ``h = z_b`` the ou
 rises: an unfilled cell drains four times faster than a just-filled one. The Picard iteration still converges (its
 Newton term is set to 0 where it would be negative), but the equations of the step can have two solutions, one each side
 of the switch, and the step size picks which. On the bed ramp of Schoof, Hewitt & Werder (2012) at 50 mm/d of melt, 54 cells end
-unfilled at ``\Delta t \le 1`` h, 117 at 6 h and 84–90 at 1 day; on Drang Drung (100 m, ``b_\min = 10^{-3}``),
+unfilled at ``\Delta t = 10`` min, 57–60 at 1 h, 117 at 6 h and 84–90 at 1 day; on Drang Drung (100 m, ``b_\min = 10^{-3}``),
 1993 cells at 1 h and 2015 at 1 day. The duct law gives 54 and 1992 at every step size.
 
 `fs_blend` ramps the weight over an empty depth of `fs_blend` times the gap. A ramp over half the gap
