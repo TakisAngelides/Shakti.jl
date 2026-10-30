@@ -142,6 +142,9 @@ geo
 | `e_v` | - | `0` | englacial void ratio ([Sommers2018](@cite) Eq. 13); `0` elliptic head equation, `> 0` parabolic, see the [Parabolic scheme](@ref ParabolicScheme) page |
 | `T_freeze` | K | `-1.0` | `update_frozen_mask!` (step 12) freezes a cell when its basal temperature relative to pressure melting drops below this |
 | `T_hysteresis` | K | `0.5` | a frozen cell thaws at `T_freeze + T_hysteresis`; `0` gives one threshold, at which a cell might flicker |
+| `fs_factor` | - | `1` | conductance of the water in an unfilled cavity relative to the duct law; `4` is the free-surface law ``g W^3/(3\nu)``, see [Free-surface layer (optional)](@ref) |
+| `fs_omega` | - | `1` | ``\omega`` multiplier in an unfilled cavity; `2` is the Reynolds number of the mirrored duct, ``2|q|/\nu`` |
+| `fs_blend` | - | `0` | ramps an unfilled cell from duct to free surface over an empty depth of `fs_blend` times the gap; `0` is a jump at ``h = z_b`` (warned about), `0.5` is recommended |
 | `mdot_includes_G` | - | `true` | melt rate includes the geothermal flux |
 | `mdot_includes_frictional` | - | `true` | melt rate includes frictional heating |
 | `mdot_includes_potential` | - | `true` | melt rate includes potential-energy dissipation |

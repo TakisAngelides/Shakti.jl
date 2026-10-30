@@ -28,6 +28,9 @@ struct ModelParameters{F <: AbstractFloat, NE1, NE2, NE3}
     e_v::F     # englacial storage void ratio
     T_freeze::F       # basal temperature relative to pressure melting (K): T_prime_b < T_freeze freezes a GROUNDED cell, used by update_frozen_mask! (frozen_bed.jl)
     T_hysteresis::F   # thaw threshold sits this far (K, >= 0) above T_freeze: a FROZEN_BED cell thaws once T_prime_b >= T_freeze + T_hysteresis; 0 => single threshold, no hysteresis
+    fs_factor::F      # laminar conductance of a free-surface (unfilled) layer relative to b^3 g/(12 nu): 1 = off (SHAKTI), 4 = g W^3/(3 nu) (free_surface_weight, water_flux.jl)
+    fs_omega::F       # omega multiplier in a free-surface layer: 1 = off, 2 = the Reynolds number of the mirrored duct, 2|q|/nu
+    fs_blend::F       # empty depth zb - h, as a fraction of the gap b, over which a cell goes from duct (weight 0) to free surface (weight 1); 0 = a jump at h = zb
     mdot_includes_G::Bool           # include the geothermal-flux term in compute_mdot! (see MeltTerms, melt_rate.jl)
     mdot_includes_frictional::Bool  # include the frictional (sliding) heating term in compute_mdot!
     mdot_includes_potential::Bool   # include the potential-energy-dissipation term in compute_mdot!
@@ -104,6 +107,17 @@ cell thaws once `T_prime_b >= T_freeze + T_hysteresis`; in between, a cell keeps
 so noise around a single threshold can't make it flicker. `T_hysteresis = 0` recovers a single
 threshold. Unused unless `update_frozen_mask!` is called.
 
+`fs_factor`, `fs_omega` and `fs_blend` (defaults `1`, `1`, `0`: off) treat the water of an unfilled cavity
+([`UnfilledCavities`](@ref)) as a free-surface layer, with air above it, instead of a duct between bed and ice. A layer
+of depth `W` with no shear at its surface flows as the lower half of a duct of gap `2W`: laminar, `q = g W^3 |grad h|/(3 nu)`,
+four times the duct's `g W^3/(12 nu)` (`fs_factor = 4`), and the Reynolds number of that duct is `2|q|/nu`, so `omega`
+counts twice (`fs_omega = 2`) for the same wall friction. Fully turbulent, the flux is then `sqrt(2)` times the duct's at
+the same depth, as a force balance on the layer gives. `fs_blend` ramps a cell from duct to free surface over an empty
+depth `zb - h` of `fs_blend * b` (smoothstep); `0` makes the conductance jump by `fs_factor` at `h = zb`, where the
+conductance then falls as the head rises: the iteration converges, but a step can settle on either side of the jump
+and the end state depends on `dt`. `fs_blend = 0.5` removed that dependence in the tests; it costs about a quarter more
+Picard iterations. See `free_surface_weight` (`water_flux.jl`).
+
 `mdot_includes_G`/`mdot_includes_frictional`/`mdot_includes_potential`/`mdot_includes_sensible`/
 `mdot_includes_qT` each independently switch one term of [`compute_mdot!`](@ref) on or off --
 geothermal flux `s.G`, frictional (sliding) heating, potential-energy dissipation, the sensible-heat
@@ -139,6 +153,9 @@ function ModelParameters(;
     e_v = 0.0,
     T_freeze = -1.0, # K below pressure melting, the same cutoff the pan_antarctica/Greenland drivers hard-coded (T_prime_b < -1)
     T_hysteresis = 0.5, # K; 0 disables hysteresis (a cell hovering at the threshold can then freeze/thaw repeatedly, resetting b/pw each time)
+    fs_factor = 1.0,
+    fs_omega = 1.0,
+    fs_blend = 0.0,
     mdot_includes_G = true,
     mdot_includes_frictional = true,
     mdot_includes_potential = true,
@@ -149,6 +166,8 @@ function ModelParameters(;
     outflow_only_ocean = true)
 
     T_hysteresis >= 0 || throw(ArgumentError("T_hysteresis must be >= 0 (got $T_hysteresis): the thaw threshold T_freeze + T_hysteresis may not lie below the freeze threshold"))
+    (fs_factor > 0 && fs_omega > 0 && fs_blend >= 0) ||
+        throw(ArgumentError("fs_factor and fs_omega must be > 0 and fs_blend >= 0 (got $fs_factor, $fs_omega, $fs_blend); fs_factor = fs_omega = 1 is the duct everywhere"))
 
     n_F = F(n)
     n_exp = canonical_exponent(n_F)
@@ -156,7 +175,7 @@ function ModelParameters(;
     inv_n_exp = canonical_exponent(1 / n_F)
 
     return ModelParameters(
-        F(rho_w), F(rho_sw), F(rho_i), F(g), F(nu), n_F, F(omega), F(L), F(br), F(lr), F(b_c), F(ct), F(cw), F(p_atm), F(b_min), F(b_max), F(N_min), F(N_max), F(e_v), F(T_freeze), F(T_hysteresis),
+        F(rho_w), F(rho_sw), F(rho_i), F(g), F(nu), n_F, F(omega), F(L), F(br), F(lr), F(b_c), F(ct), F(cw), F(p_atm), F(b_min), F(b_max), F(N_min), F(N_max), F(e_v), F(T_freeze), F(T_hysteresis), F(fs_factor), F(fs_omega), F(fs_blend),
         mdot_includes_G, mdot_includes_frictional, mdot_includes_potential, mdot_includes_sensible, mdot_includes_qT,
         limit_freeze_on, Bool(outflow_only_land), Bool(outflow_only_ocean), n_exp, n_minus_1_exp, inv_n_exp
     )

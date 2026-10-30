@@ -82,12 +82,18 @@ The boundary faces are outflow-only by default (`outflow_only_land`, `outflow_on
 level ``h + b``, so the boundary drains the ice but never feeds it. Whether each such face is open is decided
 again from the head at every Picard iterate.
 
+With the [free-surface layer](@ref "Free-surface layer (optional)") on, each cell's ``W^3`` is first multiplied by
+``1 + (f_K - 1)\, w``, its weight ``w`` taken at the head iterate, and the face's ``\omega`` becomes
+``\omega_f = \omega\,(1 + (f_\omega - 1)\, w_f)``. ``w_f`` is the weight of the cell whose conductance the face takes
+(the donor, or the grounded cell at a boundary face), or the mean of the two cells' weights for a mean of their
+conductances. Otherwise ``\omega_f = \omega``.
+
 The turbulent correction follows from the flux law. With ``D_f = K_{0,f} |(\nabla\hat{h})_f| / \nu``, the
-Reynolds number ``\mathrm{Re} = |q|/\nu`` solves ``\omega \mathrm{Re}^2 + \mathrm{Re} - D_f = 0``, so
+Reynolds number ``\mathrm{Re} = |q|/\nu`` solves ``\omega_f \mathrm{Re}^2 + \mathrm{Re} - D_f = 0``, so
 
 ```math
-\mathrm{Re}_f = \frac{2 D_f}{1 + \sqrt{1 + 4 \omega D_f}}, \qquad
-K_f = \frac{K_{0,f}}{1 + \omega \mathrm{Re}_f}, \qquad
+\mathrm{Re}_f = \frac{2 D_f}{1 + \sqrt{1 + 4 \omega_f D_f}}, \qquad
+K_f = \frac{K_{0,f}}{1 + \omega_f \mathrm{Re}_f}, \qquad
 q_f = -K_f (\nabla\hat{h})_f .
 ```
 
@@ -193,6 +199,10 @@ The row is nonlinear in ``h``: through ``N`` in ``\mathcal{G}``, through ``W`` a
    the iterate where that gives less water, so that the channel feedback ``W \to K \to q \to \dot m \to W``
    does not run inside the iteration. The row also takes the Newton term of the face flux in the donor's head,
    ``\partial |q_f| / \partial h_d = 3 K_f |(\nabla\hat{h})_f|\, (1 + \omega\mathrm{Re}_f) / \left(W_d (1 + 2\omega\mathrm{Re}_f)\right) \cdot \mathcal{W}_d'``.
+   With the free-surface layer the donor's weight ``w_d`` moves with its head as well, and the term is
+   ``\big[K_f |(\nabla\hat{h})_f| (1 + \omega_f\mathrm{Re}_f)\big(3\mathcal{W}_d'/W_d + a\, w_d'/(1 + a w_d)\big) - \nu\, \omega\, o\, \mathrm{Re}_f^2\, w_d'\big] / (1 + 2\omega_f\mathrm{Re}_f)``,
+   ``a = f_K - 1``, ``o = f_\omega - 1``. Since ``w_d' \le 0``, it can be negative, where filling turns the layer into
+   a duct faster than it deepens; it is then set to 0, which keeps the M-matrix sign pattern.
    The iteration is then Newton's method in the water depth, which converges at long ``\Delta t``, where
    a lagged depth (`"upwind"`) is stable only for ``\Delta t < \Delta x\, W / (3 |q|)``. The matrix keeps
    the sign pattern of an M-matrix but is no longer symmetric.

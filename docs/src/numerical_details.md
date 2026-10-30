@@ -55,6 +55,21 @@ A converged head is a fixed point of the limited iteration, so the limits do not
 With `UnderHeadRelaxation(alpha)` the limited head is further blended with the previous one,
 ``h^{k+1} \leftarrow \alpha h^{k+1} + (1-\alpha) h^k``; `AndersonHeadRelaxation` accelerates it instead.
 
+## The free-surface switch
+
+With the [free-surface layer](@ref "Free-surface layer (optional)") on and `fs_blend = 0`, a cell's conductance
+jumps by `fs_factor` (4) where its head reaches the bed. Near ``h = z_b`` the outflow of a cell then falls as its head
+rises: an unfilled cell drains four times faster than a just-filled one. The Picard iteration still converges (its
+Newton term is set to 0 where it would be negative), but the equations of the step can have two solutions, one each side
+of the switch, and the step size picks which. On the bed ramp of Schoof, Hewitt & Werder (2012) at 50 mm/d of melt, 54 cells end
+unfilled at ``\Delta t \le 1`` h, 117 at 6 h and 84–90 at 1 day; on Drang Drung (100 m, ``b_\min = 10^{-3}``),
+1993 cells at 1 h and 2015 at 1 day. The duct law gives 54 and 1992 at every step size.
+
+`fs_blend` ramps the weight over an empty depth of `fs_blend` times the gap. A ramp over half the gap
+(`fs_blend = 0.5`) removed the dependence on the step size on the ramp, and 0.3 on Drang Drung, at about a quarter
+more Picard iterations; 0.1 occasionally hit the iteration cap at ``\Delta t = 600`` s. A sharp switch is still
+allowed, with a warning.
+
 ## The first iterate
 
 The iteration starts from the head extrapolated in time through the last converged heads

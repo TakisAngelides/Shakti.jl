@@ -27,7 +27,7 @@ Updates `s.Re` (cell-centered Reynolds number) by averaging the four surrounding
 compute_Re!(s::State) = (@parallel compute_Re_kernel!(s.Re, s.Re_x, s.Re_y); s)
 
 # Cell-centred K = b^3*g / (12*nu*(1 + omega*Re)), a diagnostic: the linear system assembles the face values
-# K_x/K_y written by compute_face_flux!.
+# K_x/K_y written by compute_face_flux!. It leaves out the free-surface factors (p.fs_factor, p.fs_omega).
 @parallel_indices (ix, iy) function compute_K_kernel!(K, b, Re, ggrav, nu, omega)
     if ix <= size(K, 1) && iy <= size(K, 2)
         K[ix, iy] = (b[ix, iy]^3 * ggrav) / (12 * nu * (1 + omega * Re[ix, iy]))
@@ -47,22 +47,63 @@ compute_cell_K!(s::State, p::ModelParameters) = (@parallel compute_K_kernel!(s.K
 # D = K0*|dh|/nu; then K_face = K0/(1 + omega*Re) and q = -K_face*dh (so |q|/nu == Re exactly).
 # dsel_x/dsel_y: the face values whose sign picks the donor of Upwind/ImplicitUpwind: dhdx/dhdy themselves, or the
 # ImplicitUpwind donors s.don_x/s.don_y (update_donor_kernel!).
-@parallel_indices (ix, iy) function compute_face_flux_kernel!(K_x, K_y, q_x, q_y, Re_x, Re_y, b, mask, dhdx, dhdy, valid_x, valid_y, c0, nu, omega, kfs::AbstractKFaceScheme, dsel_x, dsel_y)
+# Free-surface layer (p.fs_factor, p.fs_omega, p.fs_blend). An unfilled cavity holds water on the bed with air above it:
+# no shear at the surface, so the layer of depth W flows as the lower half of a duct of gap 2W (the mid-plane of a duct
+# has no shear either). Laminar, that is q = g W^3 |grad h|/(3 nu), 4 times the duct's b^3 g/(12 nu) at the same depth;
+# and the Reynolds number of the mirrored duct is 2|q|/nu, so omega counts twice (fs_omega = 2) for the same wall
+# friction (Darcy-Weisbach f = 48 omega). Each cell carries a weight w from 0 (duct: filled, uplifted, or not GROUNDED)
+# to 1 (free surface): its laminar conductance is c0 (1 + (fs_factor - 1) w) W^3, its omega omega (1 + (fs_omega - 1) w).
+# w ramps up with the empty depth e = zb - h of an unfilled cell (s.stor > 0) over e = fs_blend * b (smoothstep; a jump
+# at h = zb for fs_blend = 0). Re_x/Re_y stay |q|/nu.
+@inline function free_surface_weight(stor, mask, h, zb, b, blend)
+    e = zb - h
+    (stor > 0 && mask == GROUNDED && e > 0) || return (zero(e), zero(e))
+    w = blend * b
+    (w > 0 && e < w) || return (one(e), zero(e))
+    t = e / w
+    return (t * t * (3 - 2 * t), -6 * t * (1 - t) / w) # the weight, and its slope in the head (de/dh = -1)
+end
+@parallel_indices (ix, iy) function free_surface_weight_kernel!(fsw, dfsw_dh, stor, mask, h, zb, b, blend)
+    if ix <= size(fsw, 1) && iy <= size(fsw, 2)
+        fsw[ix, iy], dfsw_dh[ix, iy] = free_surface_weight(stor[ix, iy], mask[ix, iy], h[ix, iy], zb[ix, iy], b[ix, iy], blend)
+    end
+    return
+end
+free_surface_on(p::ModelParameters) = p.fs_factor != 1 || p.fs_omega != 1
+compute_free_surface_weight!(s::State, p::ModelParameters) =
+    (free_surface_on(p) && @parallel free_surface_weight_kernel!(s.fsw, s.dfsw_dh, s.stor, s.mask, s.h, s.zb, s.b, p.fs_blend); s)
+# The weight of a face: of the cell whose conductance the face takes (the donor under Upwind/ImplicitUpwind, the grounded
+# cell at an OCEAN/LAND face), the mean of the two for a mean of the two conductances.
+@inline face_weight(K0, Ka, Kb, wa, wb) = K0 == Ka ? wa : (K0 == Kb ? wb : (wa + wb) / 2)
+
+@parallel_indices (ix, iy) function compute_face_flux_kernel!(K_x, K_y, q_x, q_y, Re_x, Re_y, b, mask, dhdx, dhdy, valid_x, valid_y, c0, nu, omega, kfs::AbstractKFaceScheme, dsel_x, dsel_y, fsw, fs_c, fs_o)
     nx, ny = size(b, 1), size(b, 2)
     if ix <= size(K_x, 1) && iy <= size(K_x, 2)
-        K0 = (ix > 1 && ix <= nx) ? face_conductance(kfs, c0 * b[ix-1, iy]^3, mask[ix-1, iy], c0 * b[ix, iy]^3, mask[ix, iy], face_select(kfs, dsel_x[ix, iy])) * valid_x[ix, iy] : zero(c0)
+        K0, om = zero(c0), omega
+        if ix > 1 && ix <= nx
+            Ka, Kb = c0 * (1 + fs_c * fsw[ix-1, iy]) * b[ix-1, iy]^3, c0 * (1 + fs_c * fsw[ix, iy]) * b[ix, iy]^3
+            K0 = face_conductance(kfs, Ka, mask[ix-1, iy], Kb, mask[ix, iy], face_select(kfs, dsel_x[ix, iy]))
+            om = omega * (1 + fs_o * face_weight(K0, Ka, Kb, fsw[ix-1, iy], fsw[ix, iy]))
+            K0 *= valid_x[ix, iy]
+        end
         D = K0 * abs(dhdx[ix, iy]) / nu
-        Re = 2 * D / (1 + sqrt(1 + 4 * omega * D))
-        Kf = K0 / (1 + omega * Re)
+        Re = 2 * D / (1 + sqrt(1 + 4 * om * D))
+        Kf = K0 / (1 + om * Re)
         K_x[ix, iy] = Kf
         Re_x[ix, iy] = Re
         q_x[ix, iy] = -Kf * dhdx[ix, iy]
     end
     if ix <= size(K_y, 1) && iy <= size(K_y, 2)
-        K0 = (iy > 1 && iy <= ny) ? face_conductance(kfs, c0 * b[ix, iy-1]^3, mask[ix, iy-1], c0 * b[ix, iy]^3, mask[ix, iy], face_select(kfs, dsel_y[ix, iy])) * valid_y[ix, iy] : zero(c0)
+        K0, om = zero(c0), omega
+        if iy > 1 && iy <= ny
+            Ka, Kb = c0 * (1 + fs_c * fsw[ix, iy-1]) * b[ix, iy-1]^3, c0 * (1 + fs_c * fsw[ix, iy]) * b[ix, iy]^3
+            K0 = face_conductance(kfs, Ka, mask[ix, iy-1], Kb, mask[ix, iy], face_select(kfs, dsel_y[ix, iy]))
+            om = omega * (1 + fs_o * face_weight(K0, Ka, Kb, fsw[ix, iy-1], fsw[ix, iy]))
+            K0 *= valid_y[ix, iy]
+        end
         D = K0 * abs(dhdy[ix, iy]) / nu
-        Re = 2 * D / (1 + sqrt(1 + 4 * omega * D))
-        Kf = K0 / (1 + omega * Re)
+        Re = 2 * D / (1 + sqrt(1 + 4 * om * D))
+        Kf = K0 / (1 + om * Re)
         K_y[ix, iy] = Kf
         Re_y[ix, iy] = Re
         q_y[ix, iy] = -Kf * dhdy[ix, iy]
@@ -86,10 +127,12 @@ SUHMO's `D`, output) are the same numbers. Face rules come from [`face_conductan
 `OCEAN`/`LAND` face the grounded cell's own gap height sets the conductance (averaging in the
 Dirichlet cell's placeholder `b = 0` would cut the outlet flux by a factor of 8). With
 `D = K0*|dh|/nu` (`K0` the laminar face conductance), `omega*Re^2 + Re - D = 0` is solved as
-`Re = 2*D / (1 + sqrt(1 + 4*omega*D))` (see the notes at the top of `water_flux.jl`).
+`Re = 2*D / (1 + sqrt(1 + 4*omega*D))` (see the notes at the top of `water_flux.jl`). With `p.fs_factor`/`p.fs_omega`
+set, an unfilled cell's conductance is `fs_factor` times larger and its `omega` `fs_omega` times larger, weighted by
+`s.fsw` (`free_surface_weight`); `s.Re_x`/`s.Re_y` stay `|q|/nu`.
 """
 compute_face_flux!(s::State, p::ModelParameters, kfs::AbstractKFaceScheme = Arithmetic(), gc::AbstractGapCoupling = ExplicitGapCoupling()) =
-    (compute_b_w!(s, p); @parallel compute_face_flux_kernel!(s.K_x, s.K_y, s.q_x, s.q_y, s.Re_x, s.Re_y, s.b_w, s.mask, s.dhdx, s.dhdy, s.valid_x, s.valid_y, p.g / (12 * p.nu), p.nu, p.omega, kfs, s.dhdx, s.dhdy); s)
+    (compute_b_w!(s, p); compute_free_surface_weight!(s, p); @parallel compute_face_flux_kernel!(s.K_x, s.K_y, s.q_x, s.q_y, s.Re_x, s.Re_y, s.b_w, s.mask, s.dhdx, s.dhdy, s.valid_x, s.valid_y, p.g / (12 * p.nu), p.nu, p.omega, kfs, s.dhdx, s.dhdy, s.fsw, p.fs_factor - 1, p.fs_omega - 1); s)
 
 # Under ImplicitUpwind the face flux q = -K(W_d)*dphi of a face depends on the head through the water depth W_d of
 # its donor d (the higher-potential cell), where that depth is free (s.dbw_dh = 1: unfilled or uplifted). With
@@ -102,7 +145,18 @@ compute_face_flux!(s::State, p::ModelParameters, kfs::AbstractKFaceScheme = Arit
 # the downstream side (update_donor_kernel!, or a DONOR_THINNER face whose thinner cell is downstream: there dF/dh_d
 # has the opposite sign, which would break the M-matrix
 # pattern; J ~ |dphi| is small at such a face anyway, and the face is iterated as a plain fixed point in W).
-@parallel_indices (ix, iy) function water_depth_newton_kernel!(Jw_x, Jw_y, K_x, K_y, Re_x, Re_y, dhdx, dhdy, b_w, dbw_dh, mask, omega, don_x, don_y)
+# With a free-surface weight w(h) of the donor (free_surface_weight), K0 = c0 (1 + a w) W^3 and omega_e = omega (1 + o w)
+# (a = fs_factor - 1, o = fs_omega - 1) move with the head too: per head of the donor
+#   d|q|/dh = [K (1 + omega_e Re) |dphi| (3 dW/dh / W + a dw/dh / (1 + a w)) - nu Re^2 omega o dw/dh] / (1 + 2 omega_e Re),
+# which is 3 K/W dW/dh (1 + omega Re)/(1 + 2 omega Re) for w = 0. dw/dh <= 0 (filling turns the layer into a duct, 4 times
+# less conductive), and where that outweighs the deeper water the flux falls as the head rises; J is then kept at 0
+# (a negative J breaks the M-matrix pattern, as for a donor frozen downstream).
+@inline function free_water_newton(K, Re, dphi, W, dW, omega, w, dw, a, o, nu)
+    om = omega * (1 + o * w)
+    J = (K * (1 + om * Re) * dphi * (3 * dW / W + a * dw / (1 + a * w)) - nu * Re^2 * omega * o * dw) / (1 + 2 * om * Re)
+    return max(J, zero(J))
+end
+@parallel_indices (ix, iy) function water_depth_newton_kernel!(Jw_x, Jw_y, K_x, K_y, Re_x, Re_y, dhdx, dhdy, b_w, dbw_dh, mask, omega, don_x, don_y, fsw, dfsw_dh, fs_c, fs_o, nu)
     nx, ny = size(b_w, 1), size(b_w, 2)
     if ix <= size(Jw_x, 1) && iy <= size(Jw_x, 2)
         J = zero(omega)
@@ -111,7 +165,7 @@ compute_face_flux!(s::State, p::ModelParameters, kfs::AbstractKFaceScheme = Arit
             d = hi ? ix : ix - 1
             if (dhdx[ix, iy] > 0) == hi && mask[d, iy] == GROUNDED && dbw_dh[d, iy] > 0
                 Re = Re_x[ix, iy]
-                J = 3 * K_x[ix, iy] * (1 + omega * Re) / (b_w[d, iy] * (1 + 2 * omega * Re)) * abs(dhdx[ix, iy]) * dbw_dh[d, iy]
+                J = free_water_newton(K_x[ix, iy], Re, abs(dhdx[ix, iy]), b_w[d, iy], dbw_dh[d, iy], omega, fsw[d, iy], dfsw_dh[d, iy], fs_c, fs_o, nu)
                 J = hi ? J : -J
             end
         end
@@ -124,7 +178,7 @@ compute_face_flux!(s::State, p::ModelParameters, kfs::AbstractKFaceScheme = Arit
             d = hi ? iy : iy - 1
             if (dhdy[ix, iy] > 0) == hi && mask[ix, d] == GROUNDED && dbw_dh[ix, d] > 0
                 Re = Re_y[ix, iy]
-                J = 3 * K_y[ix, iy] * (1 + omega * Re) / (b_w[ix, d] * (1 + 2 * omega * Re)) * abs(dhdy[ix, iy]) * dbw_dh[ix, d]
+                J = free_water_newton(K_y[ix, iy], Re, abs(dhdy[ix, iy]), b_w[ix, d], dbw_dh[ix, d], omega, fsw[ix, d], dfsw_dh[ix, d], fs_c, fs_o, nu)
                 J = hi ? J : -J
             end
         end
@@ -145,8 +199,9 @@ that a face whose donor has flipped `MAX_DONOR_FLIPS` times within the step keep
 function compute_face_flux!(s::State, p::ModelParameters, kfs::ImplicitUpwind, gc::AbstractGapCoupling = ExplicitGapCoupling())
     compute_b_w_iterate!(s, p, gc)
     @parallel update_donor_kernel!(s.don_x, s.don_y, s.dhdx, s.dhdy, MAX_DONOR_FLIPS)
-    @parallel compute_face_flux_kernel!(s.K_x, s.K_y, s.q_x, s.q_y, s.Re_x, s.Re_y, s.b_w, s.mask, s.dhdx, s.dhdy, s.valid_x, s.valid_y, p.g / (12 * p.nu), p.nu, p.omega, kfs, s.don_x, s.don_y)
-    @parallel water_depth_newton_kernel!(s.Jw_x, s.Jw_y, s.K_x, s.K_y, s.Re_x, s.Re_y, s.dhdx, s.dhdy, s.b_w, s.dbw_dh, s.mask, p.omega, s.don_x, s.don_y)
+    compute_free_surface_weight!(s, p)
+    @parallel compute_face_flux_kernel!(s.K_x, s.K_y, s.q_x, s.q_y, s.Re_x, s.Re_y, s.b_w, s.mask, s.dhdx, s.dhdy, s.valid_x, s.valid_y, p.g / (12 * p.nu), p.nu, p.omega, kfs, s.don_x, s.don_y, s.fsw, p.fs_factor - 1, p.fs_omega - 1)
+    @parallel water_depth_newton_kernel!(s.Jw_x, s.Jw_y, s.K_x, s.K_y, s.Re_x, s.Re_y, s.dhdx, s.dhdy, s.b_w, s.dbw_dh, s.mask, p.omega, s.don_x, s.don_y, s.fsw, s.dfsw_dh, p.fs_factor - 1, p.fs_omega - 1, p.nu)
     return s
 end
 

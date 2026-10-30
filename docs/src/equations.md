@@ -88,6 +88,41 @@ network [Sommers2018](@cite). The transmissivity is built from the water depth `
 \mathrm{Re} = \frac{2 D}{1 + \sqrt{1 + 4 \omega D}} .
 ```
 
+### Free-surface layer (optional)
+
+The law above is flow in a duct, between the bed and the ice, with no slip on both walls. The water of an unfilled
+cavity has air above it instead, and its surface carries no shear. The mid-plane of a duct carries no shear either, so a
+layer of depth ``W`` with a free surface flows as the lower half of a duct of gap ``2W``. Laminar, that gives
+
+```math
+\mathbf{q} = -\frac{g\, W^3}{3 \nu} \nabla \hat{h},
+```
+
+four times the duct's flux at the same depth. The Reynolds number of the mirrored duct is ``2|\mathbf{q}|/\nu``, and
+``\omega`` multiplies it; ``\omega`` stays a property of the walls (a constant Darcy–Weisbach friction factor
+``f = 48\omega``). So in an unfilled cell
+
+```math
+K = \frac{g\, W^3}{3 \nu \left(1 + 2\omega \,\mathrm{Re}\right)}, \qquad \mathrm{Re} = \frac{|\mathbf{q}|}{\nu} .
+```
+
+In the turbulent limit this is ``\sqrt{2}`` times the duct's flux at the same depth, the ratio a force balance gives:
+the bed alone holds the layer against the gradient, ``\tau = \rho_w g W |\nabla\hat{h}|``, where the duct's two walls
+share ``\rho_w g b |\nabla\hat{h}|``.
+
+[Sommers2018](@cite) and [Wells2026](@cite) keep the duct law in every regime, and so does Shakti by default. The
+free-surface law is switched on with `fs_factor = 4` and `fs_omega = 2`. Each cell then carries a weight ``w`` from 0
+(duct) to 1 (free surface), and
+
+```math
+K = \frac{g\, W^3 \left(1 + (f_K - 1)\, w\right)}{12 \nu \left(1 + \omega (1 + (f_\omega - 1)\, w)\,\mathrm{Re}\right)},
+```
+
+with ``f_K`` = `fs_factor`, ``f_\omega`` = `fs_omega`. ``w = 0`` in filled and uplifted cells. In an unfilled cell ``w``
+rises with the empty depth ``e = z_b - h`` as a smoothstep, ``w = t^2 (3 - 2t)`` with ``t = \min(e / (\beta b), 1)``,
+``\beta`` = `fs_blend`. With ``\beta = 0`` the conductance jumps by ``f_K`` at ``h = z_b``; see
+[The free-surface switch](@ref) for why a ramp over about half the gap is recommended.
+
 ## Water mass balance
 
 The water volume per unit bed area changes by divergence of the flux, melt and input from above:
@@ -254,6 +289,7 @@ The default values of `ModelParameters`:
 | ``g`` | `g` | 9.81 m s⁻² | gravity |
 | ``\nu`` | `nu` | 1.787 × 10⁻⁶ m² s⁻¹ | kinematic viscosity of water |
 | ``\omega`` | `omega` | 10⁻³ | laminar–turbulent transition [Sommers2018](@cite) |
+| ``f_K``, ``f_\omega``, ``\beta`` | `fs_factor`, `fs_omega`, `fs_blend` | 1, 1, 0 (off) | free-surface layer in unfilled cavities: conductance and ``\omega`` factors (4 and 2 for the free-surface law), ramp over ``\beta b`` of empty depth |
 | ``n`` | `n` | 3 | Glen's law exponent |
 | ``L`` | `L` | 3.34 × 10⁵ J kg⁻¹ | latent heat of fusion |
 | ``b_r``, ``l_r`` | `br`, `lr` | 0.1 m, 2 m | bump height and spacing |

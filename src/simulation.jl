@@ -248,6 +248,15 @@ const OPTION_RULES = (
           o.gcp isa ConsistentGapCoupling && o.ds isa NoDiffusion, :warn_once,
      o -> "k_face_choice = \"implicit_upwind\" on the filled sheet's dry floor with ExplicitGapScheme can run away: the explicit " *
           "gap update overshoots the water depths the faces conduct by. Use FullyImplicitGapScheme (the default)."),
+    # The free-surface layer is the water of an unfilled cavity (s.stor > 0, free_surface_weight): other sheets have none.
+    (o -> free_surface_on(o.p) && !(o.cf isa UnfilledCavities), :warn,
+     o -> "fs_factor/fs_omega != 1 with $(sheet_name(o)) has no effect: the free-surface layer is the water of an unfilled " *
+          "cavity, which needs cavity_filling = UnfilledCavities()."),
+    # A sharp switch makes the conductance jump by fs_factor at h = zb and fall as the head rises there: on the SHW12 ramp
+    # (m = 50 mm/d) 54 cells ended unfilled at dt <= 1 h, 117 at 6 h, 84-90 at 1 day; fs_blend = 0.5 gave 54 at every dt.
+    (o -> free_surface_on(o.p) && o.cf isa UnfilledCavities && o.p.fs_blend == 0, :warn_once,
+     o -> "fs_blend = 0 switches the conductance by fs_factor = $(o.p.fs_factor) at h = zb: a step may settle on either side " *
+          "of the switch, so the unfilled area can depend on dt. fs_blend = 0.5 ramps it over half the gap."),
 )
 
 """

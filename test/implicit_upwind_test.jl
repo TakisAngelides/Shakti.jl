@@ -6,18 +6,20 @@
         # 1-D bed ramp after Schoof, Hewitt & Werder (2012) Fig. 7, 40 x 3 cells of 100 m: sliding over the bumps opens the
         # gap faster than the melt fills it in the upper part (free surface, pw = 0), the lower part is filled; LAND margin
         # in the last column. Melt terms off, so the melt input m is the only source and mdot does not depend on the head.
+        ramp_params(; b_min = 1e-6, e_v = 0.0, omega = 1e-4, outflow = true, kw...) =
+            ModelParameters(; br = 0.1, lr = 2.0, b_min = b_min, e_v = e_v, omega = omega,
+                            mdot_includes_G = false, mdot_includes_frictional = false, mdot_includes_potential = false,
+                            mdot_includes_sensible = false, mdot_includes_qT = false, limit_freeze_on = false,
+                            outflow_only_land = outflow, outflow_only_ocean = outflow, kw...)
         function ramp(; kface = "implicit_upwind", solver = :auto, dt = 3600.0, m_mmd = 5.0, omega = 1e-4, e_v = 0.0,
-                        cf = UnfilledCavities(), up = NoUplift(), hp = BedPotential(), gap = FullyImplicitGapScheme(), gc = ExplicitGapCoupling(), atol = 0, b_min = 1e-6, outflow = true)
+                        cf = UnfilledCavities(), up = NoUplift(), hp = BedPotential(), gap = FullyImplicitGapScheme(), gc = ExplicitGapCoupling(), atol = 0, b_min = 1e-6, outflow = true, fs = (;))
             nx, ny = 40, 3
             grid = Grid(nx, ny, 3.9e3, 200.0)
             x = Array(grid.x)
             zb = repeat(80.0 .* (1 .- x ./ x[end]), 1, ny)
             H  = repeat([400.0 * sqrt(max(0.0, 1 - xi / x[end])) for xi in x], 1, ny)
             mask = fill(GROUNDED, nx, ny); mask[end, :] .= LAND
-            p = ModelParameters(; br = 0.1, lr = 2.0, b_min = b_min, e_v = e_v, omega = omega,
-                                mdot_includes_G = false, mdot_includes_frictional = false, mdot_includes_potential = false,
-                                mdot_includes_sensible = false, mdot_includes_qT = false, limit_freeze_on = false,
-                                outflow_only_land = outflow, outflow_only_ocean = outflow)
+            p = ramp_params(; b_min, e_v, omega, outflow, fs...)
             state = State(grid)
             set_initial_conditions!(state, grid, p, sl, mask, fill(5e-25, nx, ny), zb, zb .+ H, fill(0.005, nx, ny), zeros(nx, ny),
                                     fill(ub, nx + 1, ny), zeros(nx, ny + 1), fill(m_mmd / 1000 / 86400, nx, ny), zeros(nx + 1, ny), zeros(nx, ny + 1))
@@ -68,10 +70,13 @@
             @test abs(J) ≈ (q1 - q0) / δ rtol = 1e-4
         end
 
-        @testset "head matrix is the Jacobian of the row residual (laminar, $(nameof(typeof(gc))))" for gc in (ExplicitGapCoupling(), ConsistentGapCoupling())
+        @testset "head matrix is the Jacobian of the row residual (laminar, $(nameof(typeof(gc)))$(isempty(fs) ? "" : ", free surface"))" for (gc, fs) in
+                ((ExplicitGapCoupling(), (;)), (ConsistentGapCoupling(), (;)), (ExplicitGapCoupling(), (fs_factor = 4.0, fs_blend = 2.0)))
             # laminar: the conductance depends on the head only through the water depth (more input: laminar flow conducts more,
             # and both regimes are wanted). Under ConsistentGapCoupling the filled cells' water depth is the gap scheme's G(N(h)) too.
-            sim = ramp(omega = 0.0, m_mmd = 50.0, gc = gc)
+            # The free-surface ramp over twice the gap puts every unfilled cell inside it (e = zb - h < b), where the weight moves
+            # with the head, and keeps d|q|/dh > 0 (no clamp).
+            sim = ramp(omega = 0.0, m_mmd = 50.0, gc = gc, fs = fs)
             for _ in 1:3
                 step!(sim)
             end
@@ -93,6 +98,7 @@
             M0 = Matrix(sals.M)
             gr = findall(vec(grounded(sim)))
             @test any(unfilled(sim)) && any(grounded(sim) .& .!unfilled(sim)) # both regimes present
+            isempty(fs) || @test count(w -> 0 < w < 1, Array(s.fsw)) == count(unfilled(sim))
             Jfd = zeros(length(gr), length(gr))
             for (c, jj) in enumerate(gr)
                 δ = 1e-6
@@ -103,6 +109,57 @@
             residual(h0)
             @test maximum(abs, M0[gr, gr] .- Jfd) < 1e-5 * maximum(abs, M0[gr, gr]) # (the gap slopes are central differences)
             @test !issymmetric(M0[gr, gr]) # the Newton terms are in
+        end
+
+        @testset "free-surface layer (fs_factor, fs_omega, fs_blend)" begin
+            # The weight: 0 in a filled cell, 1 below the ramp, a smoothstep in the empty depth e = zb - h inside it
+            w(e; blend = 0.5, b = 0.01, stor = 1.0) = Shakti.free_surface_weight(stor, GROUNDED, -e, 0.0, b, blend)
+            @test w(-1e-3) == (0.0, 0.0) && w(1e-3; stor = 0.0) == (0.0, 0.0) && w(1e-3; blend = 0.0) == (1.0, 0.0)
+            @test Shakti.free_surface_weight(1.0, LAND, -1e-3, 0.0, 0.01, 0.5) == (0.0, 0.0)
+            @test w(0.005) == (1.0, 0.0) && first(w(0.0025)) ≈ 0.5
+            @test last(w(0.001)) ≈ (first(w(0.001 - 1e-9)) - first(w(0.001))) / 1e-9 rtol = 1e-5 # slope in h = -slope in e
+            @test_throws ArgumentError ModelParameters(fs_factor = 0.0)
+            @test_throws ArgumentError ModelParameters(fs_blend = -0.1)
+
+            # Laminar, a free-surface donor conducts fs_factor = 4 times the duct (g W^3/(3 nu)); fully turbulent, with omega
+            # doubled (the mirrored duct's Re = 2|q|/nu), sqrt(2) times
+            sim = ramp(m_mmd = 5.0)
+            for _ in 1:3
+                step!(sim)
+            end
+            s = sim.state
+            Shakti.prepare_head_solve!(sim)
+            for (omega, ratio, rtol) in ((0.0, 4.0, 1e-12), (1e4, sqrt(2), 1e-2))
+                Shakti.compute_face_flux!(s, ramp_params(; omega), sim.kfs, sim.gcp)
+                q0 = abs.(Array(s.q_x))
+                Shakti.compute_face_flux!(s, ramp_params(; omega, fs_factor = 4.0, fs_omega = 2.0), sim.kfs, sim.gcp)
+                q1, fsw, don = abs.(Array(s.q_x)), Array(s.fsw), Array(s.don_x)
+                faces = [(i, j) for i in 2:sim.grid.nx-1, j in 1:sim.grid.ny if q0[i, j] > 0 && fsw[don[i, j] > 0 ? i : i - 1, j] == 1]
+                @test !isempty(faces)
+                i, j = argmax(f -> q0[f...], faces)
+                @test q1[i, j] / q0[i, j] ≈ ratio rtol = rtol
+            end
+
+            # Off by default; with the ramp over half the gap the step converges at dt = 1 day, the budget closes, and the
+            # unfilled water is shallower than in the duct
+            a = ramp(dt = 86400.0, m_mmd = 50.0)
+            b = ramp(dt = 86400.0, m_mmd = 50.0, fs = (fs_factor = 4.0, fs_omega = 2.0, fs_blend = 0.5))
+            for k in 1:100
+                W_old = water(b.state)
+                step!(a); step!(b)
+                @test first(Shakti.picard_status(b.hs))
+                k == 100 || continue
+                g = grounded(b)
+                res = budget_residual(b, W_old)
+                @test maximum(abs, res[g]) < 1e-6 * maximum(abs, Array(b.state.ieb)[g])
+            end
+            @test all(iszero, Array(a.state.fsw))
+            u = unfilled(a) .& unfilled(b)
+            @test any(u) && sum(Array(b.state.W)[u]) < 0.9 * sum(Array(a.state.W)[u])
+
+            # No unfilled cavities, no free surface; a jump at h = zb warns
+            @test_logs (:warn, r"has no effect") match_mode = :any ramp(kface = "upwind", cf = FilledCavities(), fs = (fs_factor = 4.0, fs_blend = 0.5))
+            @test_logs (:warn, r"fs_blend = 0") match_mode = :any ramp(fs = (fs_factor = 4.0,))
         end
 
         @testset "dt = 1 day: converges every step, pw >= 0, budget closes, steady state of dt = 2 h" begin

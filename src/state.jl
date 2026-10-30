@@ -18,6 +18,8 @@ struct State{A <: AbstractArray}
     po::A         # ice overburden pressure
     b::A          # water depth
     b_w::A        # water depth the face conductances are built from [m] (the water W, floored; unfilled_cavities.jl): at the start of the step, or at the end of it from the head iterate under ImplicitUpwind. Equals b exactly under FilledCavities and NoUplift
+    fsw::A        # free-surface weight of the cell, 0 (duct, b^3 g/(12 nu)) to 1 (free surface), and its slope in the head dfsw_dh (free_surface_weight, water_flux.jl); zero unless p.fs_factor/fs_omega != 1
+    dfsw_dh::A
     dbw_dh::A     # dW/dh of b_w under ImplicitUpwind (1 where the water depth is free, unfilled or uplifted, 0 elsewhere); zero otherwise
     W::A          # water per bed area [m] (GAP-5), read by the head rows, conductances, bump, freeze-on cap and wall diffusion: evolved from the water budget under the elliptic scheme with UnfilledCavities (water_is_budgeted, run.jl), the water the gap and head leave otherwise. The empty part of the gap is max(0, b - W) (empty_gap: an unfilled cavity, or the dry floor), the water above it max(0, W - b) (water_above_gap: the uplift layer)
     b_e::A        # englacial water e_v*clamp(h - zb, 0, po/(rho_w g)) at the end of the last step [m] (p.e_v > 0; store_englacial_water!, linear_solver.jl): the start-of-step value of the englacial storage, kept rather than recomputed from h since po changes between steps; zero for e_v = 0
@@ -123,6 +125,8 @@ function State(g::Grid)
     db_next   = initialize_center_field(g)
     b_w       = initialize_center_field(g)
     dbw_dh    = initialize_center_field(g)
+    fsw       = initialize_center_field(g)
+    dfsw_dh   = initialize_center_field(g)
     stor      = initialize_center_field(g)
     W         = initialize_center_field(g)
     b_e       = initialize_center_field(g)
@@ -183,7 +187,7 @@ function State(g::Grid)
     valid_y = @fill(1.0, g.nx, g.ny+1) # float 1.0 = valid; recomputed in compute_face_masks!
 
     return State(
-        h, pw, po, b, b_w, dbw_dh, W, b_e, stor, stor_up, b_next, db_next, beta, bump, lc, abs_ub, mdot, mdot0, dh_it, mdot_min, Q_b, Q_diss, Q_sens, Re, K, G, q_T, zb, zs, H, ieb, ieb_own, ieb_external, lambda, A_visc, N, mask,
+        h, pw, po, b, b_w, fsw, dfsw_dh, dbw_dh, W, b_e, stor, stor_up, b_next, db_next, beta, bump, lc, abs_ub, mdot, mdot0, dh_it, mdot_min, Q_b, Q_diss, Q_sens, Re, K, G, q_T, zb, zs, H, ieb, ieb_own, ieb_external, lambda, A_visc, N, mask,
         dhdx, db_x, q_x, Re_x, b_x, ub_x, taub_x, dpwdx, D_x, K_x, Jw_x, don_x, valid_x,
         dhdy, db_y, q_y, Re_y, b_y, ub_y, taub_y, dpwdy, D_y, K_y, Jw_y, don_y, valid_y,
     )
