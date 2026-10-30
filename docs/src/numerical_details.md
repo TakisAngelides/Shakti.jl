@@ -84,7 +84,10 @@ weaker (``\beta \ge 0.406`` with ``f_\omega = 2``), since a lower ``\omega`` in 
 `fs_blend_monotone` computes the bound for other factors, and the default `fs_blend = 0.65` lies just above it; a
 narrower ramp warns. On the ramp, 0.5 (a dip of about 4 % of the jump left) already gave 54 cells on every path, 0.3
 gave 57 at long steps and 0.1 up to 72; 0.1 and 0.3 also occasionally hit the iteration cap at ``\Delta t = 600`` s.
-A ramp costs about a quarter more Picard iterations than the jump.
+With 0.65, Drang Drung ends in the same state at 1 h and 1 day (1992 unfilled cells at ``b_\min = 10^{-3}``, 86 at
+``10^{-6}``, as the duct law; the mean water depth agrees to five digits), and that state is kept for 60 more days at
+the other step size. The default costs about as many Picard iterations as the duct law (within 5 %, and fewer than the
+jump on Drang Drung); the jump looks cheaper on the ramp at long steps only because it ends in a different state.
 
 ## The first iterate
 

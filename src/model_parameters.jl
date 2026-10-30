@@ -116,8 +116,8 @@ the same depth, as a force balance on the layer gives. `fs_blend` ramps a cell f
 depth `zb - h` of `fs_blend * b` (smoothstep). Below `fs_blend = 0.645` (for `fs_factor = 4`; `fs_blend_monotone`) the
 conductance falls as the head rises somewhere in the ramp, and a cell can have two steady states, one each side of
 `h = zb`: with a jump (`fs_blend = 0`) the SHW12 ramp at 50 mm/d settled on 54, 84 or 117 unfilled cells depending on
-`dt`, each a steady state that a later change of `dt` kept. The default `0.65` keeps the conductance monotone; it costs
-about a quarter more Picard iterations than the jump. See `free_surface_weight` (`water_flux.jl`).
+`dt`, each a steady state that a later change of `dt` kept. The default `0.65` keeps the conductance monotone and gave
+one state at every `dt` on the ramp and on Drang Drung, at about the Picard iterations of the duct law. See `free_surface_weight` (`water_flux.jl`).
 
 `mdot_includes_G`/`mdot_includes_frictional`/`mdot_includes_potential`/`mdot_includes_sensible`/
 `mdot_includes_qT` each independently switch one term of [`compute_mdot!`](@ref) on or off --
