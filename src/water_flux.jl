@@ -70,6 +70,26 @@ end
     return
 end
 free_surface_on(p::ModelParameters) = p.fs_factor != 1 || p.fs_omega != 1
+# The smallest fs_blend at which a cell's conductance never falls as its head rises. Inside the ramp the water depth is
+# b (1 - fs_blend t) and w = t^2 (3 - 2t), t = e/(fs_blend b); with a = fs_factor - 1, o = fs_omega - 1 the flux does not
+# fall if 3 >= (1 - fs_blend t) 6t(1 - t)/fs_blend * c(t), with c = a/(1 + a w) laminar and a/(1 + a w) - o/(1 + o w)
+# fully turbulent (in between, a mix of the two). 0.645 for fs_factor = 4, fs_omega = 2. Below it the equations can
+# have two steady states per cell, and which one a run reaches depends on dt.
+function fs_blend_monotone(fs_factor, fs_omega)
+    a, o = Float64(fs_factor) - 1, Float64(fs_omega) - 1
+    c(t) = (w = t^2 * (3 - 2t); max(a / (1 + a * w), a / (1 + a * w) - o / (1 + o * w)))
+    ok(beta) = all(t -> (1 - beta * t) * 6t * (1 - t) / beta * c(t) <= 3, range(0, min(1, 1 / beta); length = 2001))
+    ok(1e-12) && return 0.0
+    lo, hi = 0.0, 1.0
+    while !ok(hi)
+        lo, hi = hi, 2hi
+    end
+    for _ in 1:50
+        mid = (lo + hi) / 2
+        ok(mid) ? (hi = mid) : (lo = mid)
+    end
+    return hi
+end
 compute_free_surface_weight!(s::State, p::ModelParameters) =
     (free_surface_on(p) && @parallel free_surface_weight_kernel!(s.fsw, s.dfsw_dh, s.stor, s.mask, s.h, s.zb, s.b, p.fs_blend); s)
 # The weight of a face: of the cell whose conductance the face takes (the donor under Upwind/ImplicitUpwind, the grounded

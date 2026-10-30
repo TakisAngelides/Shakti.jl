@@ -120,8 +120,8 @@ K = \frac{g\, W^3 \left(1 + (f_K - 1)\, w\right)}{12 \nu \left(1 + \omega (1 + (
 
 with ``f_K`` = `fs_factor`, ``f_\omega`` = `fs_omega`. ``w = 0`` in filled and uplifted cells. In an unfilled cell ``w``
 rises with the empty depth ``e = z_b - h`` as a smoothstep, ``w = t^2 (3 - 2t)`` with ``t = \min(e / (\beta b), 1)``,
-``\beta`` = `fs_blend`. With ``\beta = 0`` the conductance jumps by ``f_K`` at ``h = z_b``; see
-[The free-surface switch](@ref) for why a ramp over about half the gap is recommended.
+``\beta`` = `fs_blend` (default 0.65). With ``\beta = 0`` the conductance jumps by ``f_K`` at ``h = z_b``; see
+[The free-surface switch](@ref) for why the ramp is at least 0.645 of the gap wide.
 
 ## Water mass balance
 
@@ -289,7 +289,7 @@ The default values of `ModelParameters`:
 | ``g`` | `g` | 9.81 m s⁻² | gravity |
 | ``\nu`` | `nu` | 1.787 × 10⁻⁶ m² s⁻¹ | kinematic viscosity of water |
 | ``\omega`` | `omega` | 10⁻³ | laminar–turbulent transition [Sommers2018](@cite) |
-| ``f_K``, ``f_\omega``, ``\beta`` | `fs_factor`, `fs_omega`, `fs_blend` | 1, 1, 0 (off) | free-surface layer in unfilled cavities: conductance and ``\omega`` factors (4 and 2 for the free-surface law), ramp over ``\beta b`` of empty depth |
+| ``f_K``, ``f_\omega``, ``\beta`` | `fs_factor`, `fs_omega`, `fs_blend` | 1, 1, 0.65 (off) | free-surface layer in unfilled cavities: conductance and ``\omega`` factors (4 and 2 for the free-surface law), ramp over ``\beta b`` of empty depth |
 | ``n`` | `n` | 3 | Glen's law exponent |
 | ``L`` | `L` | 3.34 × 10⁵ J kg⁻¹ | latent heat of fusion |
 | ``b_r``, ``l_r`` | `br`, `lr` | 0.1 m, 2 m | bump height and spacing |

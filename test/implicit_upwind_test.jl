@@ -120,6 +120,10 @@
             @test last(w(0.001)) ≈ (first(w(0.001 - 1e-9)) - first(w(0.001))) / 1e-9 rtol = 1e-5 # slope in h = -slope in e
             @test_throws ArgumentError ModelParameters(fs_factor = 0.0)
             @test_throws ArgumentError ModelParameters(fs_blend = -0.1)
+            # The narrowest ramp that keeps the conductance monotone in the head (laminar binds for fs_omega >= 1)
+            @test Shakti.fs_blend_monotone(4.0, 2.0) ≈ 0.645 atol = 1e-3
+            @test Shakti.fs_blend_monotone(4.0, 2.0) <= ModelParameters().fs_blend
+            @test Shakti.fs_blend_monotone(1.0, 2.0) == 0.0
 
             # Laminar, a free-surface donor conducts fs_factor = 4 times the duct (g W^3/(3 nu)); fully turbulent, with omega
             # doubled (the mirrored duct's Re = 2|q|/nu), sqrt(2) times
@@ -140,10 +144,10 @@
                 @test q1[i, j] / q0[i, j] ≈ ratio rtol = rtol
             end
 
-            # Off by default; with the ramp over half the gap the step converges at dt = 1 day, the budget closes, and the
-            # unfilled water is shallower than in the duct
+            # Off by default; with the default ramp (fs_blend = 0.65) the step converges at dt = 1 day, the budget closes,
+            # and the unfilled water is shallower than in the duct
             a = ramp(dt = 86400.0, m_mmd = 50.0)
-            b = ramp(dt = 86400.0, m_mmd = 50.0, fs = (fs_factor = 4.0, fs_omega = 2.0, fs_blend = 0.5))
+            b = ramp(dt = 86400.0, m_mmd = 50.0, fs = (fs_factor = 4.0, fs_omega = 2.0))
             for k in 1:100
                 W_old = water(b.state)
                 step!(a); step!(b)
@@ -157,9 +161,11 @@
             u = unfilled(a) .& unfilled(b)
             @test any(u) && sum(Array(b.state.W)[u]) < 0.9 * sum(Array(a.state.W)[u])
 
-            # No unfilled cavities, no free surface; a jump at h = zb warns
+            # No unfilled cavities, no free surface; a ramp too narrow to keep the conductance monotone warns, the default not
             @test_logs (:warn, r"has no effect") match_mode = :any ramp(kface = "upwind", cf = FilledCavities(), fs = (fs_factor = 4.0, fs_blend = 0.5))
-            @test_logs (:warn, r"fs_blend = 0") match_mode = :any ramp(fs = (fs_factor = 4.0,))
+            @test_logs (:warn, r"fs_blend = 0.0 < 0.645") match_mode = :any ramp(fs = (fs_factor = 4.0, fs_blend = 0.0))
+            @test_logs (:warn, r"fs_blend = 0.5 < 0.645") match_mode = :any ramp(fs = (fs_factor = 4.0, fs_blend = 0.5))
+            @test_logs min_level = Base.CoreLogging.Warn ramp(fs = (fs_factor = 4.0, fs_omega = 2.0))
         end
 
         @testset "dt = 1 day: converges every step, pw >= 0, budget closes, steady state of dt = 2 h" begin

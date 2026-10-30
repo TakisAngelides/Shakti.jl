@@ -57,18 +57,34 @@ With `UnderHeadRelaxation(alpha)` the limited head is further blended with the p
 
 ## The free-surface switch
 
-With the [free-surface layer](@ref "Free-surface layer (optional)") on and `fs_blend = 0`, a cell's conductance
-jumps by `fs_factor` (4) where its head reaches the bed. Near ``h = z_b`` the outflow of a cell then falls as its head
+With the [free-surface layer](@ref "Free-surface layer (optional)") on and a sharp switch (`fs_blend = 0`), a cell's
+conductance jumps by `fs_factor` (4) where its head reaches the bed. Near ``h = z_b`` the outflow of a cell then falls as its head
 rises: an unfilled cell drains four times faster than a just-filled one. The Picard iteration still converges (its
 Newton term is set to 0 where it would be negative), but the equations of the step can have two solutions, one each side
 of the switch, and the step size picks which. On the bed ramp of Schoof, Hewitt & Werder (2012) at 50 mm/d of melt, 54 cells end
 unfilled at ``\Delta t = 10`` min, 57–60 at 1 h, 117 at 6 h and 84–90 at 1 day; on Drang Drung (100 m, ``b_\min = 10^{-3}``),
 1993 cells at 1 h and 2015 at 1 day. The duct law gives 54 and 1992 at every step size.
 
-`fs_blend` ramps the weight over an empty depth of `fs_blend` times the gap. A ramp over half the gap
-(`fs_blend = 0.5`) removed the dependence on the step size on the ramp, and 0.3 on Drang Drung, at about a quarter
-more Picard iterations; 0.1 occasionally hit the iteration cap at ``\Delta t = 600`` s. A sharp switch is still
-allowed, with a warning.
+These are not transients. Run on to ``|\partial_t h| < 10^{-10}`` m/d, the ramp keeps 54, 84 and 117 unfilled cells, and
+each count survives a change of the step size afterwards (10 min to 1 day, 1 day to 10 min, 6 h to 10 min). The
+sharp-switch equations have several steady states, because a cell whose inflow lies between what a full duct and a full
+free-surface layer can drain is self-consistent either way: filled, it drains too slowly to empty; unfilled, it drains
+too fast to fill. The step size only picks the state during the first days, when a long step can overshoot ``h = z_b``.
+
+`fs_blend` ramps the weight over an empty depth of `fs_blend` times the gap. Inside the ramp the water depth is
+``b(1 - \beta t)`` and the weight ``s(t) = t^2(3-2t)``, ``t = (z_b - h)/(\beta b)``; with ``a = f_K - 1``, the laminar
+conductance does not fall as the head rises if
+
+```math
+3\,\big(1 + a\,s(t)\big) \;\ge\; a\,(1 - \beta t)\,\frac{6t(1-t)}{\beta} \qquad \text{for all } t \in (0, 1),
+```
+
+which holds for ``\beta \ge 0.645`` at ``f_K = 4`` (binding at ``t \approx 0.23``). Fully turbulent the condition is
+weaker (``\beta \ge 0.406`` with ``f_\omega = 2``), since a lower ``\omega`` in the filled cell offsets part of the drop.
+`fs_blend_monotone` computes the bound for other factors, and the default `fs_blend = 0.65` lies just above it; a
+narrower ramp warns. On the ramp, 0.5 (a dip of about 4 % of the jump left) already gave 54 cells on every path, 0.3
+gave 57 at long steps and 0.1 up to 72; 0.1 and 0.3 also occasionally hit the iteration cap at ``\Delta t = 600`` s.
+A ramp costs about a quarter more Picard iterations than the jump.
 
 ## The first iterate
 

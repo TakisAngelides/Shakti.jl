@@ -107,16 +107,17 @@ cell thaws once `T_prime_b >= T_freeze + T_hysteresis`; in between, a cell keeps
 so noise around a single threshold can't make it flicker. `T_hysteresis = 0` recovers a single
 threshold. Unused unless `update_frozen_mask!` is called.
 
-`fs_factor`, `fs_omega` and `fs_blend` (defaults `1`, `1`, `0`: off) treat the water of an unfilled cavity
+`fs_factor`, `fs_omega` and `fs_blend` (defaults `1`, `1`, `0.65`: off) treat the water of an unfilled cavity
 ([`UnfilledCavities`](@ref)) as a free-surface layer, with air above it, instead of a duct between bed and ice. A layer
 of depth `W` with no shear at its surface flows as the lower half of a duct of gap `2W`: laminar, `q = g W^3 |grad h|/(3 nu)`,
 four times the duct's `g W^3/(12 nu)` (`fs_factor = 4`), and the Reynolds number of that duct is `2|q|/nu`, so `omega`
 counts twice (`fs_omega = 2`) for the same wall friction. Fully turbulent, the flux is then `sqrt(2)` times the duct's at
 the same depth, as a force balance on the layer gives. `fs_blend` ramps a cell from duct to free surface over an empty
-depth `zb - h` of `fs_blend * b` (smoothstep); `0` makes the conductance jump by `fs_factor` at `h = zb`, where the
-conductance then falls as the head rises: the iteration converges, but a step can settle on either side of the jump
-and the end state depends on `dt`. `fs_blend = 0.5` removed that dependence in the tests; it costs about a quarter more
-Picard iterations. See `free_surface_weight` (`water_flux.jl`).
+depth `zb - h` of `fs_blend * b` (smoothstep). Below `fs_blend = 0.645` (for `fs_factor = 4`; `fs_blend_monotone`) the
+conductance falls as the head rises somewhere in the ramp, and a cell can have two steady states, one each side of
+`h = zb`: with a jump (`fs_blend = 0`) the SHW12 ramp at 50 mm/d settled on 54, 84 or 117 unfilled cells depending on
+`dt`, each a steady state that a later change of `dt` kept. The default `0.65` keeps the conductance monotone; it costs
+about a quarter more Picard iterations than the jump. See `free_surface_weight` (`water_flux.jl`).
 
 `mdot_includes_G`/`mdot_includes_frictional`/`mdot_includes_potential`/`mdot_includes_sensible`/
 `mdot_includes_qT` each independently switch one term of [`compute_mdot!`](@ref) on or off --
@@ -155,7 +156,7 @@ function ModelParameters(;
     T_hysteresis = 0.5, # K; 0 disables hysteresis (a cell hovering at the threshold can then freeze/thaw repeatedly, resetting b/pw each time)
     fs_factor = 1.0,
     fs_omega = 1.0,
-    fs_blend = 0.0,
+    fs_blend = 0.65, # >= fs_blend_monotone(4, 2) = 0.645: the conductance never falls as the head rises
     mdot_includes_G = true,
     mdot_includes_frictional = true,
     mdot_includes_potential = true,
