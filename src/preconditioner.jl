@@ -51,8 +51,11 @@
 # AMGPreconditioner (below) is the better choice and is the default there. For
 # MatrixFreeLinearSystem (the GPU-capable path, where AMGPreconditioner isn't
 # available -- AlgebraicMultigrid.jl has no GPU array support), the default is
-# AggregationMultigrid (see multigrid.jl), which the run above did not include;
-# with multigrid = false, Chebyshev beats plain Jacobi on GPU.
+# AggregationMultigrid (see multigrid.jl), and it beats both on GPU by a margin
+# that grows with the grid: in the same A100 run, 5.8/7.2/8.1/8.9 CG iterations
+# from 64x64 to 512x512, and 1.2/1.5/1.8/2.5 s, 2.3/3.4/5.6/8.8x faster than
+# degree-4 Chebyshev and 5-19x faster than Jacobi. Chebyshev is only the better
+# of the two multigrid = false options there.
 #
 # Applies the diagonal-Jacobi-scaled operator D^-1*A. The same wrapper works
 # for both SparseAssembledLinearSystem's SparseMatrixCSC and

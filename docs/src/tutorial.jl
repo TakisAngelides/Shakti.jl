@@ -364,7 +364,7 @@ choices are made when the solver is built, by keywords:
 | `CGIterativeSolver(grid, MatrixFreeLinearSystem)` and `BiCGStabIterativeSolver(grid)` | `multigrid = true` | on | aggregation multigrid, run on the GPU: 2 x 2 cells are merged per level. It holds the iteration count at 5 to 12 from 80 x 20 to 1600 x 400 cells |
 | | `nsmooth = 2` | `2` | Gauss-Seidel smoothing sweeps before and after each coarse correction |
 | | `coarse_scale = 2.0` | `2.0` | scale of the coarse correction; above 1 it compensates for the coarse grid undershooting smooth errors. The defaults gave the fewest iterations |
-| | `multigrid = false` | | Jacobi. With `CGIterativeSolver` you can use `chebyshev_degree = k` instead (not together with `multigrid`). With degree 4 on an A100, Chebyshev took about 3.7 times fewer CG iterations than Jacobi and was about 2.2 times faster from 64 x 64 to 512 x 512; on the CPU the two were about even |
+| | `multigrid = false` | | Jacobi. With `CGIterativeSolver` you can use `chebyshev_degree = k` instead (not together with `multigrid`). With degree 4 on an A100, Chebyshev took about 3.7 times fewer CG iterations than Jacobi and was about 2.2 times faster from 64 x 64 to 512 x 512; on the CPU the two were about even. The multigrid default was faster than both: 2.3 (64 x 64) to 8.8 (512 x 512) times faster than Chebyshev on the A100 |
 
 `BiCGStabIterativeSolver` also takes `rtol` and `atol` (the tolerances of its own residual, defaults `1e-4` and `0`; `CGIterativeSolver` takes the same) and `itmax` (the
 iteration cap, `0` is Krylov.jl's default of twice the number of cells). A solve that stops before its tolerance warns.
