@@ -307,8 +307,10 @@ limit_head_step!(guard::PicardGuard, s::State, h_prev, p::ModelParameters; fille
 # + ieb - div q) less the change of its englacial water (e_v > 0, from be_old = State.b_e at the start of the step), as
 # update_water_budget! takes it (water_converged, elliptic_solver.jl). The row's water is that of
 # compute_b_w_iterate! but with the current melt rate: s.b_w takes the gap's melt opening from the start of the step (mdot0).
-# With `relative`, divided by the sum of the magnitudes of the cell's terms, the scale of its round-off.
-@parallel_indices (ix, iy) function water_budget_residual_kernel!(r, relative, mask, Wo, q_x, q_y, mdot, ieb, dx, dy, dt, rho_w, b, h, zb, po, N, stor, stor_up, b_min, b_max, ggrav, gc, beta, abs_ub, A_visc, rho_i, n_minus_1, bump, b_next, be_old, e_v)
+# With `guard >= 0`, divided by the larger of the cell's own terms (its water then and before, the change of its englacial
+# water and `dt` times its sources) and `guard` times the sum of the magnitudes of all its terms, its face fluxes as well
+# (the scale of its round-off): `guard = 1` is that sum; with `guard < 0`, in metres of water.
+@parallel_indices (ix, iy) function water_budget_residual_kernel!(r, guard, mask, Wo, q_x, q_y, mdot, ieb, dx, dy, dt, rho_w, b, h, zb, po, N, stor, stor_up, b_min, b_max, ggrav, gc, beta, abs_ub, A_visc, rho_i, n_minus_1, bump, b_next, be_old, e_v)
     if ix <= size(r, 1) && iy <= size(r, 2)
         if mask[ix, iy] == GROUNDED
             div = (q_x[ix+1, iy] - q_x[ix, iy]) / dx + (q_y[ix, iy+1] - q_y[ix, iy]) / dy
@@ -316,8 +318,9 @@ limit_head_step!(guard::PicardGuard, s::State, h_prev, p::ModelParameters; fille
                                  b_min, b_max, rho_w, ggrav, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], rho_i, n_minus_1)
             db_e = englacial_water(e_v, h[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], stor_up[ix, iy], rho_w, ggrav) - be_old[ix, iy]
             res = W + db_e - (Wo[ix, iy] + dt * (mdot[ix, iy] / rho_w + ieb[ix, iy] - div))
-            scale = W + abs(db_e) + abs(Wo[ix, iy]) + dt * (abs(mdot[ix, iy] / rho_w) + abs(ieb[ix, iy]) + (abs(q_x[ix+1, iy]) + abs(q_x[ix, iy])) / dx + (abs(q_y[ix, iy+1]) + abs(q_y[ix, iy])) / dy)
-            r[ix, iy] = relative ? res / (scale + floatmin(scale)) : res
+            own = W + abs(db_e) + abs(Wo[ix, iy]) + dt * (abs(mdot[ix, iy] / rho_w) + abs(ieb[ix, iy]))
+            scale = max(own, guard * (own + dt * ((abs(q_x[ix+1, iy]) + abs(q_x[ix, iy])) / dx + (abs(q_y[ix, iy+1]) + abs(q_y[ix, iy])) / dy)))
+            r[ix, iy] = guard >= 0 ? res / (scale + floatmin(scale)) : res
         else
             r[ix, iy] = zero(dt)
         end

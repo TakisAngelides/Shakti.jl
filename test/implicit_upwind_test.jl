@@ -168,6 +168,22 @@
             @test_logs min_level = Base.CoreLogging.Warn ramp(fs = (fs_factor = 4.0, fs_omega = 2.0))
         end
 
+        @testset "free surface: a loose head tolerance does not loosen the water (water test on the cell's own terms)" begin
+            # At tol = 1e-4 the relative head test passes with the head of a thin free-surface layer ~1e-5 m off, which moves
+            # a face flux by ~1 % and a cell's water by up to a tenth of its input, a small part of its throughflow. Every step is
+            # compared with the same run solved to 1e-12 (the earlier test, against all the cell's terms, left 9e-2 of the input).
+            # Two runs, not a deepcopy: a copied Simulation shares its solver's UMFPACK factorization (a segfault).
+            mk(tol) = (sim = ramp(dt = 86400.0, m_mmd = 50.0, gc = ConsistentGapCoupling(), fs = (fs_factor = 4.0, fs_omega = 2.0)); sim.hs.ps.tol = tol; sim)
+            a, ref = mk(1e-4), mk(1e-12)
+            input = 50e-3 # m per step
+            for k in 1:6
+                step!(a); step!(ref)
+                @test first(Shakti.picard_status(a.hs))
+                g = grounded(a)
+                @test maximum(abs, (Array(a.state.W) .- Array(ref.state.W))[g]) < 1e-3 * input
+            end
+        end
+
         @testset "dt = 1 day: converges every step, pw >= 0, budget closes, steady state of dt = 2 h" begin
             a = ramp(dt = 86400.0)
             b = ramp(dt = 7200.0)

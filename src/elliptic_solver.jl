@@ -373,25 +373,38 @@ $(TYPEDSIGNATURES)
 Second convergence test of [`Picard_loop!`](@ref), on the water instead of the head: every `GROUNDED` cell's end-of-step
 water depth from its head row ([`compute_b_w_iterate!`](@ref)'s, with the current melt rate) must match the water its fluxes and sources
 leave it, `W + dt (mdot/rho_w + ieb - div q)` (`W` the water at the start of the step) less the change of its englacial water
-(`p.e_v > 0`, from `s.b_e`) ([`update_water_budget!`](@ref)), to `tol` times the sum of the
-magnitudes of the cell's terms (its water then and before, and `dt` times its sources and face fluxes: the scale of the
-balance's round-off) but no less than `WATER_TOL_FLOOR` = 1e-2, or to `atol` metres of water when `atol > 0`. `wdt` is the time step, 0 to skip the test: it applies
+(`p.e_v > 0`, from `s.b_e`) ([`update_water_budget!`](@ref)), or to `atol` metres of water when `atol > 0`. Relative, the
+residual is measured against the cell's own terms (its water then and before, and `dt` times its sources), to `tol` but
+no less than `WATER_TOL` = 1e-3, and passes as well within 100 eps of the sum of the magnitudes of all its terms, its face
+fluxes as well (the scale of the balance's round-off). The face fluxes are left out of the scale on purpose: a cell the water
+flows through carries many times its own input, and on a free-surface layer (`fs_factor = 4`, `fs_omega = 2`,
+millimetres of water) a head 1e-5 m off upstream changed the flux of a face by 1 % and the cell's water by a third of its
+input, at 0.6 % of the throughflow. `strict = false` is the earlier test, against all the cell's terms to `tol` but no less
+than `WATER_TOL_FLOOR` = 1e-2: [`Picard_loop!`](@ref) falls back to it after `WATER_STRICT_CHECKS` iterations whose head
+had converged. `wdt` is the time step, 0 to skip the test: it applies
 where the head rows conserve exactly `b_w` ([`ImplicitUpwind`](@ref), [`ConsistentGapCoupling`](@ref),
 [`UnfilledCavities`](@ref), see `water_check_dt` in `run.jl`). The head test alone passes wherever a limit of
 [`limit_head_step!`](@ref) stops the iterate, since the head then hardly moves, although the rows are not solved
 there: on a thin-ice slab (1-day steps) such steps created and destroyed up to 100 times the melt (code guide, pitfalls).
 The test also does not depend on the elevation of the bed, as the relative head test does.
 """
-# The water test asks for no less than this (relative to the cell's terms): the iterates it must reject are off by 0.1 to 1
-# (a stop of limit_head_step!), while a solved step levels off at 1e-9 on a thin-ice slab and, on Helheim (500 m,
-# dt = 1 day), at up to 1e-3 in a cell next to an uplift blister whose face donor flips (the budget keeps that in W).
+# The water test asks for no less than WATER_TOL of the cell's own terms. The fallback asks for no less than WATER_TOL_FLOOR
+# of all its terms: the iterates it must reject are off by 0.1 to 1 (a stop of limit_head_step!), while a solved step
+# levels off at 1e-9 on a thin-ice slab and, on Helheim (500 m, dt = 1 day), at up to 1e-3 in a cell next to an uplift
+# blister whose face donor flips (the budget keeps that in W); the fallback lets such a cell through after
+# WATER_STRICT_CHECKS iterations.
+const WATER_TOL = 1e-3
 const WATER_TOL_FLOOR = 1e-2
-function water_converged(ps::PicardSolver, s::State, g::Grid, p::ModelParameters, gc::AbstractGapCoupling, wdt)
+const WATER_STRICT_CHECKS = 10
+function water_converged(ps::PicardSolver, s::State, g::Grid, p::ModelParameters, gc::AbstractGapCoupling, wdt; strict::Bool = true)
     wdt > 0 || return true
-    @parallel water_budget_residual_kernel!(ps.delta_h, ps.atol == 0, s.mask, s.W, s.q_x, s.q_y, s.mdot, s.ieb, g.dx, g.dy, floattype(wdt), p.rho_w, s.b, s.h, s.zb, s.po, s.N,
+    T = eltype(ps.delta_h)
+    rtol = T(max(ps.tol, strict ? WATER_TOL : WATER_TOL_FLOOR))
+    guard = ps.atol > 0 ? -one(T) : strict ? 100 * eps(T) / rtol : one(T)
+    @parallel water_budget_residual_kernel!(ps.delta_h, guard, s.mask, s.W, s.q_x, s.q_y, s.mdot, s.ieb, g.dx, g.dy, floattype(wdt), p.rho_w, s.b, s.h, s.zb, s.po, s.N,
                                             s.stor, s.stor_up, p.b_min, p.b_max, p.g, gc, s.beta, s.abs_ub, s.A_visc, p.rho_i, p.n_minus_1_exp, s.bump, s.b_next, s.b_e, p.e_v)
     r_max = mapreduce(abs, max, ps.delta_h; init = zero(eltype(ps.delta_h)))
-    return ps.atol > 0 ? r_max < ps.atol : r_max < max(ps.tol, WATER_TOL_FLOOR, 100 * eps(eltype(ps.delta_h)))
+    return ps.atol > 0 ? r_max < ps.atol : r_max < max(rtol, 100 * eps(T))
 end
 
 """
@@ -419,6 +432,7 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
     reset_relaxation!(ps.hr) # no-op except for AndersonHeadRelaxation, whose history is only valid within one timestep's fixed-point map
     npol = 0 # donor polishing rounds this step (polish_donors!, ImplicitUpwind)
     ω, best, since = 1.0, Inf, 0 # stall damping: the step factor, the smallest update so far and the iterations since it
+    wmiss = 0 # iterations whose head converged but whose water did not (water_converged)
 
     solve_gap_iterate!(gc, ds, s, grid, p) # the gap the first head rows store (refresh_head_dependents! keeps it current after each solve)
 
@@ -451,7 +465,7 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
                     refresh_head_dependents!(s, grid, p, mt, kfs, sl; cnc, ds, gc)
                     continue
                 end
-                water_converged(ps, s, grid, p, gc, wdt) || continue # the head stands still but a row is not solved: a stop of limit_head_step!
+                water_converged(ps, s, grid, p, gc, wdt; strict = wmiss < WATER_STRICT_CHECKS) || (wmiss += 1; continue) # the head stands still but a row is not solved: a stop of limit_head_step!, or a flux off by more than the head test sees
                 ps.converged = true
                 ps.last_iter = iter
                 return
