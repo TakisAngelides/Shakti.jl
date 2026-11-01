@@ -317,6 +317,17 @@ unlike a scheme that evaluates `beta` at the lagged `b`, which inherits a `dt` c
     return b_below < br ? b_below : max(relax_update(b0, m, C, dt), br)
 end
 
+# Positive root of a*x^2 + B*x - R = 0 (a > 0, B > 0), the quadratic of CreepCutoff's branches (i) and (iii). The
+# textbook (-B + sqrt(B^2 + 4aR))/(2a) cancels when 4aR << B^2, which is the usual case (small dt, thin gap, C << b_c/dt):
+# dt = 60 s, N = 0.1 MPa, b = 1e-4 m, b_c = 0.1 m left it 5e-8 relative off, and below 4aR/B^2 ~ eps it returned 0.
+# The stable form takes q = -(B + sign(B)*sqrt(disc))/2, roots q/a and -R/q, and -R/q is the positive one. With no real
+# root (disc < 0, R < -B^2/4a) it returns the vertex -B/(2a), as the clamped textbook formula did.
+@inline function positive_quadratic_root(a, B, R)
+    disc = B^2 + 4 * a * R
+    q = -(B + copysign(sqrt(max(zero(disc), disc)), B)) / 2
+    return disc > zero(disc) ? -R / q : q / a
+end
+
 @inline function fully_implicit_creep_update(::CreepCutoff, b0, m, gamma, C, dt, br, b_c)
     opening0 = b0 + dt * m
     a = dt * C / b_c
@@ -324,7 +335,7 @@ end
     # Branch (i): beta active (b_{k+1} < br) AND l_c cutoff (b_{k+1} <= b_c)
     beta_coef = 1 + dt * gamma
     rhs_i = opening0 + dt * gamma * br
-    b1 = a > 0 ? (-beta_coef + sqrt(max(zero(a), beta_coef^2 + 4 * a * rhs_i))) / (2 * a) : relax_update(b0, m + gamma * br, gamma + C, dt)
+    b1 = a > 0 ? positive_quadratic_root(a, beta_coef, rhs_i) : relax_update(b0, m + gamma * br, gamma + C, dt)
     if b1 < br && b1 <= b_c
         return b1
     end
@@ -336,7 +347,7 @@ end
     end
 
     # Branch (iii): beta zero (b_{k+1} >= br) AND l_c cutoff (b_{k+1} <= b_c)
-    b3 = a > 0 ? (-one(a) + sqrt(max(zero(a), one(a) + 4 * a * opening0))) / (2 * a) : relax_update(b0, m, C, dt)
+    b3 = a > 0 ? positive_quadratic_root(a, one(a), opening0) : relax_update(b0, m, C, dt)
     if b3 >= br && b3 <= b_c
         return b3
     end

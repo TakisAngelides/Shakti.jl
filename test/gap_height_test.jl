@@ -95,6 +95,27 @@
             end
         end
 
+        @testset "fully_implicit_creep_update: quadratic branches accurate for thin gaps and small dt" begin
+            # Branches (i) and (iii) solve a*x^2 + B*x - R = 0 with 4aR << B^2 for small dt and thin gaps; the textbook
+            # root cancels there (5e-8 relative off at dt = 60 s, N = 0.1 MPa, b = 1e-4 m, and 0 once 4aR/B^2 < eps).
+            # Compare with the root in BigFloat, so an absolute-residual check that thin gaps pass anyway can't hide it.
+            A, b_c = 2.4e-24, 0.1
+            exact(a, B, R) = Float64((-big(B) + sqrt(big(B)^2 + 4 * big(a) * big(R))) / (2 * big(a)))
+            for dt in (1.0, 60.0, 3600.0), N in (1e4, 1e5, 1e6), b0 in (1e-6, 1e-4, 1e-2), m in (0.0, 1e-12)
+                C = A * N^3
+                a = dt * C / b_c
+                # (i): beta active (br above the gap), gamma = |u_b|/lr
+                g, br = 1e-7, 0.5
+                b_new = Shakti.fully_implicit_creep_update(CreepCutoff(), b0, m, g, C, dt, br, b_c)
+                @test b_new < br && b_new <= b_c
+                @test b_new ≈ exact(a, 1 + dt * g, b0 + dt * m + dt * g * br) rtol = 1e-14
+                # (iii): beta zero (br = 0, opening by sliding off)
+                b_new = Shakti.fully_implicit_creep_update(CreepCutoff(), b0, m, 0.0, C, dt, 0.0, b_c)
+                @test b_new <= b_c
+                @test b_new ≈ exact(a, 1.0, b0 + dt * m) rtol = 1e-14
+            end
+        end
+
         # --- End-to-end: CreepCutoff through the real kernel launches, via a Simulation --------
 
         nx, ny = 6, 6
