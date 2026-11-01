@@ -336,17 +336,19 @@ ps = PicardSolver(max_iter, tol, ls, grid)           # Picard solver, passed to 
 
 ### Linear solvers
 `ls` solves the linear system of one iteration. Which are possible depends on whether the head matrix is symmetric, which
-step 7 gives per `k_face_choice`: the default sheet's matrix is not symmetric, Shakti's sheet's is. `Simulation` refuses Cholesky
-and CG with the default sheet and names the opt-outs.
+step 7 gives per `k_face_choice`: the default sheet's matrix is not symmetric, Shakti's sheet's is. Shakti's is also positive definite
+whenever every connected group of grounded cells has an open `OCEAN` or `LAND` face or storage (see
+[Numerical details](numerical_details.md#Linear-solvers)). `Simulation` refuses Cholesky, cuDSS with `:spd`
+and CG with `"implicit_upwind"` and names the opt-outs.
 
 | Constructor | Method | Runs on | Matrix | Notes |
 |:------------|:-------|:--------|:-------|:------|
 | `LUDirectSolver(grid)` | sparse LU (UMFPACK), a direct method | CPU | any | the default choice for the default sheet |
 | `CUDSSDirectSolver(grid)` (`structure = :general`) | sparse LU with NVIDIA cuDSS | the matrix is factorised on a GPU, the fields and the rest of the model stay on the CPU | any | the same method as `LUDirectSolver`, with the factorisation on the GPU, for a node that has one. The fastest on large grids |
-| `CholeskyDirectSolver(grid)` | sparse Cholesky, a direct method | CPU | symmetric | Shakti's sheet or `"upwind"` |
-| `CUDSSDirectSolver(grid; structure = :spd)` | Cholesky with cuDSS | factorised on a GPU, as above | symmetric | |
-| `CGIterativeSolver(grid, SparseAssembledLinearSystem; ...)` | conjugate gradients on the assembled sparse matrix | CPU | symmetric | preconditioners below |
-| `CGIterativeSolver(grid, MatrixFreeLinearSystem; ...)` | conjugate gradients without assembling the matrix | CPU or GPU, all fields on the GPU | symmetric | about 0.07 s per quiet step on an A100 at 800 x 200 and 0.08 s at 1600 x 400 (`CUDSSDirectSolver(grid; structure = :spd)`: 0.10 s and 0.24 s) |
+| `CholeskyDirectSolver(grid)` | sparse Cholesky, a direct method | CPU | symmetric positive definite | Shakti's sheet or `"upwind"` |
+| `CUDSSDirectSolver(grid; structure = :spd)` | Cholesky with cuDSS | factorised on a GPU, as above | symmetric positive definite | |
+| `CGIterativeSolver(grid, SparseAssembledLinearSystem; ...)` | conjugate gradients on the assembled sparse matrix | CPU | symmetric positive definite | preconditioners below |
+| `CGIterativeSolver(grid, MatrixFreeLinearSystem; ...)` | conjugate gradients without assembling the matrix | CPU or GPU, all fields on the GPU | symmetric positive definite | about 0.07 s per quiet step on an A100 at 800 x 200 and 0.08 s at 1600 x 400 (`CUDSSDirectSolver(grid; structure = :spd)`: 0.10 s and 0.24 s) |
 | `BiCGStabIterativeSolver(grid; ...)` | BiCGStab (a Krylov method for non-symmetric matrices), matrix-free | CPU or GPU, all fields on the GPU | any | the default sheet with the fields on a GPU: about 0.2 s per step on an A100 from 800 x 200 to 1600 x 400 cells (`CUDSSDirectSolver` is faster on smaller grids, slower on larger ones) |
 
 ### Preconditioners
@@ -356,15 +358,15 @@ choices are made when the solver is built, by keywords:
 | Solver | Keyword | Default | Preconditioner |
 |:-------|:--------|:--------|:---------------|
 | `CGIterativeSolver(grid, SparseAssembledLinearSystem)` | `amg = true` | on | algebraic multigrid (Ruge-Stuben, AlgebraicMultigrid.jl): near-constant iteration count as the grid grows. CPU only |
-| | `amg_refresh_every = 1` | `1` | rebuild the multigrid hierarchy every this many solves; a larger value saves time when the matrix changes slowly |
+| | `amg_refresh_every = 5` | `5` | rebuild the multigrid hierarchy on the first solve and then every this many solves, reusing it in between. At 256 x 256 a rebuild costs about as much as the CG solve itself; `5` cuts the solve time by about 40 % for about 0.4 more CG iterations. `1` rebuilds every solve |
 | | `chebyshev_degree = k` | `nothing` | Chebyshev polynomial of degree `k` instead of `amg` (set `amg = false`); it needs no dot products. Its optional keywords are `chebyshev_nsteps_estimate = 15` (Lanczos steps), `chebyshev_bounds = :gershgorin` (or `:lanczos`) for the eigenvalue bounds and `chebyshev_eig_ratio = 30` |
 | | `amg = false` with no `chebyshev_degree` | | Jacobi: the inverse of the diagonal. Cheapest per iteration, but the iteration count grows with the grid |
 | `CGIterativeSolver(grid, MatrixFreeLinearSystem)` and `BiCGStabIterativeSolver(grid)` | `multigrid = true` | on | aggregation multigrid, run on the GPU: 2 x 2 cells are merged per level. It holds the iteration count at 5 to 12 from 80 x 20 to 1600 x 400 cells |
 | | `nsmooth = 2` | `2` | Gauss-Seidel smoothing sweeps before and after each coarse correction |
 | | `coarse_scale = 2.0` | `2.0` | scale of the coarse correction; above 1 it compensates for the coarse grid undershooting smooth errors. The defaults gave the fewest iterations |
-| | `multigrid = false` | | Jacobi. With `CGIterativeSolver` you can use `chebyshev_degree = k` instead (not together with `multigrid`). On a GPU, Jacobi was faster than Chebyshev in the sizes tested |
+| | `multigrid = false` | | Jacobi. With `CGIterativeSolver` you can use `chebyshev_degree = k` instead (not together with `multigrid`). With degree 4 on an A100, Chebyshev took about 3.7 times fewer CG iterations than Jacobi and was about 2.2 times faster from 64 x 64 to 512 x 512; on the CPU the two were about even |
 
-`BiCGStabIterativeSolver` also takes `rtol` and `atol` (the tolerances of its own residual, default `sqrt(eps)`) and `itmax` (the
+`BiCGStabIterativeSolver` also takes `rtol` and `atol` (the tolerances of its own residual, defaults `1e-4` and `0`; `CGIterativeSolver` takes the same) and `itmax` (the
 iteration cap, `0` is Krylov.jl's default of twice the number of cells). A solve that stops before its tolerance warns.
 
 Other solver keywords of `Simulation`:

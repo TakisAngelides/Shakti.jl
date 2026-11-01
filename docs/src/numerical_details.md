@@ -176,17 +176,26 @@ the simulation's options (cell ``N`` clamps, outflow-only faces).
 
 ## Linear solvers
 
-The head matrix is a five-point stencil. It is symmetric and positive definite with every face scheme
-except `"implicit_upwind"`, whose Newton terms make it non-symmetric (it keeps the sign pattern of an
-M-matrix). The solvers:
+The head matrix is a five-point stencil. With every face scheme except `"implicit_upwind"` it is
+symmetric: each face has one conductance, which both of its cells read, and the known head of an `OCEAN`
+or `LAND` neighbour moves to the right-hand side. On the grounded cells it solves, it is a weighted graph
+Laplacian plus a diagonal that is never negative: the conductance of each open `OCEAN` or `LAND` face, the
+englacial storage ``e_v/\Delta t``, and the gap or cavity storage term. It is therefore positive
+semidefinite, and positive definite if every group of grounded cells connected through open faces
+(``K_f > 0``) has one cell where that diagonal is positive: an open face to `OCEAN` or `LAND`,
+``e_v > 0``, an unfilled or uplifted cell, or a gap that still responds to ``N``. An enclosed group with
+none of these (``e_v = 0``, every cell at ``N = 0`` or with its gap held at a bound) makes it singular.
+Closed cells and `OTHER_BASIN` and `FROZEN_BED` cells have identity rows and do not affect this. The
+Newton terms of `"implicit_upwind"` make the matrix non-symmetric. It keeps the sign pattern of an
+M-matrix, but is not positive definite in general. The solvers:
 
 | Solver | Matrix it solves | Representation | Fields on |
 |:-------|:-----------------|:---------------|:----------|
 | `LUDirectSolver` | any | assembled | CPU |
-| `CholeskyDirectSolver` | symmetric | assembled | CPU |
-| `CUDSSDirectSolver` | any (`structure = :general`, LU) or symmetric (`:spd`, Cholesky) | assembled on the CPU, factorized on an NVIDIA GPU | CPU |
-| `CGIterativeSolver(grid, SparseAssembledLinearSystem)` | symmetric | assembled | CPU |
-| `CGIterativeSolver(grid, MatrixFreeLinearSystem)` | symmetric | matrix-free | CPU or GPU |
+| `CholeskyDirectSolver` | symmetric positive definite | assembled | CPU |
+| `CUDSSDirectSolver` | any (`structure = :general`, LU) or symmetric positive definite (`:spd`, Cholesky) | assembled on the CPU, factorized on an NVIDIA GPU | CPU |
+| `CGIterativeSolver(grid, SparseAssembledLinearSystem)` | symmetric positive definite | assembled | CPU |
+| `CGIterativeSolver(grid, MatrixFreeLinearSystem)` | symmetric positive definite | matrix-free | CPU or GPU |
 | `BiCGStabIterativeSolver` | any | matrix-free | CPU or GPU |
 
 An assembled solver builds the sparse matrix explicitly, which only the CPU can do, so its fields stay on the

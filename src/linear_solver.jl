@@ -288,8 +288,11 @@ function CholeskyDirectSolver(g::Grid{F}; ordering::Symbol = :amd) where F
     sals = SparseAssembledLinearSystem(g)
     # Symmetric(...) tells CHOLMOD to read only one triangle -- valid now that
     # sals.M is exactly symmetric (Dirichlet neighbours are eliminated
-    # symmetrically, see update_SALS_elliptic_kernel!) and symmetric positive-definite SPD (diffusion + strictly
-    # positive diagonal reaction term from the Newton-linearized creep closure).
+    # symmetrically, see update_SALS_elliptic_kernel!) under every K-face scheme but ImplicitUpwind (refused
+    # by Simulation). It is positive definite when every connected group of GROUNDED cells (faces with K > 0)
+    # has a positive diagonal excess somewhere: an open OCEAN/LAND face, englacial storage, an unfilled or
+    # uplifted cell, or a nonzero gap slope gd. The creep slope is not strictly positive: it is 0 at N = 0
+    # and where the clamped gap update is flat in N. Otherwise M is singular and CHOLMOD throws.
     fact = if ordering == :metis
         # Metis.permutation returns (perm, iperm) as Int32 vectors regardless of F's index type;
         # cholesky's perm keyword needs a concrete Vector{<:Integer} matching M's own Ti, hence the
@@ -409,8 +412,9 @@ supports_nonsymmetric(::LUDirectSolver) = true
 # magnitude. Without creep (A*lc = 0) the gap cannot close: N* = po (water pressure 0) when R > 0,
 # else 0 (water at overburden). R uses the unclamped gap terms. Rows with englacial storage (e_v > 0) need
 # none of this, since englacial storage e_v/dt keeps every row's diagonal positive.
-# Not covered: a multi-cell patch enclosed as a whole whose cells all sit at N = 0 has open internal
-# faces but no head level of its own, and stays singular.
+# Not covered: a multi-cell patch with open internal faces but no open OCEAN/LAND face, e_v = 0, and
+# gd = 0 in every cell (N = 0 under ExplicitGapCoupling, the gap update clamped flat in N under
+# ConsistentGapCoupling) has no head level of its own: its block is singular.
 @inline closed_cell(aE, aW, aN, aS) = aE + aW + aN + aS <= 0
 
 @inline function closed_cell_head(zb, po, mdot, beta, abs_ub, ieb, dsrc, A, lc, rho_w, rho_i, ggrav, n, N_min, N_max, stor = zero(po), stor_up = zero(po), sempty = zero(po))
@@ -978,8 +982,9 @@ Rebuilds `sals.M`/`sals.rhs` in place from the current `s`/`p` (mask, head, tran
 `GROUNDED` cells get the diffusion + Newton-linearized creep-closure stencil, `OCEAN`/`LAND` cells
 get a Dirichlet row, `OTHER_BASIN`/`FROZEN_BED` cells get a frozen (`h` held at its current value)
 row. `M` stays exactly symmetric: a `GROUNDED` cell's Dirichlet neighbours are eliminated by
-folding their known head into `rhs` rather than left as a one-sided matrix coupling. Under
-[`ImplicitUpwind`](@ref) the rows also get the Newton terms of the donors' water depths
+folding their known head into `rhs` rather than left as a one-sided matrix coupling, and the
+identity rows of `OTHER_BASIN`/`FROZEN_BED` and closed cells have zero columns too (their faces have
+`K = 0`). Under [`ImplicitUpwind`](@ref) the rows also get the Newton terms of the donors' water depths
 (`add_water_depth_newton!`), and `M` is no longer symmetric ([`LUDirectSolver`](@ref)).
 """
 function update_SALS_elliptic!(sals::SparseAssembledLinearSystem, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), dt = 0, be_old = s.b_e)
@@ -1314,12 +1319,13 @@ $(TYPEDSIGNATURES)
 The gap at the end of the step that the head rows of `DiffusiveGapUpdate` store, from the current head iterate:
 solves SUHMO's coupled gap system ([`solve_b_diffusion!`](@ref), with the current `N`, `mdot` and `D`) into `s.b_next`,
 leaving the start-of-step gap `s.b` as it is, and each cell's slope in its own head into `s.db_next`
-([`gap_iterate_slope_kernel!`](@ref)). Called before the Picard loop and by [`refresh_head_dependents!`](@ref) after each
-head solve, once the melt and `D` are updated (with the melt of the previous iterate the head rows and the gap disagreed:
+([`gap_iterate_slope_kernel!`](@ref)). Called by [`refresh_head_dependents!`](@ref) (at the initial guess, or by
+[`Picard_loop!`](@ref) itself outside `step!`, and after each head solve), once the melt and `D` are updated (with the melt of the previous iterate the head rows and the gap disagreed:
 Helheim at 500 m took 31 to 274 iterations per step instead of 6 to 19), and under [`ImplicitUpwind`](@ref) also right
 after `N`, for the conductance (Helheim with unfilled cavities: 106 iterations in 5 days instead of 227); a no-op for every
-other gap coupling. The step's own gap update ([`compute_b!`](@ref)) solves the same system once more after the loop, at
-the converged head.
+other gap coupling. The last call is at the converged head, so the step's own gap update ([`compute_b!`](@ref)) takes
+`b_next` without solving again. A step of `K` iterations solves the gap system `K + 1` times, `2K + 2` under
+`ImplicitUpwind` (plus one or two per donor polishing round).
 """
 solve_gap_iterate!(::AbstractGapCoupling, ::AbstractDiffusionScheme, s::State, g::Grid, p::ModelParameters) = s
 function solve_gap_iterate!(gu::DiffusiveGapUpdate, ds::WithDiffusion, s::State, g::Grid, p::ModelParameters)
@@ -1494,6 +1500,23 @@ function solve_elliptic_linear_system!(ls::LUDirectSolver, s::State, g::Grid, p:
 end
 
 """
+Default relative tolerance of the Krylov head solves ([`CGIterativeSolver`](@ref), [`BiCGStabIterativeSolver`](@ref)):
+`1e-4`, with absolute tolerance `0`.
+
+Krylov.jl stops at `‖r‖ <= atol + rtol*‖r₀‖`, in the preconditioned residual norm (CG: `sqrt(r'M⁻¹r)`; BiCGStab:
+`‖M⁻¹r‖₂`), where `r₀` is the residual of the warm start, the previous Picard iterate. The relative part therefore
+asks for a fixed fraction of the current Picard update, so it tightens by itself as Picard converges, and it does
+not need tying to the Picard tolerance. The absolute part is in the units of the rows (m/s on grounded rows, scaled
+by the preconditioner), not in metres of head. With Krylov.jl's default `atol = sqrt(eps)` it dominated on Drang
+Drung (100 m, 8 one-day steps, Picard `tol = 1e-6`). In Float64 it left the CG heads 0.2 mm from Cholesky's, and the
+water-budget error 13 times Cholesky's. In Float32 (`sqrt(eps) = 3.5e-4`) it stopped CG almost at the warm start: the
+Picard test then passed on a head 2-7 m off. With `atol = 0`, `rtol = 1e-3` and `1e-4` matched Cholesky to 0.1 mm
+and 1e-6 mm, in fewer iterations than the old default. `1e-2` moved the heads by mm and raised the budget error
+tenfold, and `1e-1` (BiCGStab, default sheet) failed 5 of 8 steps.
+"""
+const KRYLOV_RTOL = 1e-4
+
+"""
 $(TYPEDSIGNATURES)
 
 Warns (at most 20 times per session) when Krylov.jl's `cg!` stopped without reaching its
@@ -1516,10 +1539,12 @@ hot path.
 """
 $(TYPEDSIGNATURES)
 
-Iterative solve via preconditioned conjugate gradient (Krylov.jl's `cg!`) -- valid because the
-assembled operator is symmetric positive definite (diffusion with reciprocal face fluxes plus a
-strictly positive diagonal reaction term from the Newton-linearized creep closure, Dirichlet
-neighbours eliminated symmetrically). Works over either linear-system representation
+Iterative solve via preconditioned conjugate gradient (Krylov.jl's `cg!`) -- valid for the
+symmetric head matrix of every face scheme but [`ImplicitUpwind`](@ref) (`Simulation` refuses CG there).
+Diffusion with one conductance per face plus a diagonal that is never negative (open OCEAN/LAND faces,
+storage, the gap slope), with Dirichlet neighbours eliminated symmetrically, makes it positive
+semidefinite. It is positive definite when each connected group of grounded cells has a positive
+diagonal entry somewhere (see "Linear solvers" in Numerical details). Works over either linear-system representation
 ([`SparseAssembledLinearSystem`](@ref) or [`MatrixFreeLinearSystem`](@ref), chosen via the `LSy`
 type parameter at construction, see the constructors below) and warm-starts from the previous
 head each solve.
@@ -1533,12 +1558,19 @@ iteration counts; measured to consistently beat both plain Jacobi and Chebyshev)
 so `MatrixFreeLinearSystem` defaults to `AggregationMultigrid`, which runs on the GPU: on the filled sheet's test
 case it needs 9-18 CG iterations from 80 x 20 to 800 x 200 cells, where Jacobi needs 190-1900, and a quiet step
 takes 0.07-0.08 s on an A100 from 800 x 200 to 1600 x 400 cells (CUDSS: 0.10-0.24 s).
+
+`rtol`/`atol` are CG's relative and absolute tolerances (defaults `Shakti.KRYLOV_RTOL` and `0`, see there for the
+norm they apply to and why), `itmax` its iteration cap (`0`: Krylov.jl's default, twice the number of cells). The same
+tolerances apply to `b`'s diffusion solve.
 """
-struct CGIterativeSolver{LSy <: AbstractLinearSystem, WS, V <: AbstractVector, P} <: AbstractIterativeSolver
+struct CGIterativeSolver{LSy <: AbstractLinearSystem, WS, V <: AbstractVector, P, F <: AbstractFloat} <: AbstractIterativeSolver
     lsy::LSy # linear system can be SALS or MFLS (sparse assembled matrix or matrix free linear system)
     ws::WS # workspace
     precond_diag::V # Jacobi (diagonal) preconditioner, refreshed every solve -- same array type as lsy's rhs (Vector for SALS, backend-native for MatrixFreeLinearSystem)
     precond::P # `nothing` -> plain Jacobi (Diagonal(precond_diag)); ChebyshevPreconditioner/AMGPreconditioner -> see preconditioner.jl; AggregationMultigrid -> see multigrid.jl
+    rtol::F    # CG relative tolerance, on the preconditioned residual norm of the warm start (see the constructors)
+    atol::F    # CG absolute tolerance, in the same norm
+    itmax::Int # CG iteration cap (0: Krylov.jl's default, twice the number of cells)
 end
 
 # Representation is chosen at construction time by passing the AbstractLinearSystem
@@ -1546,21 +1578,26 @@ end
 # CGIterativeSolver(g, MatrixFreeLinearSystem) -- same struct either way,
 # dispatch on LSy in solve_elliptic_linear_system! picks the right solve path.
 #
-# CG is valid here because the assembled operator
-# is symmetric positive definite: diffusion with reciprocal face fluxes (see
-# compute_K_face) plus a strictly positive diagonal reaction term from the
-# Newton-linearized creep closure, and Dirichlet (OCEAN/LAND) neighbours are
-# eliminated symmetrically (folded into rhs, see update_SALS_elliptic_kernel!/
+# CG is valid here because the assembled operator (every K-face scheme but
+# ImplicitUpwind) is symmetric: diffusion with one conductance per face (see
+# compute_K_face), and Dirichlet (OCEAN/LAND) neighbours are eliminated
+# symmetrically (folded into rhs, see update_SALS_elliptic_kernel!/
 # update_MFLS_elliptic_kernel!) rather than left as a one-sided matrix coupling.
+# Its diagonal excess (open OCEAN/LAND faces, englacial storage, unfilled/uplifted
+# cells, the gap slope gd) is never negative, so it is positive semidefinite, and
+# positive definite when every connected group of GROUNDED cells has a positive
+# excess somewhere. gd is 0 at N = 0 and where the clamped gap update is flat in N.
 #
 # amg = true (default) opts into AMGPreconditioner -- near mesh-independent
-# CG iteration counts, at the cost of a hierarchy-rebuild every solve by default
-# (amg_refresh_every = 1); pass amg_refresh_every > 1 to amortize that rebuild
-# over several solves instead -- see preconditioner.jl's module-level note on
-# AMGPreconditioner for why that's safe, not just cheap. Measured to consistently beat both plain Jacobi and ChebyshevPreconditioner, from a
-# near-initial-condition state (5-7 CG iterations vs Jacobi's 192-745) all
-# the way through peak seasonal channelization (24 iterations vs Jacobi's
-# 199 and Chebyshev's 71, at K max/min ratio ~14000) -- hence the default.
+# CG iteration counts, at the cost of a hierarchy rebuild every amg_refresh_every
+# solves (default 5; 1 rebuilds every solve) -- see preconditioner.jl's
+# module-level note on AMGPreconditioner for the measured tradeoff and why
+# reusing the hierarchy is safe, not just cheap. Measured to consistently beat both plain Jacobi and ChebyshevPreconditioner, from a
+# near-initial-condition state (4.5-6.8 CG iterations from 64x64 to 512x512 vs
+# Jacobi's 190-1587) all the way through peak seasonal channelization (24
+# iterations vs Jacobi's 199 and Chebyshev's 71, at K max/min ratio ~14000;
+# that Chebyshev figure predates the second-step fix in its ldiv!, which cut
+# its iterations by ~8% elsewhere, and was not re-measured) -- hence the default.
 # Passing chebyshev_degree an Int opts into ChebyshevPreconditioner instead
 # -- see preconditioner.jl for why (GPU host-sync overhead) and how (Saad's
 # Chebyshev semi-iteration, layered on top of the same Jacobi scaling); amg
@@ -1579,11 +1616,11 @@ Builds a [`CGIterativeSolver`](@ref) over a [`SparseAssembledLinearSystem`](@ref
 `amg = true` (default) opts into `AMGPreconditioner`; `chebyshev_degree` (an `Int`) opts into
 `ChebyshevPreconditioner` instead (mutually exclusive with `amg`); both `false`/`nothing` gives
 plain Jacobi. CPU-only, same reasoning as [`CholeskyDirectSolver`](@ref). `amg_refresh_every`
-(default `1`, i.e. every solve) is forwarded to [`AMGPreconditioner`](@ref) -- see its docstring
-and the module-level note in `preconditioner.jl` for the lagged-hierarchy amortization this opts
-into when set above `1`.
+(default `5`; `1` rebuilds every solve) is forwarded to [`AMGPreconditioner`](@ref) -- see its
+docstring and the module-level note in `preconditioner.jl` for the lagged-hierarchy amortization
+it controls.
 """
-function CGIterativeSolver(g::Grid{F}, ::Type{SparseAssembledLinearSystem}; chebyshev_degree::Union{Nothing, Int} = nothing, chebyshev_nsteps_estimate::Int = 15, chebyshev_bounds::Symbol = :gershgorin, chebyshev_eig_ratio = 30, amg::Bool = true, amg_refresh_every::Int = 1) where F
+function CGIterativeSolver(g::Grid{F}, ::Type{SparseAssembledLinearSystem}; chebyshev_degree::Union{Nothing, Int} = nothing, chebyshev_nsteps_estimate::Int = 15, chebyshev_bounds::Symbol = :gershgorin, chebyshev_eig_ratio = 30, amg::Bool = true, amg_refresh_every::Int = 5,rtol = KRYLOV_RTOL, atol = 0, itmax::Int = 0) where F
 
     # Krylov.jl's sparse matvec (SparseArrays.mul!) is CPU-only, same reasoning as CholeskyDirectSolver.
     backend != "Threads" && error("CGIterativeSolver(g, SparseAssembledLinearSystem) is CPU-only; use CGIterativeSolver(g, MatrixFreeLinearSystem) under the $backend backend.")
@@ -1601,7 +1638,7 @@ function CGIterativeSolver(g::Grid{F}, ::Type{SparseAssembledLinearSystem}; cheb
         nothing
     end
 
-    return CGIterativeSolver(sals, ws, precond_diag, precond)
+    return CGIterativeSolver(sals, ws, precond_diag, precond, F(rtol), F(atol), itmax)
 
 end
 
@@ -1615,7 +1652,7 @@ into `ChebyshevPreconditioner`; `multigrid = false` alone gives plain Jacobi. `a
 `AMGPreconditioner` needs a `SparseMatrixCSC`, use the [`CGIterativeSolver`](@ref) constructor over
 [`SparseAssembledLinearSystem`](@ref) instead.
 """
-function CGIterativeSolver(g::Grid{F}, ::Type{MatrixFreeLinearSystem}; multigrid::Bool = true, nsmooth::Int = 2, coarse_scale = 2.0, chebyshev_degree::Union{Nothing, Int} = nothing, chebyshev_nsteps_estimate::Int = 15, chebyshev_bounds::Symbol = :gershgorin, chebyshev_eig_ratio = 30, amg::Bool = false) where F
+function CGIterativeSolver(g::Grid{F}, ::Type{MatrixFreeLinearSystem}; multigrid::Bool = true, nsmooth::Int = 2, coarse_scale = 2.0, chebyshev_degree::Union{Nothing, Int} = nothing, chebyshev_nsteps_estimate::Int = 15, chebyshev_bounds::Symbol = :gershgorin, chebyshev_eig_ratio = 30, amg::Bool = false, rtol = KRYLOV_RTOL, atol = 0, itmax::Int = 0) where F
 
     amg && error("AMGPreconditioner is CPU/SparseMatrixCSC-only (AlgebraicMultigrid.jl has no GPU array support); use CGIterativeSolver(g, SparseAssembledLinearSystem; amg = true) instead, or the default multigrid preconditioner here.")
     (chebyshev_degree !== nothing && multigrid) && error("chebyshev_degree and multigrid are mutually exclusive preconditioner choices for CGIterativeSolver; pass multigrid = false to use Chebyshev.")
@@ -1631,7 +1668,7 @@ function CGIterativeSolver(g::Grid{F}, ::Type{MatrixFreeLinearSystem}; multigrid
         nothing
     end
 
-    return CGIterativeSolver(mfls, ws, precond_diag, precond)
+    return CGIterativeSolver(mfls, ws, precond_diag, precond, F(rtol), F(atol), itmax)
 
 end
 
@@ -1671,7 +1708,7 @@ function solve_elliptic_linear_system!(ls::CGIterativeSolver{<:SparseAssembledLi
     # same solution regardless of x0), but the residual it starts from is usually much
     # smaller once h is already close to converged (late Picard iterations, or consecutive
     # time steps), so it typically needs fewer Krylov iterations.
-    cg!(ls.ws, ls.lsy.M, ls.lsy.rhs, vec(s.h); M = precond_matrix, ldiv = true) # solves in place, storing the result in the preallocated workspace ls.ws
+    cg!(ls.ws, ls.lsy.M, ls.lsy.rhs, vec(s.h); M = precond_matrix, ldiv = true, rtol = ls.rtol, atol = ls.atol, itmax = ls.itmax) # solves in place, storing the result in the preallocated workspace ls.ws
     check_cg_converged(ls.ws)
 
     s.h .= reshape(ls.ws.x, g.nx, g.ny) # update h
@@ -1691,7 +1728,7 @@ function solve_b_diffusion!(ls::CGIterativeSolver{<:SparseAssembledLinearSystem}
     update_diag_precond!(ls.precond_diag, ls.lsy)
     precond_matrix = _cg_precond!(ls)
 
-    cg!(ls.ws, ls.lsy.M, ls.lsy.rhs, vec(s.b); M = precond_matrix, ldiv = true)
+    cg!(ls.ws, ls.lsy.M, ls.lsy.rhs, vec(s.b); M = precond_matrix, ldiv = true, rtol = ls.rtol, atol = ls.atol, itmax = ls.itmax)
     check_cg_converged(ls.ws)
 
     out .= clamp.(reshape(ls.ws.x, g.nx, g.ny), p.b_min, p.b_max)
@@ -1711,7 +1748,7 @@ function solve_elliptic_linear_system!(ls::CGIterativeSolver{<:MatrixFreeLinearS
     update_diag_precond!(ls.precond_diag, ls.lsy)
     precond_matrix = _cg_precond!(ls)
 
-    cg!(ls.ws, StencilOperator(ls.lsy), ls.lsy.rhs, vec(s.h); M = precond_matrix, ldiv = true)
+    cg!(ls.ws, StencilOperator(ls.lsy), ls.lsy.rhs, vec(s.h); M = precond_matrix, ldiv = true, rtol = ls.rtol, atol = ls.atol, itmax = ls.itmax)
     check_cg_converged(ls.ws)
 
     s.h .= reshape(ls.ws.x, g.nx, g.ny) # update h
@@ -1731,7 +1768,7 @@ function solve_b_diffusion!(ls::CGIterativeSolver{<:MatrixFreeLinearSystem}, s::
     update_diag_precond!(ls.precond_diag, ls.lsy)
     precond_matrix = _cg_precond!(ls)
 
-    cg!(ls.ws, StencilOperator(ls.lsy), ls.lsy.rhs, vec(s.b); M = precond_matrix, ldiv = true)
+    cg!(ls.ws, StencilOperator(ls.lsy), ls.lsy.rhs, vec(s.b); M = precond_matrix, ldiv = true, rtol = ls.rtol, atol = ls.atol, itmax = ls.itmax)
     check_cg_converged(ls.ws)
 
     out .= clamp.(reshape(ls.ws.x, g.nx, g.ny), p.b_min, p.b_max)
@@ -1756,7 +1793,8 @@ multigrid V-cycle holds the count at 5-12 from 80 x 20 to 1600 x 400 cells (8-11
 about 1.5 ms per application: on an A100 a quiet step took 0.16 s at 800 x 200 and 0.19 s at 1600 x 400, against 2.4 s
 for [`LUDirectSolver`](@ref) on the CPU at 800 x 200 and 0.12 s / 0.45 s for `CUDSSDirectSolver` (fields on the CPU,
 the factorization on the GPU). `nsmooth` and `coarse_scale` are passed to [`AggregationMultigrid`](@ref); the defaults
-(2 sweeps, scale 2) gave the fewest iterations. `rtol`/`atol` are the relative and absolute residual tolerances,
+(2 sweeps, scale 2) gave the fewest iterations. `rtol`/`atol` are the relative and absolute residual tolerances
+(defaults `Shakti.KRYLOV_RTOL` and `0`),
 `itmax` the iteration cap (`0`: Krylov.jl's default, twice the number of cells). A solve that
 stops before its tolerance warns, as [`CGIterativeSolver`](@ref)'s does.
 """
@@ -1774,7 +1812,7 @@ $(TYPEDSIGNATURES)
 
 Builds a [`BiCGStabIterativeSolver`](@ref) on grid `g`, every array on the active backend.
 """
-function BiCGStabIterativeSolver(g::Grid{F}, ::Type{MatrixFreeLinearSystem} = MatrixFreeLinearSystem; multigrid::Bool = true, nsmooth::Int = 2, coarse_scale = 2.0, rtol = sqrt(eps(F)), atol = sqrt(eps(F)), itmax::Int = 0) where F
+function BiCGStabIterativeSolver(g::Grid{F}, ::Type{MatrixFreeLinearSystem} = MatrixFreeLinearSystem; multigrid::Bool = true, nsmooth::Int = 2, coarse_scale = 2.0, rtol = KRYLOV_RTOL, atol = 0, itmax::Int = 0) where F
     itmax >= 0 || error("itmax must be >= 0 (0: Krylov.jl's default), got $itmax")
     mfls = MatrixFreeLinearSystem(g)
     ws = BicgstabWorkspace(g.nx * g.ny, g.nx * g.ny, typeof(mfls.rhs))

@@ -176,7 +176,7 @@
         # default (see linear_solver.jl) -- locking that in here so a future
         # default change doesn't silently drift unnoticed.
         state_cg_default = fresh_state()
-        ls_cg_default = CGIterativeSolver(grid, SparseAssembledLinearSystem)
+        ls_cg_default = CGIterativeSolver(grid, SparseAssembledLinearSystem; rtol = 1e-10, atol = 0.0) # an exact solve: the default rtol is relative to the warm start (Shakti.KRYLOV_RTOL)
         @test ls_cg_default.precond isa AMGPreconditioner
         Shakti.solve_elliptic_linear_system!(ls_cg_default, state_cg_default, grid, p, kfs)
         @test state_cg_default.h ≈ state_lu.h atol=1e-5
@@ -185,18 +185,18 @@
         # every accelerated preconditioner below should beat-or-match on CG
         # iteration count.
         state_cg_jacobi = fresh_state()
-        ls_cg_jacobi = CGIterativeSolver(grid, SparseAssembledLinearSystem; amg = false)
+        ls_cg_jacobi = CGIterativeSolver(grid, SparseAssembledLinearSystem; amg = false, rtol = 1e-10, atol = 0.0)
         Shakti.solve_elliptic_linear_system!(ls_cg_jacobi, state_cg_jacobi, grid, p, kfs)
         @test state_cg_jacobi.h ≈ state_lu.h atol=1e-5
 
         state_cg_mf = fresh_state()
-        ls_cg_mf = CGIterativeSolver(grid, MatrixFreeLinearSystem; multigrid = false) # MFLS has no amg option (see linear_solver.jl); this is plain Jacobi
+        ls_cg_mf = CGIterativeSolver(grid, MatrixFreeLinearSystem; multigrid = false, rtol = 1e-10, atol = 0.0) # MFLS has no amg option (see linear_solver.jl); this is plain Jacobi
         Shakti.solve_elliptic_linear_system!(ls_cg_mf, state_cg_mf, grid, p, kfs)
         @test state_cg_mf.h ≈ state_lu.h atol=1e-5
 
         # AggregationMultigrid (multigrid.jl), MFLS's default: GPU-capable, and far fewer iterations than Jacobi
         state_cg_mf_mg = fresh_state()
-        ls_cg_mf_mg = CGIterativeSolver(grid, MatrixFreeLinearSystem)
+        ls_cg_mf_mg = CGIterativeSolver(grid, MatrixFreeLinearSystem; rtol = 1e-10, atol = 0.0) # an exact solve: the default rtol is relative to the warm start (Shakti.KRYLOV_RTOL)
         @test ls_cg_mf_mg.precond isa AggregationMultigrid
         Shakti.solve_elliptic_linear_system!(ls_cg_mf_mg, state_cg_mf_mg, grid, p, kfs)
         @test state_cg_mf_mg.h ≈ state_lu.h atol=1e-5
@@ -208,13 +208,13 @@
         # preconditioner), and should need fewer outer CG iterations than
         # Jacobi once the degree is large enough to approximate A^-1 well.
         state_cg_cheb = fresh_state()
-        ls_cg_cheb = CGIterativeSolver(grid, SparseAssembledLinearSystem; chebyshev_degree = 4, amg = false)
+        ls_cg_cheb = CGIterativeSolver(grid, SparseAssembledLinearSystem; chebyshev_degree = 4, amg = false, rtol = 1e-10, atol = 0.0)
         Shakti.solve_elliptic_linear_system!(ls_cg_cheb, state_cg_cheb, grid, p, kfs)
         @test state_cg_cheb.h ≈ state_lu.h atol=1e-5
         @test ls_cg_cheb.ws.stats.niter <= ls_cg_jacobi.ws.stats.niter
 
         state_cg_mf_cheb = fresh_state()
-        ls_cg_mf_cheb = CGIterativeSolver(grid, MatrixFreeLinearSystem; multigrid = false, chebyshev_degree = 4)
+        ls_cg_mf_cheb = CGIterativeSolver(grid, MatrixFreeLinearSystem; multigrid = false, chebyshev_degree = 4, rtol = 1e-10, atol = 0.0)
         Shakti.solve_elliptic_linear_system!(ls_cg_mf_cheb, state_cg_mf_cheb, grid, p, kfs)
         @test state_cg_mf_cheb.h ≈ state_lu.h atol=1e-5
         @test ls_cg_mf_cheb.ws.stats.niter <= ls_cg_mf.ws.stats.niter
@@ -224,10 +224,26 @@
         # test/precond_vs_channelization.jl) to consistently beat plain
         # Jacobi's CG iteration count by a wide margin, hence the default.
         state_cg_amg = fresh_state()
-        ls_cg_amg = CGIterativeSolver(grid, SparseAssembledLinearSystem; amg = true)
+        ls_cg_amg = CGIterativeSolver(grid, SparseAssembledLinearSystem; amg = true, rtol = 1e-10, atol = 0.0)
         Shakti.solve_elliptic_linear_system!(ls_cg_amg, state_cg_amg, grid, p, kfs)
         @test state_cg_amg.h ≈ state_lu.h atol=1e-5
         @test ls_cg_amg.ws.stats.niter <= ls_cg_jacobi.ws.stats.niter
+
+        # The construction-time AMG hierarchy comes from SALS's placeholder matrix (no coarse
+        # levels); whatever amg_refresh_every is, the first solve must rebuild it from the
+        # assembled matrix, or CG runs effectively unpreconditioned until the first refresh.
+        for k in (1, 5)
+            st = fresh_state()
+            ls_k = CGIterativeSolver(grid, SparseAssembledLinearSystem; amg_refresh_every = k, rtol = 1e-10, atol = 0.0) # exact solve, like ls_cg_amg
+            @test ls_k.precond.refresh_every == k
+            @test isempty(ls_k.precond.precond.ml.levels)
+            Shakti.solve_elliptic_linear_system!(ls_k, st, grid, p, kfs)
+            @test !isempty(ls_k.precond.precond.ml.levels)
+            @test ls_k.ws.stats.niter == ls_cg_amg.ws.stats.niter
+            @test st.h ≈ state_lu.h atol=1e-5
+        end
+        @test CGIterativeSolver(grid, SparseAssembledLinearSystem).precond.refresh_every == 5
+        @test_throws ErrorException AMGPreconditioner(CGIterativeSolver(grid, SparseAssembledLinearSystem).lsy.M; refresh_every = 0)
 
         # amg and chebyshev_degree are mutually exclusive preconditioner
         # choices, and amg isn't offered on MatrixFreeLinearSystem at all.
@@ -260,6 +276,26 @@
         bad_rhs = zeros(n)
         @test_logs (:warn,) match_mode = :any update_chebyshev_bounds!(cheb, bad_rhs)
         @test cheb.lambda_min == 1.0 && cheb.lambda_max == 1.0 # unchanged, not NaN/Inf
+
+    end
+
+    @testset "ChebyshevPreconditioner applies the Chebyshev residual polynomial" begin
+
+        # With A = Diagonal(lambda) and unit Jacobi diagonal, ldiv!(y, P, ones) gives y_i = p(lambda_i),
+        # so the residual polynomial 1 - lambda*p(lambda) can be read off pointwise and compared with
+        # T_k((d - lambda)/c) / T_k(d/c), d/c the interval's midpoint/half-width. A wrong coefficient
+        # at the second step (the Templates-book recurrence) breaks this from degree 2 on.
+        cheb_T(k, t) = abs(t) <= 1 ? cos(k * acos(t)) : cosh(k * acosh(t)) # t >= -1 here
+        for (lmin, lmax) in ((2 / 30, 2.0), (1.0, 10.0)), k in 1:6
+            lam = collect(range(lmin, lmax; length = 201))
+            cheb = ChebyshevPreconditioner(Diagonal(lam), ones(length(lam)), k)
+            cheb.lambda_min, cheb.lambda_max = lmin, lmax
+            y = similar(lam)
+            ldiv!(y, cheb, ones(length(lam)))
+            dm, c = (lmax + lmin) / 2, (lmax - lmin) / 2
+            @test 1 .- lam .* y ≈ cheb_T.(k, (dm .- lam) ./ c) ./ cheb_T(k, dm / c) atol = 1e-12
+            @test maximum(abs, 1 .- lam .* y) ≈ 1 / cheb_T(k, dm / c) rtol = 1e-10 # the minimax bound, attained at lmin
+        end
 
     end
 

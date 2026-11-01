@@ -418,7 +418,8 @@ after the head converged adds up to `ps.check_every` more, so a polish on the la
 over the time step `dt` (required then) from the englacial water at the start of the step, `state.b_e`. Unless
 `h_old_set` says the caller stored the start of the step before replacing `state.h` by an initial guess ([`step!`](@ref)
 does, and keeps `b_e` from the last step), the loop starts it here: `ps.h_old = state.h` and `state.b_e` the englacial
-water at that head ([`store_englacial_water!`](@ref)).
+water at that head ([`store_englacial_water!`](@ref)), and solves SUHMO's gap at that head ([`solve_gap_iterate!`](@ref));
+under `step!` the refresh of `prepare_head_solve!` has solved it already.
 """
 function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParameters, mt::MeltTerms, kfs::AbstractKFaceScheme, sl::AbstractSlidingLaw; cnc::AbstractCellNClamping = NoCellNClamping(), ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), dt = 0, h_old_set::Bool = false, wdt = 0, guard::PicardGuard = PicardGuard())
 
@@ -434,7 +435,7 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
     ω, best, since = 1.0, Inf, 0 # stall damping: the step factor, the smallest update so far and the iterations since it
     wmiss = 0 # iterations whose head converged but whose water did not (water_converged)
 
-    solve_gap_iterate!(gc, ds, s, grid, p) # the gap the first head rows store (refresh_head_dependents! keeps it current after each solve)
+    h_old_set || solve_gap_iterate!(gc, ds, s, grid, p) # the gap the first head rows store, unless step! has solved it (refresh_head_dependents! keeps it current after each solve)
 
     iter, limit = 0, ps.iters # a donor polishing round may extend the limit (below)
     @inbounds while iter < limit # start the Picard loop

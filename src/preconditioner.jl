@@ -25,26 +25,34 @@
 # CG's algorithm, not something the preconditioner choice touches. The
 # "no dot products" property described above is only about Chebyshev's own
 # internal ldiv! recurrence in isolation, not the overall CG+Chebyshev
-# iteration. Measured result: on MatrixFreeLinearSystem (the only
-# GPU-capable solver) at 64x64/128x128 on an A100, plain Jacobi beat
-# Chebyshev(degree=4) in wall time at both sizes (12%/29% faster
-# respectively) -- Chebyshev pays the same per-iteration sync cost as Jacobi
-# (from CG's own dot products) plus extra matvec work for the degree-4
-# polynomial application, without cutting the number of syncs enough to
-# compensate. Genuine sync-avoidance on GPU would need replacing CG itself
-# with a dot-product-free outer solver (true Chebyshev semi-iteration AS the
-# solver, not just the preconditioner). Per-CG-iteration cost was
-# also found to be roughly flat with grid size (~229us at 64x64, ~191us at
-# 128x128), consistent with fixed per-iteration overhead (kernel launch +
-# host sync) dominating over device compute at these sizes on this hardware
-# -- but this could not be confirmed via a proper device-vs-host profile.
+# iteration. What it does cut is the NUMBER of CG iterations, and with them
+# the syncs. Measured 2026-11-01 (MatrixFreeLinearSystem, multigrid = false,
+# degree 4, default CG tolerance, test/benchmarks/benchmark_solver.jl's
+# "simple" setup, 10 steps of 1 h, 131-141 solves): Chebyshev needs 3.6-3.8x
+# fewer CG iterations than Jacobi (53/108/215/420 vs 190/405/808/1587 per
+# solve at 64x64/128x128/256x256/512x512). On an A100 (1 thread) that makes
+# it 2.2x faster than Jacobi in wall time at every size (2.8 vs 6.1 s at
+# 64x64, 21.8 vs 47.2 s at 512x512): a Jacobi-preconditioned CG iteration
+# costs a roughly flat ~215-230us from 64x64 to 512x512 (fixed per-iteration
+# overhead, kernel launches + host syncs, dominating device compute), a
+# Chebyshev one ~360-400us, which the 3.7x fewer iterations more than repay.
+# On the CPU (8 threads) the four extra matvecs per application are not
+# cheap, and Chebyshev only ties Jacobi (59.3 vs 56.5 s at 256x256, 368 vs
+# 387 s at 512x512). An earlier measurement (64x64/128x128 on an A100) had
+# Jacobi 12%/29% faster than Chebyshev; it predates the second-step fix in
+# ldiv! below, but that fix is worth only ~8% in iterations, and the old
+# recurrence too is 2x faster than Jacobi in the run above, so the earlier
+# result does not reproduce for a reason other than the fix. Genuine
+# sync-avoidance on GPU would need replacing CG itself with a dot-product-free
+# outer solver (true Chebyshev semi-iteration AS the solver, not just the
+# preconditioner).
 #
 # Net effect: for CGIterativeSolver{<:SparseAssembledLinearSystem} (CPU-only),
 # AMGPreconditioner (below) is the better choice and is the default there. For
 # MatrixFreeLinearSystem (the GPU-capable path, where AMGPreconditioner isn't
-# available -- AlgebraicMultigrid.jl has no GPU array support), plain Jacobi
-# (chebyshev_degree = nothing, the default there) should be preferred over
-# Chebyshev per the above, at least at the grid sizes tested.
+# available -- AlgebraicMultigrid.jl has no GPU array support), the default is
+# AggregationMultigrid (see multigrid.jl), which the run above did not include;
+# with multigrid = false, Chebyshev beats plain Jacobi on GPU.
 #
 # Applies the diagonal-Jacobi-scaled operator D^-1*A. The same wrapper works
 # for both SparseAssembledLinearSystem's SparseMatrixCSC and
@@ -283,9 +291,13 @@ function LinearAlgebra.ldiv!(y::AbstractVector, P::ChebyshevPreconditioner, x::A
     mul!(Ap, P.op, p)
     r .-= alpha .* Ap
 
+    # The second step is special because T_1(t) = t, not 2t: beta_1 = (c*alpha_1)^2/2, then
+    # beta_k = (c*alpha_k/2)^2 for k >= 2 (Gutknecht & Roellin 2002, correcting the Templates
+    # book's Fig. 2.11). Using (c*alpha/2)^2 throughout gives a residual polynomial that is
+    # not the Chebyshev one: max|1 - lambda*p(lambda)| 0.61 instead of 0.43 at degree 4 on [2/30, 2].
     alpha_prev = alpha
-    for _ in 2:P.degree
-        beta = (c_rad * alpha_prev / 2)^2
+    for k in 2:P.degree
+        beta = k == 2 ? (c_rad * alpha_prev)^2 / 2 : (c_rad * alpha_prev / 2)^2
         alpha = one(eltype(y)) / (d_mid - beta / alpha_prev)
         p .= r .+ beta .* p
         y .+= alpha .* p
@@ -304,13 +316,16 @@ end
 #
 # Unlike Jacobi/Chebyshev, whose CG iteration counts grow with grid size
 # (Jacobi ~O(sqrt(N)), Chebyshev slower-growing but still not flat), AMG
-# gives near mesh-independent convergence at
-# 5 CG iterations at 64x64 and 6 at 256x256, essentially flat despite 16x
-# more unknowns, vs Jacobi's 192->745 and Chebyshev's 58->350 over the same
-# grids. That makes AMG substantially faster in wall time once the grid is
-# large enough for its (nontrivial, paid every solve -- see below) hierarchy
-# setup cost to be worth it: ~4x faster than Jacobi and ~7.7x faster than
-# Chebyshev at 256x256 in that same measurement.
+# gives near mesh-independent convergence: 4.5/5.4/6.0/6.8 mean CG
+# iterations per solve at 64x64/128x128/256x256/512x512, essentially flat
+# despite 64x more unknowns, vs Jacobi's 190->1587 and Chebyshev(degree 4)'s
+# 53->420 over the same grids (2026-11-01, 8 threads, default CG tolerance,
+# test/benchmarks/benchmark_solver.jl's "simple" setup, 10 steps of 1 h).
+# That makes AMG substantially faster in wall time once the grid is large
+# enough for its (nontrivial -- see below) hierarchy setup cost to be worth
+# it: even rebuilding the hierarchy every solve (refresh_every = 1), it ties
+# Jacobi and Chebyshev at 64x64 (1.1-1.2 s), is ~4.2x faster than both at
+# 256x256 (19.0 s vs 80.2/81.0 s) and ~10x at 512x512 (72 s vs 700/766 s).
 #
 # CPU/SparseMatrixCSC-only (AlgebraicMultigrid.jl has no GPU array support),
 # so -- like CholeskyDirectSolver -- this is only offered for
@@ -333,23 +348,37 @@ end
 # itself isn't rebuilt. Only the coarser levels (interpolation/restriction operators and their
 # Galerkin-product matrices, a one-time snapshot from whichever solve last rebuilt them) go
 # stale between refreshes. Trades some CG iteration-count growth between refreshes for a large
-# cut in allocation and (usually) wall time; `refresh_every = 1` (the default) is the original,
-# always-rebuild behavior, unchanged.
+# cut in allocation and wall time; `refresh_every = 1` is the original, always-rebuild behavior.
+#
+# Default `refresh_every = 5`, measured at 256x256 (8 threads, filled sheet, 2026-11-01): one
+# rebuild costs ~45 ms and ~133 MB against ~63 ms for the CG solve it preconditions (~7
+# iterations), i.e. ~47% of setup+solve. A hierarchy one Picard iterate old costs ~0.2 extra CG
+# iterations; one time step old ~5 (up to 32 at a step change), so counting solves beats
+# refreshing once per time step. Over a 15-step run (test/benchmarks/amg_refresh_sweep.jl,
+# steps 2-15), refresh_every = 1/2/5/10 gave 5.04/5.15/5.40/5.73 mean CG iterations and
+# 142/119/83/77 ms per solve; 5 leaves margin on badly conditioned glacier grids.
+#
+# The construction-time hierarchy is built from SparseAssembledLinearSystem's placeholder
+# matrix (identity diagonal, zero off-diagonals, so a hierarchy with no coarse levels at all);
+# it only fixes the field's type. The counter therefore starts at `refresh_every - 1`, so the
+# first `update_amg!` call always rebuilds from the first assembled matrix -- starting it at 0
+# left the first `refresh_every - 1` solves effectively unpreconditioned (~1050 CG iterations
+# instead of ~9 at 256x256 in the 2026-09-22 sweep).
 
 """
 $(TYPEDSIGNATURES)
 
 The default, fastest-converging preconditioner for `CGIterativeSolver{<:SparseAssembledLinearSystem}`:
 Ruge-Stuben algebraic multigrid (AlgebraicMultigrid.jl), giving near mesh-independent CG iteration
-counts (measured ~flat 5-6 iterations from 64x64 to 256x256, vs. Jacobi's 192->745 and
-Chebyshev's 58->350 over the same grids -- see `test/benchmarks/`). CPU/`SparseMatrixCSC`-only
+counts (measured ~flat 4.5-6.8 iterations from 64x64 to 512x512, vs. Jacobi's 190->1587 and
+degree-4 Chebyshev's 53->420 over the same grids -- see the note above). CPU/`SparseMatrixCSC`-only
 (AlgebraicMultigrid.jl has no GPU array support), so unlike [`ChebyshevPreconditioner`](@ref) this
 isn't offered for `MatrixFreeLinearSystem`.
 """
 mutable struct AMGPreconditioner{P}
     precond::P # AlgebraicMultigrid.jl's aspreconditioner(::MultiLevel) wrapper; already implements LinearAlgebra.ldiv!, so ldiv! below just delegates
     refresh_every::Int # rebuild the hierarchy every this many update_amg! calls; 1 = always (original behavior). See the module note above.
-    calls_since_refresh::Int # counter driving the above; starts at 0 (a fresh hierarchy from construction counts as "just refreshed")
+    calls_since_refresh::Int # counter driving the above; starts at refresh_every - 1 so the first update_amg! call rebuilds (the construction-time hierarchy comes from the placeholder matrix)
 end
 
 """
@@ -361,19 +390,23 @@ Builds an [`AMGPreconditioner`](@ref) hierarchy from `M`'s current values.
 
 `M`'s sparsity pattern is fixed, but its VALUES change every Picard iteration -- like
 [`ChebyshevPreconditioner`](@ref)'s bounds, the AMG hierarchy (strength-of-connection,
-aggregation, interpolation) is built from those values, so by default it's rebuilt every solve
-(see [`update_amg!`](@ref)), not just once at construction. `refresh_every` (default `1`, i.e.
-every solve) opts into the lagged-hierarchy amortization described in the module note above --
-pass e.g. `refresh_every = 5` to rebuild only every 5th `update_amg!` call.
+aggregation, interpolation) is built from those values, so it has to be rebuilt as they drift
+(see [`update_amg!`](@ref)), not just once at construction. `refresh_every` (default `5`)
+rebuilds it on the first [`update_amg!`](@ref) call and then every `refresh_every`-th call,
+reusing it in between (the lagged-hierarchy amortization described in the module note above);
+`refresh_every = 1` rebuilds on every call.
 """
-AMGPreconditioner(M::SparseMatrixCSC; refresh_every::Int = 1) = AMGPreconditioner(aspreconditioner(ruge_stuben(M)), refresh_every, 0)
+function AMGPreconditioner(M::SparseMatrixCSC; refresh_every::Int = 5)
+    refresh_every >= 1 || error("AMGPreconditioner: refresh_every must be >= 1 (got $refresh_every)")
+    return AMGPreconditioner(aspreconditioner(ruge_stuben(M)), refresh_every, refresh_every - 1) # counter primed so the first update_amg! rebuilds
+end
 
 """
 $(TYPEDSIGNATURES)
 
 Advances `P`'s refresh counter and rebuilds `P`'s AMG hierarchy in place from `M`'s current
-values only once every `P.refresh_every` calls (every call, if `P.refresh_every == 1`, the
-default -- see [`AMGPreconditioner`](@ref)'s docstring for why this can't just be done once at
+values on the first call and then once every `P.refresh_every` calls (every call, if
+`P.refresh_every == 1`) -- see [`AMGPreconditioner`](@ref)'s docstring for why this can't just be done once at
 construction, and the module-level note above for why skipping a rebuild is still safe/sensible,
 not merely cheap).
 """

@@ -170,7 +170,8 @@ Some rows are special:
   to it is solved for ``h`` exactly: by bisection, or under `ExplicitGapCoupling` by inverting the creep
   law in closed form.
 - An `OCEAN` or `LAND` neighbour's head is known, so its term moves to the right-hand side. This keeps the
-  matrix symmetric wherever the face scheme allows it.
+  matrix symmetric wherever the face scheme allows it. The face's conductance stays on the cell's
+  diagonal, which makes the matrix positive definite next to an open boundary face.
 - `OCEAN` and `LAND` cells have the row ``h_P = `` their boundary head, and `OTHER_BASIN` and
   `FROZEN_BED` cells the row ``h_P = `` their current head.
 
@@ -279,7 +280,11 @@ is clamped to ``[b_\min, b_\max]``.
 The head rows must then store a gap that only the whole system can give. Under `ConsistentGapCoupling` the
 gap system is solved again at every Picard iterate, at the current ``N``, ``\dot m`` and ``\mathcal{D}``, and
 each head row stores that gap, ``b_\mathrm{next} - W^n``, with its slope in the cell's own head (the
-neighbours' new gaps held) as the Newton term. This costs one extra linear solve per iterate. Under
+neighbours' new gaps held) as the Newton term. This costs one gap solve per iterate, two under
+`"implicit_upwind"` faces (the default), where the conductance also takes the gap solved at the new ``N``, before
+``\dot m`` and ``\mathcal{D}`` are updated. With the solve at the initial guess, a step of ``K`` iterates solves the
+gap system ``K + 1`` times (``2K + 2`` under `"implicit_upwind"`); the last solve, at the converged head, is the
+step's gap update, ``b^{n+1} = b_\mathrm{next}``. Under
 `ExplicitGapCoupling` the head rows instead take the explicit rate of the filled row and add
 ``-\nabla\cdot(\mathcal{D}\nabla b^n)``, the diffusion of the start-of-step gap, to the right-hand side.
 

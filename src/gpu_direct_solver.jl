@@ -70,7 +70,9 @@ Builds a [`CUDSSDirectSolver`](@ref) on grid `g`. Requires the "Threads" backend
 does not work here (ParallelStencil's own GPU field arrays are incompatible with
 `SparseAssembledLinearSystem`'s CPU-only assembly). `structure`: `:general` (default, LU: the GPU counterpart of
 [`LUDirectSolver`](@ref), for the non-symmetric matrix [`ImplicitUpwind`](@ref) and so the default sheet assembles) or
-`:spd` (Cholesky, symmetric matrices only: SHAKTI's sheet, `"upwind"`, or WithDiffusion's gap solve).
+`:spd` (Cholesky: the matrix must be symmetric positive definite. The head matrix of every face scheme but
+[`ImplicitUpwind`](@ref) is, when every connected group of `GROUNDED` cells has an open OCEAN/LAND face, storage or a
+nonzero gap slope, see "Linear solvers" in Numerical details; WithDiffusion's gap system always is).
 """
 function CUDSSDirectSolver(g::Grid{F}; structure::Symbol = :general) where F
     structure in (:spd, :general) || error("Unknown structure: $structure (use :spd or :general)")

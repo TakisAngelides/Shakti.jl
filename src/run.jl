@@ -663,10 +663,13 @@ $(TYPEDSIGNATURES)
 Solves `b`'s coupled diffusion system for the new timestep ([`solve_b_diffusion!`](@ref), using
 the second, independent linear solver bundled in `ds`) -- the [`WithDiffusion`](@ref) counterpart
 of the `sim.gs`-dispatched methods below, taking over `b`'s evolution entirely rather than
-composing with any of them.
+composing with any of them. Under [`ConsistentGapCoupling`](@ref) the head solve's last refresh has solved this system
+at the converged head, melt and `D` already ([`solve_gap_iterate!`](@ref), into `State.b_next`), so that gap is taken
+as it is: the one the head rows stored, without solving again.
 """
 function compute_b!(sim::Simulation, ds::WithDiffusion)
-    solve_b_diffusion!(ds.ls, sim.state, sim.grid, sim.p, sim.dt[])
+    s = sim.state
+    sim.gcp isa ConsistentGapCoupling ? copyto!(s.b, s.b_next) : solve_b_diffusion!(ds.ls, s, sim.grid, sim.p, sim.dt[])
     return sim
 end
 

@@ -10,7 +10,7 @@ linear solver for the gap system (`CholeskyDirectSolver`, `CUDSSDirectSolver(gri
 A Suhmo run solves two linear systems, so it takes two solver objects:
 * the head solve, `ls` inside the `PicardSolver` (`ps`): the head equation. On the default sheet its matrix is not symmetric, so it needs an LU solver (`LUDirectSolver`, `CUDSSDirectSolver`)
 * the gap solve, `ls` inside `WithDiffusion(ls)`: the diffusion of `b`. Its matrix is symmetric positive definite, so the cheaper Cholesky (or CG) works
-They are separate instances because each holds its own matrix and factorization, and each can use the method that suits its matrix. With `ConsistentGapCoupling` (the default) the gap system is solved at every Picard iteration, one extra solve per iteration.
+They are separate instances because each holds its own matrix and factorization, and each can use the method that suits its matrix. With `ConsistentGapCoupling` (the default) the gap system is solved at every Picard iteration: once per iteration, twice with the default `"implicit_upwind"` faces, so a step of `K` iterations costs `2K + 2` gap solves next to its `K` head solves. The last gap solve, at the converged head, is the step's new gap.
 
 The diffusion changes the result only where `sqrt(D t)` approaches the cell size: wide, wet
 channels on fine grids.
