@@ -14,5 +14,5 @@ Shakti = {path = ".."}
 CairoMakie = "0.15.13"
 Documenter = "1.17.0"
 Literate = "2.21.0"
-MAT = "0.12.1"
+MAT = "0.12.1, 0.13"
 NetCDF = "0.12.2"
