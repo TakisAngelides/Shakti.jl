@@ -401,7 +401,7 @@ function water_converged(ps::PicardSolver, s::State, g::Grid, p::ModelParameters
     T = eltype(ps.delta_h)
     rtol = T(max(ps.tol, strict ? WATER_TOL : WATER_TOL_FLOOR))
     guard = ps.atol > 0 ? -one(T) : strict ? 100 * eps(T) / rtol : one(T)
-    @parallel water_budget_residual_kernel!(ps.delta_h, guard, s.mask, s.W, s.q_x, s.q_y, s.mdot, s.ieb, g.dx, g.dy, floattype(wdt), p.rho_w, s.b, s.h, s.zb, s.po, s.N,
+    @parallel water_budget_residual_kernel!(ps.delta_h, guard, s.mask, s.W, s.q_x, s.q_y, s.mdot, s.melt_open, s.ieb, g.dx, g.dy, floattype(wdt), p.rho_w, s.b, s.h, s.zb, s.po, s.N,
                                             s.stor, s.stor_up, p.b_min, p.b_max, p.g, gc, s.beta, s.abs_ub, s.A_visc, p.rho_i, p.n_minus_1_exp, s.bump, s.b_next, s.b_e, p.e_v)
     r_max = mapreduce(abs, max, ps.delta_h; init = zero(eltype(ps.delta_h)))
     return ps.atol > 0 ? r_max < ps.atol : r_max < max(rtol, 100 * eps(T))

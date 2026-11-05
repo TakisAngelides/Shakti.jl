@@ -109,43 +109,43 @@ struct DiffusiveCellGap{F} <: AbstractGapCoupling
 end
 @inline iterate_gap(gc::AbstractGapCoupling, bump, bn, gbn, conduct) = cell_gap(gc, bump)
 @inline iterate_gap(::DiffusiveGapUpdate{F}, bump, bn, gbn, conduct) where F = DiffusiveCellGap{F}(bn, gbn, conduct)
-@inline end_of_step_gap(gc::DiffusiveCellGap, b, W, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1) = gc.conduct ? min(b, gc.bn) : gc.bn
-@inline end_of_step_gap_slope(gc::DiffusiveCellGap, b, W, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1, rho_w, ggrav) = gc.conduct && gc.bn >= b ? zero(b) : gc.gbn
-@inline end_of_step_gap(::ExplicitGapCoupling, b, W, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1) = b
-@inline end_of_step_gap(gu::SchemeGapUpdate, b, W, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1) =
-    gu.dry_floor ? scheme_water(gu, b, W, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1) :
-                   scheme_gap(gu, b, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1)
-@inline end_of_step_gap_slope(::ExplicitGapCoupling, b, W, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1, rho_w, ggrav) = zero(b)
-@inline function end_of_step_gap_slope(gu::SchemeGapUpdate, b, W, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1, rho_w, ggrav)
+@inline end_of_step_gap(gc::DiffusiveCellGap, b, W, b_min, b_max, mo, beta, abs_ub, A, Nv, rho_i, n_minus_1) = gc.conduct ? min(b, gc.bn) : gc.bn
+@inline end_of_step_gap_slope(gc::DiffusiveCellGap, b, W, b_min, b_max, mo, beta, abs_ub, A, Nv, rho_i, n_minus_1, rho_w, ggrav) = gc.conduct && gc.bn >= b ? zero(b) : gc.gbn
+@inline end_of_step_gap(::ExplicitGapCoupling, b, W, b_min, b_max, mo, beta, abs_ub, A, Nv, rho_i, n_minus_1) = b
+@inline end_of_step_gap(gu::SchemeGapUpdate, b, W, b_min, b_max, mo, beta, abs_ub, A, Nv, rho_i, n_minus_1) =
+    gu.dry_floor ? scheme_water(gu, b, W, b_min, b_max, mo, beta, abs_ub, A, Nv, rho_i, n_minus_1) :
+                   scheme_gap(gu, b, b_min, b_max, mo, beta, abs_ub, A, Nv, rho_i, n_minus_1)
+@inline end_of_step_gap_slope(::ExplicitGapCoupling, b, W, b_min, b_max, mo, beta, abs_ub, A, Nv, rho_i, n_minus_1, rho_w, ggrav) = zero(b)
+@inline function end_of_step_gap_slope(gu::SchemeGapUpdate, b, W, b_min, b_max, mo, beta, abs_ub, A, Nv, rho_i, n_minus_1, rho_w, ggrav)
     δ = oftype(Nv, 1e-6) * max(abs(Nv), oftype(Nv, 1e3))
-    Gm = end_of_step_gap(gu, b, W, b_min, b_max, mdot, beta, abs_ub, A, Nv - δ, rho_i, n_minus_1)
-    Gp = end_of_step_gap(gu, b, W, b_min, b_max, mdot, beta, abs_ub, A, Nv + δ, rho_i, n_minus_1)
+    Gm = end_of_step_gap(gu, b, W, b_min, b_max, mo, beta, abs_ub, A, Nv - δ, rho_i, n_minus_1)
+    Gp = end_of_step_gap(gu, b, W, b_min, b_max, mo, beta, abs_ub, A, Nv + δ, rho_i, n_minus_1)
     return rho_w * ggrav * max(zero(b), (Gm - Gp) / (2δ))
 end
 
 # The end-of-step water depth of a cell at head h and its slope dW/dh, by regime (compute_b_w_iterate!): never below 0.
-@inline function iterate_water(gcc, bb, wo, h, z, po, Nv, stor, stor_up, b_min, b_max, rho_w, ggrav, mdot, beta, abs_ub, A, rho_i, n_minus_1)
+@inline function iterate_water(gcc, bb, wo, h, z, po, Nv, stor, stor_up, b_min, b_max, rho_w, ggrav, mo, beta, abs_ub, A, rho_i, n_minus_1)
     x  = h - z                     # pressure head
     xo = po / (rho_w * ggrav)      # pressure head at the overburden
     if stor > 0 && x < 0           # unfilled: the gap at N = po minus the empty depth zb - h
-        W = end_of_step_gap(gcc, bb, wo, b_min, b_max, mdot, beta, abs_ub, A, po, rho_i, n_minus_1) + x
+        W = end_of_step_gap(gcc, bb, wo, b_min, b_max, mo, beta, abs_ub, A, po, rho_i, n_minus_1) + x
         slope = one(bb)
     elseif stor_up > 0 && x > xo   # uplifted: the gap at N = 0 plus the layer h - h_o
-        W = end_of_step_gap(gcc, bb, wo, b_min, b_max, mdot, beta, abs_ub, A, zero(bb), rho_i, n_minus_1) + (x - xo)
+        W = end_of_step_gap(gcc, bb, wo, b_min, b_max, mo, beta, abs_ub, A, zero(bb), rho_i, n_minus_1) + (x - xo)
         slope = one(bb)
     else                           # filled: the gap (the start-of-step one, or G(N) under ConsistentGapCoupling)
-        W = end_of_step_gap(gcc, bb, wo, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1)
-        slope = end_of_step_gap_slope(gcc, bb, wo, b_min, b_max, mdot, beta, abs_ub, A, Nv, rho_i, n_minus_1, rho_w, ggrav)
+        W = end_of_step_gap(gcc, bb, wo, b_min, b_max, mo, beta, abs_ub, A, Nv, rho_i, n_minus_1)
+        slope = end_of_step_gap_slope(gcc, bb, wo, b_min, b_max, mo, beta, abs_ub, A, Nv, rho_i, n_minus_1, rho_w, ggrav)
     end
     return W > 0 ? (W, slope) : (zero(bb), zero(bb)) # no water, no conductance (compute_b_w!)
 end
 
-@parallel_indices (ix, iy) function compute_b_w_iterate_kernel!(b_w, dbw_dh, b, h, zb, po, N, stor, stor_up, b_min, b_max, rho_w, ggrav, gc, mdot0, mdot, beta, abs_ub, A_visc, rho_i, n_minus_1, W, bump, b_next, db_next)
+@parallel_indices (ix, iy) function compute_b_w_iterate_kernel!(b_w, dbw_dh, b, h, zb, po, N, stor, stor_up, b_min, b_max, rho_w, ggrav, gc, melt_open0, melt_open, beta, abs_ub, A_visc, rho_i, n_minus_1, W, bump, b_next, db_next)
     if ix <= size(b_w, 1) && iy <= size(b_w, 2)
         gcc = iterate_gap(gc, bump[ix, iy], b_next[ix, iy], db_next[ix, iy], true) # this cell's bump height (compute_beta!), or its gap solve (DiffusiveGapUpdate)
         args = (b[ix, iy], W[ix, iy], h[ix, iy], zb[ix, iy], po[ix, iy], N[ix, iy], stor[ix, iy], stor_up[ix, iy], b_min, b_max, rho_w, ggrav)
-        W0, slope0 = iterate_water(gcc, args..., mdot0[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], rho_i, n_minus_1) # the melt opening of the start of the step
-        W1, slope1 = iterate_water(gcc, args..., mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], rho_i, n_minus_1)  # the head row's own water
+        W0, slope0 = iterate_water(gcc, args..., melt_open0[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], rho_i, n_minus_1) # the melt opening of the start of the step
+        W1, slope1 = iterate_water(gcc, args..., melt_open[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], rho_i, n_minus_1)  # the head row's own water
         b_w[ix, iy]    = W1 < W0 ? W1 : W0 # where the melt has fallen within the step, no more water than the row holds
         dbw_dh[ix, iy] = W1 < W0 ? slope1 : slope0
     end
@@ -169,12 +169,12 @@ the conductance either). Both are continuous across the regimes and equal `b` ex
 [`NoUplift`](@ref) and [`ExplicitGapCoupling`](@ref).
 """
 compute_b_w_iterate!(s::State, p::ModelParameters, gc::AbstractGapCoupling = ExplicitGapCoupling()) =
-    (@parallel compute_b_w_iterate_kernel!(s.b_w, s.dbw_dh, s.b, s.h, s.zb, s.po, s.N, s.stor, s.stor_up, p.b_min, p.b_max, p.rho_w, p.g, gc, s.mdot0, s.mdot, s.beta, s.abs_ub, s.A_visc, p.rho_i, p.n_minus_1_exp, s.W, s.bump, s.b_next, s.db_next); s)
+    (@parallel compute_b_w_iterate_kernel!(s.b_w, s.dbw_dh, s.b, s.h, s.zb, s.po, s.N, s.stor, s.stor_up, p.b_min, p.b_max, p.rho_w, p.g, gc, s.melt_open0, s.melt_open, s.beta, s.abs_ub, s.A_visc, p.rho_i, p.n_minus_1_exp, s.W, s.bump, s.b_next, s.db_next); s)
 
 """
 $(TYPEDSIGNATURES)
 
-Keeps the melt rate at the start of the step (`s.mdot0`), for the end-of-step gap in the conductance of
+Keeps the melt opening at the start of the step (`s.melt_open0`, from `s.melt_open`), for the end-of-step gap in the conductance of
 [`ImplicitUpwind`](@ref) ([`compute_b_w_iterate!`](@ref)); a no-op for every other K-face scheme. That gap takes its melt
 opening `dt*mdot/rho_i` from the start of the step and only its creep closure from the head iterate: the dissipation melt
 grows with the flux, so a melt opening at the iterate would close the loop `W -> K -> q -> mdot -> W` inside the Picard
@@ -188,7 +188,7 @@ the difference (Helheim at 500 m, dt = 1 day, cold start: the dissipation melt h
 larger, 9e-4 of the melt created, and the step never passed [`water_converged`](@ref)).
 """
 store_start_of_step_melt!(::AbstractKFaceScheme, s::State) = s
-store_start_of_step_melt!(::ImplicitUpwind, s::State) = (copyto!(s.mdot0, s.mdot); s)
+store_start_of_step_melt!(::ImplicitUpwind, s::State) = (copyto!(s.melt_open0, s.melt_open); s)
 
 # An outflow-only face (compute_face_masks!) is a kink of the head row like the bed: its flux is K (h - hb)/dx while
 # h >= hb and 0 below. Stop an iterate that crosses the boundary head hb there, the face closed on the way down and open
@@ -306,16 +306,16 @@ limit_head_step!(guard::PicardGuard, s::State, h_prev, p::ModelParameters; fille
 # Per GROUNDED cell: the head row's end-of-step water minus the water the fluxes and sources leave, W + dt (mdot/rho_w
 # + ieb - div q) less the change of its englacial water (e_v > 0, from be_old = State.b_e at the start of the step), as
 # update_water_budget! takes it (water_converged, elliptic_solver.jl). The row's water is that of
-# compute_b_w_iterate! but with the current melt rate: s.b_w takes the gap's melt opening from the start of the step (mdot0).
+# compute_b_w_iterate! but with the current melt rate: s.b_w takes the gap's melt opening from the start of the step (melt_open0).
 # With `guard >= 0`, divided by the larger of the cell's own terms (its water then and before, the change of its englacial
 # water and `dt` times its sources) and `guard` times the sum of the magnitudes of all its terms, its face fluxes as well
 # (the scale of its round-off): `guard = 1` is that sum; with `guard < 0`, in metres of water.
-@parallel_indices (ix, iy) function water_budget_residual_kernel!(r, guard, mask, Wo, q_x, q_y, mdot, ieb, dx, dy, dt, rho_w, b, h, zb, po, N, stor, stor_up, b_min, b_max, ggrav, gc, beta, abs_ub, A_visc, rho_i, n_minus_1, bump, b_next, be_old, e_v)
+@parallel_indices (ix, iy) function water_budget_residual_kernel!(r, guard, mask, Wo, q_x, q_y, mdot, melt_open, ieb, dx, dy, dt, rho_w, b, h, zb, po, N, stor, stor_up, b_min, b_max, ggrav, gc, beta, abs_ub, A_visc, rho_i, n_minus_1, bump, b_next, be_old, e_v)
     if ix <= size(r, 1) && iy <= size(r, 2)
         if mask[ix, iy] == GROUNDED
             div = (q_x[ix+1, iy] - q_x[ix, iy]) / dx + (q_y[ix, iy+1] - q_y[ix, iy]) / dy
             W, _ = iterate_water(iterate_gap(gc, bump[ix, iy], b_next[ix, iy], zero(dt), false), b[ix, iy], Wo[ix, iy], h[ix, iy], zb[ix, iy], po[ix, iy], N[ix, iy], stor[ix, iy], stor_up[ix, iy],
-                                 b_min, b_max, rho_w, ggrav, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], rho_i, n_minus_1)
+                                 b_min, b_max, rho_w, ggrav, melt_open[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], rho_i, n_minus_1)
             db_e = englacial_water(e_v, h[ix, iy], zb[ix, iy], po[ix, iy], stor[ix, iy], stor_up[ix, iy], rho_w, ggrav) - be_old[ix, iy]
             res = W + db_e - (Wo[ix, iy] + dt * (mdot[ix, iy] / rho_w + ieb[ix, iy] - div))
             own = W + abs(db_e) + abs(Wo[ix, iy]) + dt * (abs(mdot[ix, iy] / rho_w) + abs(ieb[ix, iy]))

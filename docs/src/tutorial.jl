@@ -150,6 +150,7 @@ geo
 | `mdot_includes_potential` | - | `true` | melt rate includes potential-energy dissipation |
 | `mdot_includes_sensible` | - | `true` | melt rate includes the sensible-heat term |
 | `mdot_includes_qT` | - | `true` | melt rate includes the conductive heat into the ice |
+| `gap_opening_melt` | - | `:full` | which melt opens the gap: `:full` all of it (SHAKTI); `:exclude_uniform` leaves out the net uniform melt ``G + Q_b - q_T`` where the ice rests on its bumps, so it makes water but no gap ([Melt in the gap opening](@ref GapOpeningMelt)) |
 | `limit_freeze_on` | - | `true` | floors the melt rate at the freeze-on the gap can absorb this step (`freeze_on_capacity!`, step 12), so freezing never takes `b` below `b_min` or more water than a cell holds; `false` lets the melt rate freeze as much as the energy balance asks |
 | `outflow_only_land` | - | `true` | `LAND` outlets let water out, never in |
 | `outflow_only_ocean` | - | `true` | the same for `OCEAN` outlets; `false` could help to model tidal intrusion |

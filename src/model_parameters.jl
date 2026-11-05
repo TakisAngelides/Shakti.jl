@@ -36,6 +36,7 @@ struct ModelParameters{F <: AbstractFloat, NE1, NE2, NE3}
     mdot_includes_potential::Bool   # include the potential-energy-dissipation term in compute_mdot!
     mdot_includes_sensible::Bool    # include the sensible-heat-exchange term in compute_mdot! (its own ct*cw*rho_w prefactor still applies when on)
     mdot_includes_qT::Bool          # include (subtract) the conductive-heat-into-ice term q_T in compute_mdot!
+    gap_opening_melt::Symbol        # melt in the gap's opening term: :full (SHAKTI, all of mdot) or :exclude_uniform (net uniform melt makes water, not gap; see the docstring below)
     limit_freeze_on::Bool           # cap freeze-on at the water the gap can supply this step (mdot >= -rho_i*C, see freeze_on_capacity!)
     outflow_only_land::Bool         # LAND faces pass water out of the grounded ice only, never in (compute_face_masks!, mask.jl)
     outflow_only_ocean::Bool        # same for OCEAN faces (false allows ocean water into the bed, e.g. tidal intrusion)
@@ -130,6 +131,33 @@ Sommers et al. (2023) Eq. 8 without the sensible-heat term should set
 `mdot_includes_sensible = false` directly rather than relying on `ct`/`cw` happening to be zero
 (that coupling has been removed: `ct`/`cw` are now purely the sensible term's own physical
 prefactor, not also an implicit on/off switch).
+
+`gap_opening_melt` chooses which melt opens the gap. `:full` (the default) is SHAKTI (Sommers et al. 2018): all of
+`mdot` enters the opening term, `db/dt = mdot/rho_i + beta*|u_b| + div(D grad b) - creep`. `:exclude_uniform` takes the
+linked-cavity view: where the ice rests on bedrock contacts, melt spread evenly over the interface lowers the ice onto
+the contacts as fast as it raises the cavity roofs, so it makes water but no cavity volume. The uniform heat is
+`Q_u = G + Q_b - q_T` (each term only if its `mdot_includes_*` flag is on); the dissipation and sensible heat
+(`Q_diss + Q_sens`) are released in the water and always open the gap. The gap then opens with
+`mdot_open = mdot - w_c*max(0, Q_u)/L`, while the water source `mdot/rho_w`, the water budget and the `mdot` a host
+reads keep the full melt (`State.melt_open = mdot_open/rho_i`, [`compute_mdot!`](@ref)):
+
+- Only net uniform MELT is excluded. Net uniform freezing (`Q_u < 0`, e.g. `q_T > G + Q_b` at a cold margin) can freeze
+  only water, i.e. onto the cavity roofs, so it still closes the gap. This is itself a simplification: the heat
+  conducted away through the contacts cools the ice there and freezes nothing.
+- The argument needs contacts. The contact weight is `w_c = clamp((bump - b)/bump, 0, 1)`, `0` where `bump = 0`, with
+  `bump` the bump height under the ice base (`State.bump`, `br` less the uplift layer, [`compute_beta!`](@ref)) and both
+  `b` and `bump` at the start of the step, so the closed-form gap update stays piecewise linear in `b`. Ice lifted
+  above its bumps (`b >= bump`) or a flat bed (`br = 0`) has no contacts and all of the melt opens the gap: with
+  `br = 0` the option changes nothing. The linear ramp is a smoothing of "the ice rests on its bumps or not", not a
+  contact fraction derived from the bed geometry.
+- Frictional heat is made at the contacts, where on its own it would lower the ice onto the bumps and close the
+  cavities. Counting it in `Q_u` treats it as neutral for the gap (neither opening nor closing it): a deliberate
+  simplification, with no model of that contact closure.
+- The freeze-on floor (`limit_freeze_on`) bounds `mdot_open`; `mdot = mdot_open + w_c*max(0, Q_u)/L >= mdot_open`,
+  so the water a cell freezes stays within its freeze-on capacity too.
+
+Decided once, in `Simulation`'s constructor, as the last type parameter of [`MeltTerms`](@ref): `:full` compiles to
+the SHAKTI kernel.
 """
 function ModelParameters(;
     F::Type{<:AbstractFloat} = floattype,
@@ -162,6 +190,7 @@ function ModelParameters(;
     mdot_includes_potential = true,
     mdot_includes_sensible = true,
     mdot_includes_qT = true,
+    gap_opening_melt::Symbol = :full,
     limit_freeze_on = true,
     outflow_only_land = true,
     outflow_only_ocean = true)
@@ -169,6 +198,8 @@ function ModelParameters(;
     T_hysteresis >= 0 || throw(ArgumentError("T_hysteresis must be >= 0 (got $T_hysteresis): the thaw threshold T_freeze + T_hysteresis may not lie below the freeze threshold"))
     (fs_factor > 0 && fs_omega > 0 && fs_blend >= 0) ||
         throw(ArgumentError("fs_factor and fs_omega must be > 0 and fs_blend >= 0 (got $fs_factor, $fs_omega, $fs_blend); fs_factor = fs_omega = 1 is the duct everywhere"))
+    gap_opening_melt in (:full, :exclude_uniform) ||
+        throw(ArgumentError("gap_opening_melt must be :full or :exclude_uniform (got :$gap_opening_melt)"))
 
     n_F = F(n)
     n_exp = canonical_exponent(n_F)
@@ -177,7 +208,7 @@ function ModelParameters(;
 
     return ModelParameters(
         F(rho_w), F(rho_sw), F(rho_i), F(g), F(nu), n_F, F(omega), F(L), F(br), F(lr), F(b_c), F(ct), F(cw), F(p_atm), F(b_min), F(b_max), F(N_min), F(N_max), F(e_v), F(T_freeze), F(T_hysteresis), F(fs_factor), F(fs_omega), F(fs_blend),
-        mdot_includes_G, mdot_includes_frictional, mdot_includes_potential, mdot_includes_sensible, mdot_includes_qT,
+        mdot_includes_G, mdot_includes_frictional, mdot_includes_potential, mdot_includes_sensible, mdot_includes_qT, gap_opening_melt,
         limit_freeze_on, Bool(outflow_only_land), Bool(outflow_only_ocean), n_exp, n_minus_1_exp, inv_n_exp
     )
 

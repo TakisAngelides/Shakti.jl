@@ -260,11 +260,11 @@ non-negative for every `dt`, so neither branch imposes a time-step limit.
     return b0 + em * b0 + S * dt * (em / x)
 end
 
-@parallel_indices (ix, iy) function compute_b_explicit_kernel!(b, mask, mdot, beta, abs_ub, A_visc, N, rho_i, n_minus_1, dt, b_min, b_max, cls::AbstractCreepLengthScheme, b_c)
+@parallel_indices (ix, iy) function compute_b_explicit_kernel!(b, mask, melt_open, beta, abs_ub, A_visc, N, rho_i, n_minus_1, dt, b_min, b_max, cls::AbstractCreepLengthScheme, b_c)
     if ix <= size(b, 1) && iy <= size(b, 2) && mask[ix, iy] == GROUNDED
         C = A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy]
         b[ix, iy] = clamp(
-            b[ix, iy] + dt * (mdot[ix, iy] / rho_i + beta[ix, iy] * abs_ub[ix, iy] - C * creep_length(cls, b[ix, iy], b_c, C)),
+            b[ix, iy] + dt * (melt_open[ix, iy] + beta[ix, iy] * abs_ub[ix, iy] - C * creep_length(cls, b[ix, iy], b_c, C)),
             b_min, b_max)
     end
     return
@@ -366,11 +366,11 @@ end
     return resid(b_c) <= resid(br) ? b_c : br
 end
 
-@parallel_indices (ix, iy) function compute_b_fully_implicit_kernel!(b, mask, mdot, abs_ub, A_visc, N, rho_i, n_minus_1, dt, b_min, b_max, bump, lr, cls::AbstractCreepLengthScheme, b_c)
+@parallel_indices (ix, iy) function compute_b_fully_implicit_kernel!(b, mask, melt_open, abs_ub, A_visc, N, rho_i, n_minus_1, dt, b_min, b_max, bump, lr, cls::AbstractCreepLengthScheme, b_c)
     if ix <= size(b, 1) && iy <= size(b, 2) && mask[ix, iy] == GROUNDED
         C = A_visc[ix, iy] * pow(abs(N[ix, iy]), n_minus_1) * N[ix, iy]
         gamma = abs_ub[ix, iy] / lr
-        b[ix, iy] = clamp(fully_implicit_creep_update(cls, b[ix, iy], mdot[ix, iy] / rho_i, gamma, C, dt, bump[ix, iy], b_c), b_min, b_max) # bump: br less the uplift layer (compute_beta!)
+        b[ix, iy] = clamp(fully_implicit_creep_update(cls, b[ix, iy], melt_open[ix, iy], gamma, C, dt, bump[ix, iy], b_c), b_min, b_max) # bump: br less the uplift layer (compute_beta!)
     end
     return
 end

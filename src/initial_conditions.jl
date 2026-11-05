@@ -120,7 +120,7 @@ function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, sl::Abst
 
     # Melt-rate terms setup: same rule as Simulation's own constructor -- read directly off p's
     # mdot_includes_* fields (see MeltTerms, melt_rate.jl).
-    mt = MeltTerms{p.mdot_includes_G, p.mdot_includes_frictional, p.mdot_includes_potential, p.mdot_includes_sensible, p.mdot_includes_qT}()
+    mt = melt_terms(p)
     compute_mdot!(s, p, mt) # melt rate
     compute_cell_K!(s, p) # cell-centred transmissivity (a diagnostic; the faces are compute_face_flux!'s)
     copyto!(s.W, s.b) # the water W: the gap, full (Simulation brings it within its sheet, constrain_water!)

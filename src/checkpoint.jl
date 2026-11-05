@@ -109,7 +109,13 @@ function load_checkpoint!(sim::Simulation, path::String)
         # bump (the bump height under the ice base) is lagged with beta, not refreshed by the next step's head refresh:
         # rebuild both from the loaded b, h and W when the checkpoint predates it
         haskey(file, "bump") || compute_beta!(state, sim.p, sim.oss)
-        haskey(file, "mdot0") || copyto!(state.mdot0, state.mdot) # older checkpoints: the start-of-step melt of ImplicitUpwind is the saved melt
+        # older checkpoints: the melt opening is the saved melt over rho_i (gap_opening_melt = :full), and the
+        # start-of-step one of ImplicitUpwind the saved start-of-step melt mdot0, or the saved melt before that
+        haskey(file, "melt_open") || (state.melt_open .= state.mdot ./ sim.p.rho_i)
+        if !haskey(file, "melt_open0")
+            haskey(file, "mdot0") ? copyto!(state.melt_open0, file["mdot0"]) : copyto!(state.melt_open0, state.mdot)
+            state.melt_open0 ./= sim.p.rho_i
+        end
         haskey(file, "b_e") || store_englacial_water!(state, sim.p) # older checkpoints: the englacial water at the saved head and overburden
         load_head_history!(sim.he, file)
         load_timestep_control!(sim.ts, file)

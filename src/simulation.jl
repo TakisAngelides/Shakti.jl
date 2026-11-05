@@ -327,9 +327,10 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
 - `gap_scheme`: [`FullyImplicitGapScheme`](@ref) (default), [`ExplicitGapScheme`](@ref) (a reference, stable only at
   short `dt`); see [`AbstractGapScheme`](@ref). Ignored under
   [`WithDiffusion`](@ref), whose gap solve has a single scheme of its own (`solve_b_diffusion!`).
-- Melt-rate terms: [`MeltTerms`](@ref)'s five flags are read directly off `p.mdot_includes_G`/
+- Melt-rate terms: [`MeltTerms`](@ref)'s five term flags are read directly off `p.mdot_includes_G`/
   `p.mdot_includes_frictional`/`p.mdot_includes_potential`/`p.mdot_includes_sensible`/
-  `p.mdot_includes_qT` (each defaults to `true` in [`ModelParameters`](@ref)).
+  `p.mdot_includes_qT` (each defaults to `true` in [`ModelParameters`](@ref)), its last one off
+  `p.gap_opening_melt` (`:exclude_uniform` or the default `:full`).
 - Opening-by-sliding scheme: off automatically ([`NoOpenBySliding`](@ref)) if `p.br` is zero, else
   [`WithOpenBySliding`](@ref).
 - Creep-length scheme: [`StandardCreep`](@ref) (`l_c = b`) automatically if `p.b_c` is zero, else
@@ -419,7 +420,7 @@ function Simulation(grid, state, tsteps, dt, p, mi::AbstractMeltInput, sl::Abstr
 
     # Melt-rate terms setup: each flag decided directly by its own ModelParameters field (see
     # MeltTerms, melt_rate.jl) -- no longer inferred from ct/cw being zero.
-    mt = MeltTerms{p.mdot_includes_G, p.mdot_includes_frictional, p.mdot_includes_potential, p.mdot_includes_sensible, p.mdot_includes_qT}()
+    mt = melt_terms(p)
 
     # Opening-by-sliding scheme setup: off automatically if p.br (the sole
     # factor in compute_beta!'s term, see compute_beta_kernel!) is zero.

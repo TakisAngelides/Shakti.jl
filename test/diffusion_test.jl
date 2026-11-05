@@ -350,7 +350,7 @@
             @assert grid.dx ≈ dx && grid.dy ≈ dy # sanity: the reference above assumed this exact dx/dy
 
             s = State(grid)
-            s.mask .= mask; s.b .= b; s.N .= N; s.mdot .= mdot; s.beta .= beta; s.abs_ub .= abs_ub
+            s.mask .= mask; s.b .= b; s.N .= N; s.mdot .= mdot; s.melt_open .= mdot ./ p.rho_i; s.beta .= beta; s.abs_ub .= abs_ub # the gap opens with melt_open (compute_mdot!)
             s.A_visc .= A_visc; s.lc .= lc; s.D_x .= D_x; s.D_y .= D_y; s.bump .= p.br # no uplift: the full bump height (compute_beta!)
 
             ls = CholeskyDirectSolver(grid)
@@ -369,7 +369,7 @@
             grid = Grid(nx, ny, dx * (nx - 1), dy * (ny - 1))
             @assert grid.dx ≈ dx && grid.dy ≈ dy
             s = State(grid)
-            s.mask .= mask; s.b .= b; s.N .= N; s.mdot .= mdot; s.beta .= beta; s.abs_ub .= abs_ub
+            s.mask .= mask; s.b .= b; s.N .= N; s.mdot .= mdot; s.melt_open .= mdot ./ p.rho_i; s.beta .= beta; s.abs_ub .= abs_ub # the gap opens with melt_open (compute_mdot!)
             s.A_visc .= A_visc; s.lc .= lc; s.D_x .= D_x; s.D_y .= D_y; s.bump .= p.br # no uplift: the full bump height (compute_beta!)
 
             ls = CGIterativeSolver(grid, SparseAssembledLinearSystem)

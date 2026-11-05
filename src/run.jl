@@ -387,7 +387,7 @@ the outflow-only faces open and the face conductances arithmetic. Every step ref
 (`prepare_head_solve!`), but what is read before that saw the helper's version: the observer's frame 0, step 1's
 start-of-step melt ([`ImplicitUpwind`](@ref)) and freeze-on capacity, and a coupled model reading `N` or `mdot` after a
 mask change. Called by `Simulation` at construction and by the `Simulation` methods of the mask helpers; `h` and `b` are
-not changed, nor is the start-of-step melt of [`ImplicitUpwind`](@ref) (`State.mdot0`, the melt at the start-of-step gap,
+not changed, nor is the start-of-step melt of [`ImplicitUpwind`](@ref) (`State.melt_open0`, the melt opening at the start-of-step gap,
 kept from the setup or the last converged step): the refreshed melt is that of the end-of-step gap at the current head, a
 first iterate rather than a start state, and taken as the start-of-step melt it made step 1 of an uplift moulin fixture at
 dt = 1 day run to 500 iterations instead of 38.
@@ -681,7 +681,7 @@ Explicit (forward-Euler) update of `sim.state.b`: cheaper per step, but only sta
 function compute_b!(sim::Simulation, ::ExplicitGapScheme)
     dry_floor(sim) && return compute_b_dry_floor!(sim)
     s, p = sim.state, sim.p
-    @parallel compute_b_explicit_kernel!(s.b, s.mask, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, sim.dt[], p.b_min, p.b_max, sim.cls, p.b_c)
+    @parallel compute_b_explicit_kernel!(s.b, s.mask, s.melt_open, s.beta, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, sim.dt[], p.b_min, p.b_max, sim.cls, p.b_c)
     return sim
 end
 
@@ -698,7 +698,7 @@ stays lagged by design, see `gap_height.jl`'s module docstring) -- see
 function compute_b!(sim::Simulation, ::FullyImplicitGapScheme)
     dry_floor(sim) && return compute_b_dry_floor!(sim)
     s, p = sim.state, sim.p
-    @parallel compute_b_fully_implicit_kernel!(s.b, s.mask, s.mdot, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, sim.dt[], p.b_min, p.b_max, s.bump, p.lr, sim.cls, p.b_c)
+    @parallel compute_b_fully_implicit_kernel!(s.b, s.mask, s.melt_open, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, sim.dt[], p.b_min, p.b_max, s.bump, p.lr, sim.cls, p.b_c)
     return sim
 end
 
@@ -709,10 +709,10 @@ One cell's gap after the step under the gap scheme `GS` of a [`SchemeGapUpdate`]
 the same formulas as [`compute_b!`](@ref)'s kernels above (`C = A*|N|^(n-1)*N`), so that the head rows of
 [`ConsistentGapCoupling`](@ref) assume exactly the gap change the gap scheme then makes.
 """
-@inline gap_update(gu::SchemeGapUpdate{ExplicitGapScheme, CLS}, b, mdot, beta, abs_ub, C, rho_i) where CLS =
-    b + gu.dt * (mdot / rho_i + beta * abs_ub - C * creep_length(CLS(), b, gu.b_c, C))
-@inline gap_update(gu::SchemeGapUpdate{FullyImplicitGapScheme, CLS}, b, mdot, beta, abs_ub, C, rho_i) where CLS =
-    fully_implicit_creep_update(CLS(), b, mdot / rho_i, abs_ub / gu.lr, C, gu.dt, gu.br, gu.b_c)
+@inline gap_update(gu::SchemeGapUpdate{ExplicitGapScheme, CLS}, b, mo, beta, abs_ub, C, rho_i) where CLS =
+    b + gu.dt * (mo + beta * abs_ub - C * creep_length(CLS(), b, gu.b_c, C))
+@inline gap_update(gu::SchemeGapUpdate{FullyImplicitGapScheme, CLS}, b, mo, beta, abs_ub, C, rho_i) where CLS =
+    fully_implicit_creep_update(CLS(), b, mo, abs_ub / gu.lr, C, gu.dt, gu.br, gu.b_c)
 
 """
 $(TYPEDSIGNATURES)
@@ -744,10 +744,10 @@ whose gap solve clamps at `b_min` ([`solve_b_diffusion!`](@ref)).
 """
 dry_floor(sim::Simulation) = sim.gcp isa ConsistentGapCoupling && sim.cf isa FilledCavities && sim.up isa NoUplift && sim.ds isa NoDiffusion
 
-@parallel_indices (ix, iy) function compute_b_dry_floor_kernel!(b, W, mask, mdot, beta, abs_ub, A_visc, N, rho_i, n_minus_1, b_min, b_max, gu, bump)
+@parallel_indices (ix, iy) function compute_b_dry_floor_kernel!(b, W, mask, melt_open, beta, abs_ub, A_visc, N, rho_i, n_minus_1, b_min, b_max, gu, bump)
     if ix <= size(b, 1) && iy <= size(b, 2)
         if mask[ix, iy] == GROUNDED
-            Wn = scheme_water(cell_gap(gu, bump[ix, iy]), b[ix, iy], W[ix, iy], b_min, b_max, mdot[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], N[ix, iy], rho_i, n_minus_1)
+            Wn = scheme_water(cell_gap(gu, bump[ix, iy]), b[ix, iy], W[ix, iy], b_min, b_max, melt_open[ix, iy], beta[ix, iy], abs_ub[ix, iy], A_visc[ix, iy], N[ix, iy], rho_i, n_minus_1)
             b[ix, iy] = max(Wn, b_min)
             W[ix, iy] = Wn
         else
@@ -766,7 +766,7 @@ written to `s.W`, and the gap is that water held at `b_min`, dry below the water
 """
 function compute_b_dry_floor!(sim::Simulation)
     s, p = sim.state, sim.p
-    @parallel compute_b_dry_floor_kernel!(s.b, s.W, s.mask, s.mdot, s.beta, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, p.b_min, p.b_max, gap_coupling_terms(sim), s.bump)
+    @parallel compute_b_dry_floor_kernel!(s.b, s.W, s.mask, s.melt_open, s.beta, s.abs_ub, s.A_visc, s.N, p.rho_i, p.n_minus_1_exp, p.b_min, p.b_max, gap_coupling_terms(sim), s.bump)
     return sim
 end
 

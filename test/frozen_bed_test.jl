@@ -224,7 +224,7 @@
             zb0, po0, A0, lc0 = 100.0, 4.5e6, 5e-25, 0.01
             h_of(N0) = zb0 + (po0 - N0) / (q.rho_w * q.g)
             head(mdot, beta, ub, ieb, Nmin, Nmax) =
-                Shakti.closed_cell_head(zb0, po0, mdot, beta, ub, ieb, 0.0, A0, lc0, q.rho_w, q.rho_i, q.g, q.n, Nmin, Nmax)
+                Shakti.closed_cell_head(zb0, po0, mdot, mdot / q.rho_i, beta, ub, ieb, 0.0, A0, lc0, q.rho_w, q.rho_i, q.g, q.n, Nmin, Nmax)
             N_of(h) = po0 - q.rho_w * q.g * (h - zb0)
             # sliding opens the gap (R0 > 0): N0 > 0 with creep closing exactly at that rate
             R0 = 1e-3 * 1e-8
@@ -239,8 +239,8 @@
             @test head(0.0, 0.0, 0.0, 1e-9, 0.0, Inf) ≈ h_of(0.0)
             @test head(0.0, 1e-3, 1e-8, 0.0, -Inf, 1e3) ≈ h_of(1e3)          # N_max caps it as compute_N! does
             # no creep (lc0 = 0): a gap that can only open has zero water pressure, else overburden
-            @test Shakti.closed_cell_head(zb0, po0, 0.0, 1e-3, 1e-8, 0.0, 0.0, A0, 0.0, q.rho_w, q.rho_i, q.g, q.n, -Inf, Inf) ≈ zb0
-            @test Shakti.closed_cell_head(zb0, po0, 0.0, 0.0, 0.0, 1e-9, 0.0, A0, 0.0, q.rho_w, q.rho_i, q.g, q.n, -Inf, Inf) ≈ h_of(0.0)
+            @test Shakti.closed_cell_head(zb0, po0, 0.0, 0.0, 1e-3, 1e-8, 0.0, 0.0, A0, 0.0, q.rho_w, q.rho_i, q.g, q.n, -Inf, Inf) ≈ zb0
+            @test Shakti.closed_cell_head(zb0, po0, 0.0, 0.0, 0.0, 0.0, 1e-9, 0.0, A0, 0.0, q.rho_w, q.rho_i, q.g, q.n, -Inf, Inf) ≈ h_of(0.0)
             @test Shakti.closed_cell(0.0, 0.0, 0.0, 0.0) && !Shakti.closed_cell(0.0, 1e-12, 0.0, 0.0)
         end
 
@@ -258,7 +258,7 @@
                 mfls = MatrixFreeLinearSystem(grid)
                 Shakti.update_SALS_elliptic!(sals, state, grid, p, Arithmetic())
                 Shakti.update_MFLS_elliptic!(mfls, state, grid, p, Arithmetic())
-                h3 = Shakti.closed_cell_head(state.zb[3, 3], state.po[3, 3], state.mdot[3, 3], state.beta[3, 3], state.abs_ub[3, 3],
+                h3 = Shakti.closed_cell_head(state.zb[3, 3], state.po[3, 3], state.mdot[3, 3], state.melt_open[3, 3], state.beta[3, 3], state.abs_ub[3, 3],
                                              state.ieb[3, 3], 0.0, A_visc[3, 3], state.lc[3, 3], p.rho_w, p.rho_i, p.g, p.n, p.N_min, p.N_max)
                 row = 3 + 2nx
                 @test sals.M.nzval[sals.idxP[3, 3]] == 1 && mfls.aP[3, 3] == 1
@@ -268,7 +268,7 @@
                 @test (sals.M \ sals.rhs)[row] ≈ h3
             end
             # the cell's own budget holds at h3: creep closes the gap at the opening rate
-            N3 = state.po[3, 3] - p.rho_w * p.g * (Shakti.closed_cell_head(state.zb[3, 3], state.po[3, 3], state.mdot[3, 3], state.beta[3, 3],
+            N3 = state.po[3, 3] - p.rho_w * p.g * (Shakti.closed_cell_head(state.zb[3, 3], state.po[3, 3], state.mdot[3, 3], state.melt_open[3, 3], state.beta[3, 3],
                      state.abs_ub[3, 3], state.ieb[3, 3], 0.0, A_visc[3, 3], state.lc[3, 3], p.rho_w, p.rho_i, p.g, p.n, -Inf, Inf) - state.zb[3, 3])
             R3 = state.beta[3, 3] * state.abs_ub[3, 3] - state.mdot[3, 3] * (1 / p.rho_w - 1 / p.rho_i) - state.ieb[3, 3]
             @test A_visc[3, 3] * abs(N3)^(p.n - 1) * N3 * state.lc[3, 3] ≈ R3
@@ -277,7 +277,7 @@
         @testset "gap_budget_terms: the unclamped gap terms and their creep diagonal" begin
             q = ModelParameters(b_max = 1.0, b_min = 1e-6)
             A, h = 5e-25, 100.0
-            src, gd = Shakti.gap_budget_terms(1.0, q.b_min, q.b_max, 1e-3, 0.0, 0.0, A, 1e5, 1.0, h, q.rho_w, q.rho_i, q.g, q.n, q.n_minus_1_exp)
+            src, gd = Shakti.gap_budget_terms(1.0, q.b_min, q.b_max, 1e-3, 1e-3 / q.rho_i, 0.0, 0.0, A, 1e5, 1.0, h, q.rho_w, q.rho_i, q.g, q.n, q.n_minus_1_exp)
             @test gd ≈ q.n * q.rho_w * q.g * A * 1e5^2
             @test src ≈ 1e-3 * (1 / q.rho_w - 1 / q.rho_i) + A * 1e5^3 * 1.0 + gd * h
         end

@@ -2,7 +2,9 @@
 $(TYPEDSIGNATURES)
 
 Which terms [`compute_mdot!`](@ref) includes -- one `Bool` type parameter per term (`Geothermal`,
-`Frictional`, `Potential`, `Sensible`, `Conductive`), decided ONCE in `Simulation`'s constructor
+`Frictional`, `Potential`, `Sensible`, `Conductive`), and a last one, `ExcludeUniform`, for which of them
+open the gap (`p.gap_opening_melt === :exclude_uniform`, see [`ModelParameters`](@ref); `MeltTerms{G,F,P,S,C}()`
+is the `:full` default), decided ONCE in `Simulation`'s constructor
 from `p.mdot_includes_G`/`p.mdot_includes_frictional`/`p.mdot_includes_potential`/
 `p.mdot_includes_sensible`/`p.mdot_includes_qT` (see `simulation.jl`) rather than every call, so
 turning a term off skips its kernel work and array traffic entirely instead of just multiplying its
@@ -23,7 +25,16 @@ Defined here, next to their sole consumer ([`compute_mdot!`](@ref) below), rathe
 `PicardSolver`/`Simulation` ordering reasons) needs `MeltTerms` to type-annotate `mt`, so this file
 is included before `elliptic_solver.jl` too.
 """
-struct MeltTerms{Geothermal,Frictional,Potential,Sensible,Conductive} end
+struct MeltTerms{Geothermal,Frictional,Potential,Sensible,Conductive,ExcludeUniform} end
+
+# The last parameter, ExcludeUniform, is not a term of mdot but which of its terms open the gap
+# (ModelParameters' gap_opening_melt): true = :exclude_uniform, false = :full. The five-parameter form
+# MeltTerms{G,F,P,S,C}() builds :full, so runs and tests written before it keep their meaning.
+MeltTerms{G,F,P,S,C}() where {G,F,P,S,C} = MeltTerms{G,F,P,S,C,false}()
+
+# The MeltTerms of a ModelParameters (what Simulation and set_initial_conditions! build).
+melt_terms(p) = MeltTerms{p.mdot_includes_G, p.mdot_includes_frictional, p.mdot_includes_potential,
+                          p.mdot_includes_sensible, p.mdot_includes_qT, p.gap_opening_melt === :exclude_uniform}()
 
 # Melt rate = geothermal flux + frictional (sliding) heating + potential
 # energy released by water flowing downgradient + sensible heat exchanged as
@@ -70,8 +81,8 @@ end
 # model as is. A term whose MeltTerms flag is off is not computed (its
 # inputs are never read) and its field is set to 0, so it never holds a
 # stale value.
-@parallel_indices (ix, iy) function compute_mdot_kernel!(mdot, mdot_min, limit_freeze_on, mask, Q_b, Q_diss, Q_sens, G, q_T, ub_x, taub_x, ub_y, taub_y, q_x, dhdx, q_y, dhdy, dpwdx, dpwdy, Linv, rho_w, ggrav, ct, cw,
-                                                          ::MeltTerms{Geothermal,Frictional,Potential,Sensible,Conductive}) where {Geothermal,Frictional,Potential,Sensible,Conductive}
+@parallel_indices (ix, iy) function compute_mdot_kernel!(mdot, melt_open, mdot_min, limit_freeze_on, mask, Q_b, Q_diss, Q_sens, G, q_T, ub_x, taub_x, ub_y, taub_y, q_x, dhdx, q_y, dhdy, dpwdx, dpwdy, Linv, rho_w, rho_i, ggrav, ct, cw, b, bump,
+                                                          ::MeltTerms{Geothermal,Frictional,Potential,Sensible,Conductive,ExcludeUniform}) where {Geothermal,Frictional,Potential,Sensible,Conductive,ExcludeUniform}
     if ix <= size(mdot, 1) && iy <= size(mdot, 2)
         acc = zero(eltype(mdot))
 
@@ -111,7 +122,36 @@ end
         # Freeze-on is limited to the water the gap can supply this step: once the gap is at its
         # floor there is nothing left to freeze, and the remaining heat deficit is the host's (it
         # cools the ice), not water expelled into the flow.
-        mdot[ix, iy] = limit_freeze_on ? max(Linv * acc, mdot_min[ix, iy]) : Linv * acc
+        if ExcludeUniform
+            # Net uniform melt makes water but no gap where the ice rests on its bumps (gap_opening_melt, ModelParameters):
+            # mx = w_c*max(0, Q_u)/L >= 0 is left out of the opening, with Q_u = G + Q_b - q_T summed apart from acc so
+            # that mdot keeps acc's own order of summation. w_c from the start-of-step b and bump (compute_beta!).
+            # The floor is on the opening: mdot_min = -rho_i*C, C the smaller of the room in the gap and the water
+            # there is to freeze (freeze_on_capacity!), and the excluded part is melt only, so every freezing rate
+            # enters mdot_open and mdot alike. Flooring mdot_open keeps the gap above its floor, and
+            # mdot = mdot_open + mx >= mdot_open keeps the water frozen within C as well; flooring mdot instead would
+            # let mdot_open = mdot - mx close the gap past C.
+            qu = zero(acc)
+            if Geothermal
+                qu += G[ix, iy]
+            end
+            if Frictional
+                qu += Q_b[ix, iy]
+            end
+            if Conductive
+                qu -= q_T[ix, iy]
+            end
+            br = bump[ix, iy]
+            wc = br > 0 ? clamp((br - b[ix, iy]) / br, zero(br), one(br)) : zero(br)
+            mx = wc * Linv * max(zero(qu), qu)
+            mo = Linv * acc - mx
+            mo = limit_freeze_on ? max(mo, mdot_min[ix, iy]) : mo
+            mdot[ix, iy] = mo + mx
+            melt_open[ix, iy] = mo / rho_i
+        else
+            mdot[ix, iy] = limit_freeze_on ? max(Linv * acc, mdot_min[ix, iy]) : Linv * acc
+            melt_open[ix, iy] = mdot[ix, iy] / rho_i
+        end
     end
     return
 end
@@ -123,9 +163,12 @@ Updates `s.mdot` (subglacial melt rate) = geothermal flux `s.G` + frictional (sl
 potential energy released by water flowing downgradient + sensible heat exchanged as water moves to
 regions of different pressure melting point - conductive heat lost into cold ice above the bed
 `s.q_T`, all divided by the latent heat of fusion `p.L` -- each term included or not per `mt`'s type
-parameters (see [`MeltTerms`](@ref)). Also stores the heat terms `s.Q_b`/`s.Q_diss`/`s.Q_sens`
+parameters (see [`MeltTerms`](@ref)) -- and `s.melt_open`, the rate the melt opens the gap [m/s of ice]:
+`mdot/rho_i` under `gap_opening_melt = :full`, `(mdot - w_c*max(0, Q_u)/L)/rho_i` under `:exclude_uniform` (see
+[`ModelParameters`](@ref)). `mdot` is the water source and what a host reads; every gap update takes
+`melt_open`. Also stores the heat terms `s.Q_b`/`s.Q_diss`/`s.Q_sens`
 [W/m^2], prefactors applied, so `L*mdot = G + Q_b + Q_diss + Q_sens - q_T`; a term that is off is
-stored as 0. With `p.limit_freeze_on`, `mdot` is floored at `s.mdot_min = -rho_i*C`, the
+stored as 0. With `p.limit_freeze_on`, `mdot` (under `:exclude_uniform` its opening part) is floored at `s.mdot_min = -rho_i*C`, the
 freeze-on the gap can supply this step ([`freeze_on_capacity!`](@ref), set once per step by
 `prepare_head_solve!`); the heat terms are stored unlimited. Computed in one fused kernel (one
 launch instead of four). The englacial input `s.ieb` is not part of `mdot`: it enters the water
@@ -138,7 +181,7 @@ all (e.g. `s.dpwdx`/`s.dpwdy` when `Sensible == false`), rather than computing i
 a zero prefactor; its output field is set to 0.
 """
 function compute_mdot!(s::State, p::ModelParameters, mt::MeltTerms)
-    @parallel compute_mdot_kernel!(s.mdot, s.mdot_min, p.limit_freeze_on, s.mask, s.Q_b, s.Q_diss, s.Q_sens, s.G, s.q_T, s.ub_x, s.taub_x, s.ub_y, s.taub_y, s.q_x, s.dhdx, s.q_y, s.dhdy, s.dpwdx, s.dpwdy, 1/p.L, p.rho_w, p.g, p.ct, p.cw, mt)
+    @parallel compute_mdot_kernel!(s.mdot, s.melt_open, s.mdot_min, p.limit_freeze_on, s.mask, s.Q_b, s.Q_diss, s.Q_sens, s.G, s.q_T, s.ub_x, s.taub_x, s.ub_y, s.taub_y, s.q_x, s.dhdx, s.q_y, s.dhdy, s.dpwdx, s.dpwdy, 1/p.L, p.rho_w, p.rho_i, p.g, p.ct, p.cw, s.b, s.bump, mt)
     return s
 end
 
@@ -173,7 +216,7 @@ end
 @inline wet_gap(b, W) = clamp(W, zero(b), b)
 
 @inline function cell_heat(mask, q_x, q_y, dhdx, dhdy, dpwdx, dpwdy, rho_w, ggrav, ct, cw, ix, iy,
-                           ::MeltTerms{Geothermal,Frictional,Potential,Sensible,Conductive}) where {Geothermal,Frictional,Potential,Sensible,Conductive}
+                           ::MeltTerms{Geothermal,Frictional,Potential,Sensible,Conductive,ExcludeUniform}) where {Geothermal,Frictional,Potential,Sensible,Conductive,ExcludeUniform}
     heat = zero(rho_w)
     if Potential
         heat += rho_w * ggrav * abs(cell_face_sum(mask, q_x, dhdx, q_y, dhdy, ix, iy))

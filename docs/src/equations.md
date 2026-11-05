@@ -211,7 +211,8 @@ towards lower pressure, ``\mathbf{q} \cdot \nabla p_w < 0``, is warmed to its ri
 takes heat from melting. Each term can be turned off (`mdot_includes_*` in `ModelParameters`).
 ``\boldsymbol{\tau}_b`` comes from a sliding law in ``N`` and ``\mathbf{u}_b`` (table in
 [the tutorial](@ref "Sliding law")) or from an ice-flow model. Freeze-on (``\dot m < 0``) is limited
-to the water the gap holds.
+to the water the gap holds. Optionally, net uniform melt makes water but no gap where the ice rests on its
+bumps, and only the rest of ``\dot m`` opens the gap (see [Melt in the gap opening](@ref GapOpeningMelt)).
 
 ## Head equation
 

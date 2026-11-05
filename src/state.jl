@@ -32,7 +32,8 @@ struct State{A <: AbstractArray}
     lc::A         # ice-creep length scale (see AbstractCreepLengthScheme, gap_height.jl); equals b under StandardCreep
     abs_ub::A     # absolute value of the sliding velocity
     mdot::A       # melt rate
-    mdot0::A      # melt rate at the start of the step (ImplicitUpwind with ConsistentGapCoupling: the melt opening of the end-of-step gap in the conductance, compute_b_w_iterate!); untouched otherwise
+    melt_open::A  # rate the melt opens the gap [m/s of ice], written by compute_mdot!: mdot/rho_i, or less the uniform melt under gap_opening_melt = :exclude_uniform. Every gap update takes it; mdot stays the water source
+    melt_open0::A # melt_open at the start of the step (ImplicitUpwind with ConsistentGapCoupling: the melt opening of the end-of-step gap in the conductance, compute_b_w_iterate!); untouched otherwise
     dh_it::A      # the previous head iteration's (limited) step of each cell, for the oscillation damping of limit_head_step! (unfilled_cavities.jl); zeroed at the start of each step; zero without an active PicardGuard
     mdot_min::A   # floor on mdot this step, -rho_i*C (freeze-on capacity); applied when p.limit_freeze_on
     Q_b::A        # frictional (sliding) heat |u_b . taub| [W/m^2], written by compute_mdot! (0 when that term is off)
@@ -135,7 +136,8 @@ function State(g::Grid)
     lc        = initialize_center_field(g)
     abs_ub    = initialize_center_field(g)
     mdot      = initialize_center_field(g)
-    mdot0     = initialize_center_field(g)
+    melt_open = initialize_center_field(g)
+    melt_open0 = initialize_center_field(g)
     dh_it     = initialize_center_field(g)
     mdot_min  = @fill(-Inf, g.nx, g.ny) # no floor until prepare_head_solve! sets one
     Q_b       = initialize_center_field(g)
@@ -187,7 +189,7 @@ function State(g::Grid)
     valid_y = @fill(1.0, g.nx, g.ny+1) # float 1.0 = valid; recomputed in compute_face_masks!
 
     return State(
-        h, pw, po, b, b_w, fsw, dfsw_dh, dbw_dh, W, b_e, stor, stor_up, b_next, db_next, beta, bump, lc, abs_ub, mdot, mdot0, dh_it, mdot_min, Q_b, Q_diss, Q_sens, Re, K, G, q_T, zb, zs, H, ieb, ieb_own, ieb_external, lambda, A_visc, N, mask,
+        h, pw, po, b, b_w, fsw, dfsw_dh, dbw_dh, W, b_e, stor, stor_up, b_next, db_next, beta, bump, lc, abs_ub, mdot, melt_open, melt_open0, dh_it, mdot_min, Q_b, Q_diss, Q_sens, Re, K, G, q_T, zb, zs, H, ieb, ieb_own, ieb_external, lambda, A_visc, N, mask,
         dhdx, db_x, q_x, Re_x, b_x, ub_x, taub_x, dpwdx, D_x, K_x, Jw_x, don_x, valid_x,
         dhdy, db_y, q_y, Re_y, b_y, ub_y, taub_y, dpwdy, D_y, K_y, Jw_y, don_y, valid_y,
     )

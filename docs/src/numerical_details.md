@@ -154,6 +154,33 @@ sliding are evaluated at the current gap, since over many Shakti steps they act 
 ``b_\min``. Under `UnfilledCavities` and on the dry floor the capacity is also capped by the water present,
 ``(\rho_w/\rho_i)\, W / \Delta t``.
 
+## [Melt in the gap opening](@id GapOpeningMelt)
+
+By default all of the melt opens the gap, ``\dot m/\rho_i``, as in SHAKTI. Where the ice rests on its bumps,
+melt spread evenly over the bed also melts the ice at the contacts, and the ice sinks onto them as fast as
+the cavity roofs rise: that melt makes water but no gap. `ModelParameters(gap_opening_melt = :exclude_uniform)`
+(step 5 of [the tutorial](@ref "5. Parameters")) opens the gap with
+
+```math
+\dot m_\mathrm{open} = \dot m - w_c\, \frac{\max(0,\, G + Q_b - q_T)}{L},
+\qquad w_c = \operatorname{clamp}\!\left(\frac{b_r^* - b}{b_r^*},\, 0,\, 1\right) \ (0 \text{ if } b_r^* = 0),
+```
+
+while the water source, the water budget and the ``\dot m`` a host reads keep the full melt.
+
+- The dissipation and sensible heat are released in the water and still open the gap. Net uniform
+  freezing (``G + Q_b < q_T``) still closes it, since it can freeze only water.
+- ``w_c`` is a linear ramp from 1 (ice on the bed) to 0 (gap as tall as the bumps under the ice base
+  ``b_r^*``, or no bumps). It smooths "on its bumps or not"; it is not a contact fraction. It is taken at the
+  start-of-step gap, as ``b_r^*`` is. With `br = 0` the option changes nothing.
+- Frictional heat is made at the contacts, where on its own it would close the cavities. Counting it in the
+  uniform part treats it as neutral for the gap: a simplification, with no model of that closure.
+- The freeze-on floor applies to ``\dot m_\mathrm{open}``; ``\dot m \ge \dot m_\mathrm{open}``, so the water a cell
+  freezes stays within the capacity as well.
+
+The effect is largest where sliding opens little: with ``b_r = 0.1`` m and ``G = 0.05`` W/m² the steady
+``N`` is about 3 % lower at ``u_b = 1`` m/a, and without sliding it falls toward 0 where the flux is small.
+
 ## Mask changes
 
 A coupled ice model can change which cells are solved, between steps:
