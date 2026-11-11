@@ -142,9 +142,9 @@ geo
 | `e_v` | - | `0` | englacial void ratio ([Sommers2018](@cite) Eq. 13); `0` elliptic head equation, `> 0` parabolic, see the [Parabolic scheme](@ref ParabolicScheme) page |
 | `T_freeze` | K | `-1.0` | `update_frozen_mask!` (step 12) freezes a cell when its basal temperature relative to pressure melting drops below this |
 | `T_hysteresis` | K | `0.5` | a frozen cell thaws at `T_freeze + T_hysteresis`; `0` gives one threshold, at which a cell might flicker |
-| `fs_factor` | - | `1` | conductance of the water in an unfilled cavity relative to the duct law; `4` is the free-surface law ``g W^3/(3\nu)``, see [Free-surface layer (optional)](@ref) |
+| `fs_factor` | - | `1` | transmissivity of the water in an unfilled cavity relative to the duct law; `4` is the free-surface law ``g W^3/(3\nu)``, see [Free-surface layer (optional)](@ref) |
 | `fs_omega` | - | `1` | ``\omega`` multiplier in an unfilled cavity; `2` is the Reynolds number of the mirrored duct, ``2|q|/\nu`` |
-| `fs_blend` | - | `0.65` | ramps an unfilled cell from duct to free surface over an empty depth of `fs_blend` times the gap; below 0.645 (for `fs_factor = 4`) the conductance falls as the head rises and the steady state can depend on `dt` (warned about) |
+| `fs_blend` | - | `0.65` | ramps an unfilled cell from duct to free surface over an empty depth of `fs_blend` times the gap; below 0.645 (for `fs_factor = 4`) the transmissivity falls as the head rises and the steady state can depend on `dt` (warned about) |
 | `mdot_includes_G` | - | `true` | melt rate includes the geothermal flux |
 | `mdot_includes_frictional` | - | `true` | melt rate includes frictional heating |
 | `mdot_includes_potential` | - | `true` | melt rate includes potential-energy dissipation |
@@ -263,17 +263,17 @@ where ``W = b``. The code adds ``b`` (held at its start-of-step value) because `
 regimes. The same level is used in the dissipation heat, which uses ``q``. Without it, water and its dissipation heat would not
 follow differences in the gap height.
 
-### Face conductance
-The flux between two cells needs the conductance ``K`` on their shared face. `k_face_choice` picks how it is made from the
+### Face transmissivity
+The flux between two cells needs the transmissivity ``K`` on their shared face. `k_face_choice` picks how it is made from the
 two cells. Its default follows from the sheet: `"implicit_upwind"` with `UnfilledCavities` or `IceUplift` (so by default),
-`"arithmetic"` otherwise. In the table, ``W`` is the water depth of a cell [m] (`state.W`), which equals the gap height
+`"arithmetic"` otherwise. In the table, ``W`` is the water thickness of a cell [m] (`state.W`), which equals the gap height
 ``b`` where the gap is full. The head matrix is the linear system for the head, one row per cell, that the linear solver of
 step 8 solves in every Picard iteration.
 
 | `k_face_choice` | Face value | Head matrix | Time step | Notes |
 |:----------------|:-----------|:------------|:----------|:------|
-| `"implicit_upwind"` | ``K`` of the upwind cell (the one the water flows out of), at the water depth ``W`` of the *end* of the step | non-symmetric: the iteration is Newton's method in ``W`` and adds the derivative of each face flux with respect to the water depth of its upwind cell | any | needs `LUDirectSolver` or `CUDSSDirectSolver` (`:general`) or `BiCGStabIterativeSolver`. With `FilledCavities`, `NoUplift`, `ExplicitGapScheme` (step 9) and the default gap coupling it warns: the explicit gap update overshoots the water depths the faces conduct by, so use `FullyImplicitGapScheme`. The other three choices have no such warning |
-| `"upwind"` | the same, but at the water depth of the *start* of the step | symmetric, so Cholesky and CG are allowed | ``\Delta t < \Delta x\, W / (3 \lvert q \rvert)``, minutes at 100 m | the water depth is then explicit in time. Warns with `UnfilledCavities` or `IceUplift` |
+| `"implicit_upwind"` | ``K`` of the upwind cell (the one the water flows out of), at the water thickness ``W`` of the *end* of the step | non-symmetric: the iteration is Newton's method in ``W`` and adds the derivative of each face flux with respect to the water thickness of its upwind cell | any | needs `LUDirectSolver` or `CUDSSDirectSolver` (`:general`) or `BiCGStabIterativeSolver`. With `FilledCavities`, `NoUplift`, `ExplicitGapScheme` (step 9) and the default gap coupling it warns: the explicit gap update overshoots the water thicknesses that set the transmissivity of the faces, so use `FullyImplicitGapScheme`. The other three choices have no such warning |
+| `"upwind"` | the same, but at the water thickness of the *start* of the step | symmetric, so Cholesky and CG are allowed | ``\Delta t < \Delta x\, W / (3 \lvert q \rvert)``, minutes at 100 m | the water thickness is then explicit in time. Warns with `UnfilledCavities` or `IceUplift` |
 | `"arithmetic"` | mean of the two cells | symmetric | - | default with `FilledCavities` and `NoUplift`. Refused with `UnfilledCavities` or `IceUplift`, where it creates water |
 | `"harmonic"` | harmonic mean of the two cells, which is lower than the arithmetic mean where one cell has a small ``K`` | symmetric | - | same restriction as `"arithmetic"` |
 

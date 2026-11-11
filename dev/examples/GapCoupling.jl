@@ -18,12 +18,12 @@ bed bumps, minus creep closure,
 
 with ``\beta`` the bump-height factor and ``l_c`` the creep length, both functions of the gap.
 `ExplicitGapCoupling` evaluates `b` at the start of the step (`b_old`) but ``N`` at the end of it.
-That does not need ``N^{n+1}`` to be known beforehand, because ``N = p_o - \rho_w g (h - z_b)`` is a
-function of the head, and the head ``h^{n+1}`` is exactly what the head equation solves for. The
+That does not need ``N^{(m+1)}`` to be known beforehand, because ``N = p_o - \rho_w g (h - z_b)`` is a
+function of the head, and the head ``h^{(m+1)}`` is exactly what the head equation solves for. The
 creep term ``A |N|^{n-1} N\, l_c(b_\mathrm{old})`` is therefore written into the row as a function of
 the unknown ``h``. Each Picard iterate recomputes ``N`` from the current ``h`` and linearizes the term
 about it (this puts ``n \rho_w g A |N|^{n-1} l_c`` on the diagonal), so that at convergence it is
-evaluated at ``N^{n+1}``. Only the gap is lagged. The melt and sliding terms are likewise
+evaluated at ``N^{(m+1)}``. Only the gap is lagged. The melt and sliding terms are likewise
 recomputed at the iterate, since ``\dot m`` depends on the flux and the basal drag, which depend on ``h``.
 
 When the two disagree, the water the head equation put into or took out of the gap is not the water
