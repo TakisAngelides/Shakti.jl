@@ -314,7 +314,7 @@ $(TYPEDSIGNATURES)
 Direct solve via sparse LU factorization (`SparseArrays`/UMFPACK) of the assembled
 [`SparseAssembledLinearSystem`](@ref): the [`CholeskyDirectSolver`](@ref) counterpart for a matrix that is
 not symmetric, which the head rows assemble under [`ImplicitUpwind`](@ref) (the Newton terms of the face
-fluxes' dependence on their donor's water depth couple each face to one side only). Refactorizes in place
+fluxes' dependence on their donor's water thickness couple each face to one side only). Refactorizes in place
 each solve, reusing the symbolic analysis since the sparsity pattern never changes. CPU-only, like
 [`CholeskyDirectSolver`](@ref); about twice its cost per solve on the same matrix.
 
@@ -550,8 +550,8 @@ neighbours' new gaps held) in `State.db_next`. The head rows store exactly `b_ne
 term ([`diffusive_head_terms`](@ref)), so at convergence the head equation and the gap update hold the same water. The
 explicit coupling assumed `dt*rate(N, b_old)` plus the diffusion of the old gap instead, and at dt = 1 day lost or created
 up to 1.8 times the melt input of a step. `br` is the bump height of the cell ([`cell_gap`](@ref)), `lr` the bump
-spacing. The conductance keeps the start-of-step gap, except under [`ImplicitUpwind`](@ref), where it takes the smaller of
-that gap and `b_next` ([`DiffusiveCellGap`](@ref)): with [`UnfilledCavities`](@ref) a draining cell otherwise conducted
+spacing. The transmissivity keeps the start-of-step gap, except under [`ImplicitUpwind`](@ref), where it takes the smaller of
+that gap and `b_next` ([`DiffusiveCellGap`](@ref)): with [`UnfilledCavities`](@ref) a draining cell otherwise passed on
 water its row no longer held (Picard loops of 500 iterations on a moulin slab at dt = 1 day).
 """
 struct DiffusiveGapUpdate{F} <: AbstractGapCoupling
@@ -582,7 +582,7 @@ The water in a filled gap at the end of the step, as the head rows of [`Consiste
 dry floor (`gu.dry_floor`, [`FilledCavities`](@ref)) the gap update moves the water `W` (`State.W`) with no lower clamp:
 `compute_b!` still holds the gap at `b_min`, but the volume it keeps there holds no water (`b - W`). Held full of
 water, that volume made the clamped update flat in `N` wherever creep closes the gap within a step (thick ice): the row
-then kept only the conductance of the floor, and a cell needing water there (freezing, opening) had no bounded head;
+then kept only the transmissivity of the floor, and a cell needing water there (freezing, opening) had no bounded head;
 the explicit coupling instead counted the closure the clamp blocked as water expelled (water created). Without the dry
 floor: the clamped gap ([`scheme_gap`](@ref)).
 """
@@ -651,7 +651,7 @@ Head-row terms (source, diagonal) of a GROUNDED cell under `DiffusiveGapUpdate`:
 its slope `gbn = State.db_next` (`W(h') = bn + gbn*(h' - h)`). The wall diffusion is part of `bn`, so the row has no
 separate `-div(D grad b)` source ([`diffusion_in_head`](@ref)). As [`scheme_head_terms`](@ref) for the other regimes: an
 unfilled cell ([`UnfilledCavities`](@ref), `h < zb`) stores `bn + (h - zb)`, an uplifted one ([`IceUplift`](@ref),
-`h > h_o`) `bn + (h - h_o)`, both with storage slope 1, `bn` then being the gap solve's at `N = po` or `N = 0` (`State.N` of
+`h > h_o`) `bn + (h - h_o)`, both with total water thickness slope 1, `bn` then being the gap solve's at `N = po` or `N = 0` (`State.N` of
 that iterate); every regime stores against the water present `W` (`State.W`), as in [`scheme_head_terms`](@ref).
 """
 @inline function diffusive_head_terms(gu, b, mdot, h, zb, po, stor, rho_w, ggrav, stor_up, W, bn, gbn)
@@ -806,7 +806,7 @@ end
 end
 
 # Under ImplicitUpwind (k_face_scheme.jl) the outflow of cell P through a face, F = K(W_d)*(phi_P - phi_nb)/dx^2, depends
-# on the head of the face's donor d through its water depth W_d. Its Newton term at the iterate h^k,
+# on the head of the face's donor d through its water thickness W_d. Its Newton term at the iterate h^k,
 #     dF/dh_d * (h_d - h_d^k),   dF/dh_d = +J/dx when P is the donor, -J/dx when the neighbour is,
 # with J >= 0 from s.Jw_x/s.Jw_y (water_depth_newton_kernel!, water_flux.jl; signed there by donor side). P as donor
 # adds J/dx to the diagonal and J/dx*h_P^k to the rhs; a GROUNDED neighbour as donor subtracts J/dx from P's
@@ -909,7 +909,7 @@ end
             # Face transmissivities from compute_face_flux! (water_flux.jl) -- the same numbers q is
             # built from, so the solve and every flux diagnostic agree. They are already 0 on a
             # domain-edge face (natural zero-flux Neumann) and on a face touching OTHER_BASIN/
-            # FROZEN_BED, and at an OCEAN/LAND face carry the grounded cell's own conductance
+            # FROZEN_BED, and at an OCEAN/LAND face carry the grounded cell's own transmissivity
             # (face_conductance, k_face_scheme.jl).
             aE = (ix < nx) ? K_x[ix+1, iy] / dx2 : zero(dx2)
             aW = (ix > 1)  ? K_x[ix, iy] / dx2 : zero(dx2)
@@ -969,7 +969,7 @@ end
                             srhs + # englacial storage at the start of the step, zero for e_v = 0
                             dirichlet_rhs
                 add_sheet_top_source!(rhs, row, aE, aW, aN, aS, db_x, db_y, ix, iy) # SheetTopPotential: the known part of -div(K grad(b)), zero otherwise
-                add_water_depth_newton!(newton_on, nzval, rhs, row, idxP, idxE, idxW, idxN, idxS, Jw_x, Jw_y, h, ix, iy, nx, ny, dx, dy) # ImplicitUpwind: Newton terms of the donors' water depths, nothing otherwise
+                add_water_depth_newton!(newton_on, nzval, rhs, row, idxP, idxE, idxW, idxN, idxS, Jw_x, Jw_y, h, ix, iy, nx, ny, dx, dy) # ImplicitUpwind: Newton terms of the donors' water thicknesses, nothing otherwise
             end
         end
 
@@ -987,7 +987,7 @@ get a Dirichlet row, `OTHER_BASIN`/`FROZEN_BED` cells get a frozen (`h` held at 
 row. `M` stays exactly symmetric: a `GROUNDED` cell's Dirichlet neighbours are eliminated by
 folding their known head into `rhs` rather than left as a one-sided matrix coupling, and the
 identity rows of `OTHER_BASIN`/`FROZEN_BED` and closed cells have zero columns too (their faces have
-`K = 0`). Under [`ImplicitUpwind`](@ref) the rows also get the Newton terms of the donors' water depths
+`K = 0`). Under [`ImplicitUpwind`](@ref) the rows also get the Newton terms of the donors' water thicknesses
 (`add_water_depth_newton!`), and `M` is no longer symmetric ([`LUDirectSolver`](@ref)).
 """
 function update_SALS_elliptic!(sals::SparseAssembledLinearSystem, s::State, g::Grid, p::ModelParameters, kfs::AbstractKFaceScheme, ds::AbstractDiffusionScheme = NoDiffusion(), gc::AbstractGapCoupling = ExplicitGapCoupling(), dt = 0, be_old = s.b_e)
@@ -1010,7 +1010,7 @@ end
 # Sibling of update_SALS_elliptic_kernel! for the matrix-free representation: fills
 # per-cell coefficients directly (aP/aE/aW/aN/aS), no nzval/idx* scatter
 # needed since there's no sparse matrix to address into. aE/aW/aN/aS are
-# stored as the raw positive face conductances -- stencil_matvec_kernel!
+# stored as the raw positive face transmissivities -- stencil_matvec_kernel!
 # below applies the minus sign when it uses them, matching the sign
 # convention update_SALS_elliptic_kernel! bakes directly into nzval.
 @parallel_indices (ix, iy) function update_MFLS_elliptic_kernel!(mask, aP, aE, aW, aN, aS, rhs, zb, h, K_x, K_y, A_visc, N, lc, mdot, melt_open, beta, abs_ub, ieb, dx2, dy2, p_atm, rho_w, rho_sw, rho_i, ggrav, n, n_minus_1, b, b_min, b_max, D_x, D_y, diffusion_on, po, N_min, N_max, stor, db_x, db_y, stor_up, Jw_x, Jw_y, newton_on, dx, dy, W, gc, bump, b_next, db_next, be_old, e_v, dt)
@@ -1080,7 +1080,7 @@ end
                             srhs + # englacial storage at the start of the step, zero for e_v = 0
                             dirichlet_rhs
                 add_sheet_top_source!(rhs, row, aE_ij, aW_ij, aN_ij, aS_ij, db_x, db_y, ix, iy) # SheetTopPotential: the known part of -div(K grad(b)), zero otherwise
-                add_water_depth_newton_mf!(newton_on, aP, aE, aW, aN, aS, rhs, row, Jw_x, Jw_y, h, ix, iy, nx, ny, dx, dy) # ImplicitUpwind: Newton terms of the donors' water depths, nothing otherwise
+                add_water_depth_newton_mf!(newton_on, aP, aE, aW, aN, aS, rhs, row, Jw_x, Jw_y, h, ix, iy, nx, ny, dx, dy) # ImplicitUpwind: Newton terms of the donors' water thicknesses, nothing otherwise
             end
         end
 
@@ -1125,10 +1125,9 @@ end
 # own docstring for why OCEAN/LAND get the same treatment as OTHER_BASIN/
 # FROZEN_BED here, unlike h's operator.
 #
-# Local (opening/closure) terms are evaluated explicitly, at the lagged b/N/
-# beta/lc (matching Eq. 17: only the spatial term is implicit) -- the exact
-# same RHS the per-cell gap update would use, just here it becomes the
-# right-hand side of a global solve instead of the final per-cell answer.
+# Local terms: melt is explicit, as in Eq. 17. Creep closure (C > 0) and
+# opening by sliding are implicit on the diagonal, unlike Eq. 17, which takes
+# them at the old b (see b_diffusion_local_terms below).
 """
 $(TYPEDSIGNATURES)
 
@@ -1325,7 +1324,7 @@ leaving the start-of-step gap `s.b` as it is, and each cell's slope in its own h
 ([`gap_iterate_slope_kernel!`](@ref)). Called by [`refresh_head_dependents!`](@ref) (at the initial guess, or by
 [`Picard_loop!`](@ref) itself outside `step!`, and after each head solve), once the melt and `D` are updated (with the melt of the previous iterate the head rows and the gap disagreed:
 Helheim at 500 m took 31 to 274 iterations per step instead of 6 to 19), and under [`ImplicitUpwind`](@ref) also right
-after `N`, for the conductance (Helheim with unfilled cavities: 106 iterations in 5 days instead of 227); a no-op for every
+after `N`, for the transmissivity (Helheim with unfilled cavities: 106 iterations in 5 days instead of 227); a no-op for every
 other gap coupling. The last call is at the converged head, so the step's own gap update ([`compute_b!`](@ref)) takes
 `b_next` without solving again. A step of `K` iterations solves the gap system `K + 1` times, `2K + 2` under
 `ImplicitUpwind` (plus one or two per donor polishing round).
@@ -1544,7 +1543,7 @@ $(TYPEDSIGNATURES)
 
 Iterative solve via preconditioned conjugate gradient (Krylov.jl's `cg!`) -- valid for the
 symmetric head matrix of every face scheme but [`ImplicitUpwind`](@ref) (`Simulation` refuses CG there).
-Diffusion with one conductance per face plus a diagonal that is never negative (open OCEAN/LAND faces,
+Diffusion with one transmissivity per face plus a diagonal that is never negative (open OCEAN/LAND faces,
 storage, the gap slope), with Dirichlet neighbours eliminated symmetrically, makes it positive
 semidefinite. It is positive definite when each connected group of grounded cells has a positive
 diagonal entry somewhere (see "Linear solvers" in Numerical details). Works over either linear-system representation
@@ -1582,7 +1581,7 @@ end
 # dispatch on LSy in solve_elliptic_linear_system! picks the right solve path.
 #
 # CG is valid here because the assembled operator (every K-face scheme but
-# ImplicitUpwind) is symmetric: diffusion with one conductance per face (see
+# ImplicitUpwind) is symmetric: diffusion with one transmissivity per face (see
 # compute_K_face), and Dirichlet (OCEAN/LAND) neighbours are eliminated
 # symmetrically (folded into rhs, see update_SALS_elliptic_kernel!/
 # update_MFLS_elliptic_kernel!) rather than left as a one-sided matrix coupling.

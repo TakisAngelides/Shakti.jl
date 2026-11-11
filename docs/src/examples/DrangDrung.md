@@ -87,7 +87,7 @@ Columns: ISSM (loaded from [Thota2026](@cite)), the ISSM reproduction (Shakti eq
     The ISSM setup with the default `ConsistentGapCoupling` in place of `ExplicitGapCoupling` closes
     the water budget (the water created per step is about `1e-12` of the input) and gives mean `N`
     0.65 MPa, a laminar sheet and a correlation of 0.80 with ISSM. `b_min` makes no difference
-    here: `1e-3` and `1e-6` give the same run, because the conductance is built from the water and
+    here: `1e-3` and `1e-6` give the same run, because the transmissivity is built from the water and
     not from the clamped gap. To reproduce ISSM itself, use `ExplicitGapCoupling`.
 
 !!! note "`b_min` on the default sheet"

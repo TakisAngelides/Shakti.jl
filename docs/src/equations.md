@@ -17,7 +17,7 @@ The model is two-dimensional in the horizontal coordinates ``\mathbf{x} = (x, y)
 | ``b`` | gap height (space between the bed and the ice base) | m | `b` |
 | ``h`` | reduced head, ``h = z_b + (W - b) + p_w / (\rho_w g)`` | m | `h` |
 
-and the derived fields are the water depth ``W`` (water volume per unit bed area, stored in the
+and the derived fields are the water thickness ``W`` (water volume per unit bed area, stored in the
 `State` field `W`), given by ``b`` and ``h`` through the closure below, and
 
 ```math
@@ -50,7 +50,7 @@ This one closure covers three regimes:
 | uplifted (ice lifted off the bed) | ``h > h_o`` | ``p_w = p_o``, ``N = 0`` | ``W = b + (h - h_o) > b`` |
 
 So the bounds ``0 \le p_w \le p_o`` hold, and once ``p_w`` reaches a bound, changes in ``h`` are
-changes in the water depth. `FilledCavities()` removes the lower bound and `NoUplift()` the upper one.
+changes in the water thickness. `FilledCavities()` removes the lower bound and `NoUplift()` the upper one.
 With both, Shakti's sheet is recovered: ``W = b`` and ``p_w = \rho_w g (h - z_b)`` without bounds,
 so ``N < 0`` (water above the overburden) and ``p_w < 0`` (suction) are both possible.
 
@@ -78,7 +78,7 @@ K = \frac{g\, W^3}{12 \nu \left(1 + \omega \,\mathrm{Re}\right)}, \qquad
 At small Reynolds numbers this is laminar Poiseuille flow between parallel plates. As ``\mathrm{Re}`` grows,
 the factor ``1 + \omega \mathrm{Re}`` takes the flux to the turbulent limit ``|\mathbf{q}| \propto |\nabla\hat{h}|^{1/2}``.
 So the same equations describe distributed and channelized drainage, without a separate channel
-network [Sommers2018](@cite). The transmissivity is built from the water depth ``W``, which equals
+network [Sommers2018](@cite). The transmissivity is built from the water thickness ``W``, which equals
 ``b`` in a filled gap, so an empty cavity carries no water. Since ``\mathrm{Re}`` depends on
 ``\mathbf{q}``, the two relations above make an implicit equation for ``|\mathbf{q}|``. Writing
 ``D = g W^3 |\nabla\hat{h}| / (12 \nu^2)``, the implicit equation is the quadratic equation
@@ -115,13 +115,13 @@ free-surface law is switched on with `fs_factor = 4` and `fs_omega = 2`. Each ce
 (duct) to 1 (free surface), and
 
 ```math
-K = \frac{g\, W^3 \left(1 + (f_K - 1)\, w\right)}{12 \nu \left(1 + \omega (1 + (f_\omega - 1)\, w)\,\mathrm{Re}\right)},
+K = \frac{g\, W^3 \left(1 + (f_K - 1)\, w\right)}{12 \nu \left(1 + \omega (1 + (f_{\omega} - 1)\, w)\,\mathrm{Re}\right)},
 ```
 
-with ``f_K`` = `fs_factor`, ``f_\omega`` = `fs_omega`. ``w = 0`` in filled and uplifted cells. In an unfilled cell ``w``
+with ``f_K`` = `fs_factor`, ``f_{\omega}`` = `fs_omega`. ``w = 0`` in filled and uplifted cells. In an unfilled cell ``w``
 rises with the empty depth ``e = z_b - h`` as a smoothstep, ``w = t^2 (3 - 2t)`` with ``t = \min(e / (\beta b), 1)``,
-``\beta`` = `fs_blend` (default 0.65). With ``\beta = 0`` the conductance jumps by ``f_K`` at ``h = z_b``; see
-[The free-surface switch](@ref) for why the ramp is at least 0.645 of the gap wide.
+``\beta`` = `fs_blend` (default 0.65). With ``\beta = 0`` the transmissivity jumps by ``f_K`` at ``h = z_b``; see
+[The free-surface switch](@ref FreeSurfaceSwitch) for why the ramp is at least 0.645 of the gap wide.
 
 ## Water mass balance
 
@@ -173,11 +173,11 @@ creep of the ice:
 The opening by sliding is that of a cavity in the lee of bumps of height ``b_r`` and spacing ``l_r``,
 
 ```math
-\beta(b) = \max\!\left(0,\; \frac{b_r^* - b}{l_r}\right), \qquad b_r^* = \max\!\left(0,\; b_r - (W - b)_+\right),
+\beta(b) = \max\!\left(0,\; \frac{\mathcal{B} - b}{l_r}\right), \qquad \mathcal{B} = \max\!\left(0,\; b_r - (W - b)_+\right),
 ```
 
-where ``b_r^*`` is the height of the bumps still in contact with the ice: ice lifted by a layer
-``W - b`` rides over the bumps lower than that layer. Without uplift ``b_r^* = b_r``. The creep length scale is ``l_c = b``.
+where ``\mathcal{B}`` is the height of the bumps still in contact with the ice: ice lifted by a layer
+``W - b`` rides over the bumps lower than that layer. Without uplift ``\mathcal{B} = b_r``. The creep length scale is ``l_c = b``.
 With the cutoff of [Felden2023](@cite) Eq. 7 (`b_c > 0`) it is ``l_c = b^2 / b_c`` for ``b \le b_c``
 and ``N > 0``, which slows the closure of thin gaps. At ``N < 0`` the creep term opens the gap.
 
@@ -185,10 +185,10 @@ The term in brackets is optional (`WithDiffusion`). It is the melting of channel
 dissipated in the channel, as in Suhmo [Felden2023](@cite) Eq. 10, with
 
 ```math
-\mathcal{D} = \frac{\min(W, b)}{\rho_i L} \left( Q_\mathrm{diss} + Q_\mathrm{sens} \right)_+ ,
+\mathcal{D} = \frac{\min(W, b)}{\rho_i L} \left( Q_{\mathrm{diss}} + Q_{\mathrm{sens}} \right)_+ ,
 ```
 
-where ``Q_\mathrm{diss}`` and ``Q_\mathrm{sens}`` are the two flow terms of the melt rate below.
+where ``Q_{\mathrm{diss}}`` and ``Q_{\mathrm{sens}}`` are the two flow terms of the melt rate below.
 
 ## Melt rate
 
@@ -196,17 +196,17 @@ The heat available at the bed melts the ice at the rate
 
 ```math
 L \dot m
-  = G
+  = Q_G
   + \underbrace{|\mathbf{u}_b \cdot \boldsymbol{\tau}_b|}_{Q_b}
-  \underbrace{- \rho_w g\, \mathbf{q} \cdot \nabla \hat{h}}_{Q_\mathrm{diss}}
-  + \underbrace{c_t c_w \rho_w\, \mathbf{q} \cdot \nabla p_w}_{Q_\mathrm{sens}}
-  - q_T ,
+  \underbrace{- \rho_w g\, \mathbf{q} \cdot \nabla \hat{h}}_{Q_{\mathrm{diss}}}
+  + \underbrace{c_t c_w \rho_w\, \mathbf{q} \cdot \nabla p_w}_{Q_{\mathrm{sens}}}
+  - Q_T ,
 ```
 
-with the geothermal flux ``G``, the frictional heat ``Q_b`` of sliding with basal shear stress
-``\boldsymbol{\tau}_b``, the heat ``Q_\mathrm{diss} = \rho_w g K |\nabla\hat{h}|^2 \ge 0`` dissipated by the
-flow, the sensible heat ``Q_\mathrm{sens}`` needed to keep the water at the pressure-melting point
-(which falls by ``c_t`` per Pascal), and the heat ``q_T`` conducted into the ice. We assume that water is always at its pressure-melting point temperature, so that water that flows
+with the geothermal heat flux ``Q_G``, the frictional heat ``Q_b`` of sliding with basal shear stress
+``\boldsymbol{\tau}_b``, the heat ``Q_{\mathrm{diss}} = \rho_w g K |\nabla\hat{h}|^2 \ge 0`` dissipated by the
+flow, the sensible heat ``Q_{\mathrm{sens}}`` needed to keep the water at the pressure-melting point
+(which falls by ``c_t`` per Pascal), and the conductive heat flux ``Q_T`` into the ice. We assume that water is always at its pressure-melting point temperature, so that water that flows
 towards lower pressure, ``\mathbf{q} \cdot \nabla p_w < 0``, is warmed to its rising melting point, which
 takes heat from melting. Each term can be turned off (`mdot_includes_*` in `ModelParameters`).
 ``\boldsymbol{\tau}_b`` comes from a sliding law in ``N`` and ``\mathbf{u}_b`` (table in
@@ -242,13 +242,13 @@ With ``e_v = 0`` the equation is elliptic in ``h`` at each time. It is nonlinear
 creep term, and because ``\mathrm{Re}`` and ``\dot m`` enter ``K`` and the right side. With
 ``\hat{h} = h`` it is the head equation of [Sommers2018](@cite).
 
-In an unfilled or uplifted cell the water depth and the gap height differ, ``W \ne b``, and the equation
+In an unfilled or uplifted cell the water thickness and the gap height differ, ``W \ne b``, and the equation
 changes in two ways.
 
 First, ``N`` is fixed (at ``p_o`` in an unfilled cell, at ``0`` in an uplifted one), so the creep term no
 longer depends on ``h``.
 
-Second, a storage term appears on the left. The water depth changes in time as
+Second, a storage term appears on the left. The water thickness changes in time as
 ``\partial W / \partial t = \partial b / \partial t + \partial (W - b) / \partial t``. The gap equation gives
 ``\partial b / \partial t``, and that part is what the equation above already contains. The second part,
 ``\partial (W - b) / \partial t``, is zero in a filled cell because ``W - b = 0``. It is not zero here, and the
@@ -259,7 +259,7 @@ The englacial term itself no longer depends on ``h`` there (see [Water mass bala
 unfilled cell and ``e_v\, \partial p_o / \partial t \,/\, (\rho_w g)``, a source of water, in an uplifted one.
 
 The head equation and the gap equation depend on each other's unknown, so they cannot be solved one after
-the other. The head equation needs the gap height ``b``, which sets the conductivity ``K``. The gap equation needs
+the other. The head equation needs the gap height ``b``, which sets the transmissivity ``K``. The gap equation needs
 the effective pressure ``N``, which is set by the head ``h`` through ``N = p_o - \rho_w g (h - z_b)``.
 [Discretization](@ref) shows how a time step solves them together.
 
@@ -270,9 +270,9 @@ boundary conditions:
 
 | Mask | Condition |
 |:-----|:----------|
-| `OCEAN` | ``h = z_b + \left(p_\mathrm{atm} - \rho_{sw} g \min(z_b, 0)\right) / (\rho_w g)``: the pressure of the ocean at the bed |
-| `LAND` | ``h = z_b + p_\mathrm{atm} / (\rho_w g)``: water leaves at atmospheric pressure |
-| `OTHER_BASIN` | no flux across the face, ``\mathbf{q}\cdot\mathbf{n} = 0``, i.e. ``\partial \hat{h} / \partial n = 0``; the cell is not solved, so its head ``h`` stays at its initial value for the whole run, which is the one of `LAND`, ``h = z_b + p_\mathrm{atm} / (\rho_w g)`` |
+| `OCEAN` | ``h = z_b + \left(p_{\mathrm{atm}} - \rho_{sw} g \min(z_b, 0)\right) / (\rho_w g)``: the pressure of the ocean at the bed |
+| `LAND` | ``h = z_b + p_{\mathrm{atm}} / (\rho_w g)``: water leaves at atmospheric pressure |
+| `OTHER_BASIN` | no flux across the face, ``\mathbf{q}\cdot\mathbf{n} = 0``, i.e. ``\partial \hat{h} / \partial n = 0``; the cell is not solved, so its head ``h`` stays at its initial value for the whole run, which is the one of `LAND`, ``h = z_b + p_{\mathrm{atm}} / (\rho_w g)`` |
 | `FROZEN_BED` | no flux across the face, ``\mathbf{q}\cdot\mathbf{n} = 0``, i.e. ``\partial \hat{h} / \partial n = 0``; the cell is not solved and holds no water: ``b = 0``, ``W = 0``, ``p_w = 0``, so ``h = z_b`` and ``N = p_o`` |
 | edge of the grid | no flux, ``\mathbf{q}\cdot\mathbf{n} = 0``, i.e. ``\partial \hat{h} / \partial n = 0`` |
 
@@ -290,16 +290,16 @@ The default values of `ModelParameters`:
 | ``g`` | `g` | 9.81 m s⁻² | gravity |
 | ``\nu`` | `nu` | 1.787 × 10⁻⁶ m² s⁻¹ | kinematic viscosity of water |
 | ``\omega`` | `omega` | 10⁻³ | laminar–turbulent transition [Sommers2018](@cite) |
-| ``f_K``, ``f_\omega``, ``\beta`` | `fs_factor`, `fs_omega`, `fs_blend` | 1, 1, 0.65 (off) | free-surface layer in unfilled cavities: conductance and ``\omega`` factors (4 and 2 for the free-surface law), ramp over ``\beta b`` of empty depth |
+| ``f_K``, ``f_{\omega}``, ``\beta`` | `fs_factor`, `fs_omega`, `fs_blend` | 1, 1, 0.65 (off) | free-surface layer in unfilled cavities: transmissivity and ``\omega`` factors (4 and 2 for the free-surface law), ramp over ``\beta b`` of empty depth |
 | ``n`` | `n` | 3 | Glen's law exponent |
 | ``L`` | `L` | 3.34 × 10⁵ J kg⁻¹ | latent heat of fusion |
 | ``b_r``, ``l_r`` | `br`, `lr` | 0.1 m, 2 m | bump height and spacing |
 | ``b_c`` | `b_c` | 0 (``l_c = b``) | creep cutoff [Felden2023](@cite) |
 | ``c_t``, ``c_w`` | `ct`, `cw` | 7.5 × 10⁻⁸ K Pa⁻¹, 4220 J kg⁻¹ K⁻¹ | change of melting point with pressure, heat capacity of water |
 | ``e_v`` | `e_v` | 0 | englacial void ratio |
-| ``p_\mathrm{atm}`` | `p_atm` | 0 Pa | pressure at `LAND` and of the sea surface |
-| ``b_\mathrm{min}``, ``b_\mathrm{max}`` | `b_min`, `b_max` | 10⁻⁶ m, ∞ | bounds on ``b`` |
-| ``N_\mathrm{min}``, ``N_\mathrm{max}`` | `N_min`, `N_max` | −∞, ∞ | bounds on ``N`` |
+| ``p_{\mathrm{atm}}`` | `p_atm` | 0 Pa | pressure at `LAND` and of the sea surface |
+| ``b_{\mathrm{min}}``, ``b_{\mathrm{max}}`` | `b_min`, `b_max` | 10⁻⁶ m, ∞ | bounds on ``b`` |
+| ``N_{\mathrm{min}}``, ``N_{\mathrm{max}}`` | `N_min`, `N_max` | −∞, ∞ | bounds on ``N`` |
 
-The fields ``z_b``, ``z_s``, ``\mathbf{u}_b``, ``A``, ``G``, ``q_T`` and ``i_{e\to b}`` are inputs, set in the
+The fields ``z_b``, ``z_s``, ``\mathbf{u}_b``, ``A``, ``Q_G`` (field `G`), ``Q_T`` (field `q_T`) and ``i_{e\to b}`` are inputs, set in the
 `State` (step 4 of the tutorial) or by a coupled ice-flow model.

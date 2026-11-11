@@ -28,7 +28,7 @@ struct ModelParameters{F <: AbstractFloat, NE1, NE2, NE3}
     e_v::F     # englacial storage void ratio
     T_freeze::F       # basal temperature relative to pressure melting (K): T_prime_b < T_freeze freezes a GROUNDED cell, used by update_frozen_mask! (frozen_bed.jl)
     T_hysteresis::F   # thaw threshold sits this far (K, >= 0) above T_freeze: a FROZEN_BED cell thaws once T_prime_b >= T_freeze + T_hysteresis; 0 => single threshold, no hysteresis
-    fs_factor::F      # laminar conductance of a free-surface (unfilled) layer relative to b^3 g/(12 nu): 1 = off (SHAKTI), 4 = g W^3/(3 nu) (free_surface_weight, water_flux.jl)
+    fs_factor::F      # laminar transmissivity of a free-surface (unfilled) layer relative to b^3 g/(12 nu): 1 = off (SHAKTI), 4 = g W^3/(3 nu) (free_surface_weight, water_flux.jl)
     fs_omega::F       # omega multiplier in a free-surface layer: 1 = off, 2 = the Reynolds number of the mirrored duct, 2|q|/nu
     fs_blend::F       # empty depth zb - h, as a fraction of the gap b, over which a cell goes from duct (weight 0) to free surface (weight 1); 0 = a jump at h = zb
     mdot_includes_G::Bool           # include the geothermal-flux term in compute_mdot! (see MeltTerms, melt_rate.jl)
@@ -115,9 +115,9 @@ four times the duct's `g W^3/(12 nu)` (`fs_factor = 4`), and the Reynolds number
 counts twice (`fs_omega = 2`) for the same wall friction. Fully turbulent, the flux is then `sqrt(2)` times the duct's at
 the same depth, as a force balance on the layer gives. `fs_blend` ramps a cell from duct to free surface over an empty
 depth `zb - h` of `fs_blend * b` (smoothstep). Below `fs_blend = 0.645` (for `fs_factor = 4`; `fs_blend_monotone`) the
-conductance falls as the head rises somewhere in the ramp, and a cell can have two steady states, one each side of
+transmissivity falls as the head rises somewhere in the ramp, and a cell can have two steady states, one each side of
 `h = zb`: with a jump (`fs_blend = 0`) the SHW12 ramp at 50 mm/d settled on 54, 84 or 117 unfilled cells depending on
-`dt`, each a steady state that a later change of `dt` kept. The default `0.65` keeps the conductance monotone and gave
+`dt`, each a steady state that a later change of `dt` kept. The default `0.65` keeps the transmissivity monotone and gave
 one state at every `dt` on the ramp and on Drang Drung, at about the Picard iterations of the duct law. See `free_surface_weight` (`water_flux.jl`).
 
 `mdot_includes_G`/`mdot_includes_frictional`/`mdot_includes_potential`/`mdot_includes_sensible`/
@@ -184,7 +184,7 @@ function ModelParameters(;
     T_hysteresis = 0.5, # K; 0 disables hysteresis (a cell hovering at the threshold can then freeze/thaw repeatedly, resetting b/pw each time)
     fs_factor = 1.0,
     fs_omega = 1.0,
-    fs_blend = 0.65, # >= fs_blend_monotone(4, 2) = 0.645: the conductance never falls as the head rises
+    fs_blend = 0.65, # >= fs_blend_monotone(4, 2) = 0.645: the transmissivity never falls as the head rises
     mdot_includes_G = true,
     mdot_includes_frictional = true,
     mdot_includes_potential = true,

@@ -293,7 +293,7 @@ Convergence test of the Picard loops on the largest head update `dh_max` [m]: re
 `dh_max / (h_max + eps) < tol`, or, when `atol > 0`, absolute, `dh_max < atol`. The relative test ties the accuracy to
 the glacier's elevation (h is the bed elevation plus the pressure head, about 4.5 km on Drang Drung, so `tol = 1e-6`
 allows about 4 mm of head and the step's mass residual scales with it); `atol` sets it in metres of head, which in a
-free-surface or uplifted cell is metres of water depth. On Drang Drung (ImplicitUpwind, one year) `atol = 1e-3`
+free-surface or uplifted cell is metres of water thickness. On Drang Drung (ImplicitUpwind, one year) `atol = 1e-3`
 converged every step at dt = 1 h and 1 day for about 40% more iterations than `tol = 1e-6`; `1e-4` failed steps.
 """
 @inline head_converged(dh_max, h_max, tol, atol) = atol > 0 ? dh_max < atol : dh_max / (h_max + eps(typeof(h_max))) < tol
@@ -371,7 +371,7 @@ end
 $(TYPEDSIGNATURES)
 
 Second convergence test of [`Picard_loop!`](@ref), on the water instead of the head: every `GROUNDED` cell's end-of-step
-water depth from its head row ([`compute_b_w_iterate!`](@ref)'s, with the current melt rate) must match the water its fluxes and sources
+water thickness from its head row ([`compute_b_w_iterate!`](@ref)'s, with the current melt rate) must match the water its fluxes and sources
 leave it, `W + dt (mdot/rho_w + ieb - div q)` (`W` the water at the start of the step) less the change of its englacial water
 (`p.e_v > 0`, from `s.b_e`) ([`update_water_budget!`](@ref)), or to `atol` metres of water when `atol > 0`. Relative, the
 residual is measured against the cell's own terms (its water then and before, and `dt` times its sources), to `tol` but
@@ -485,7 +485,7 @@ $(TYPEDSIGNATURES)
 
 Refreshes every state field that depends on the just-solved `h` (`pw`, `N`, `q`/`Re`, `taub`,
 `mdot`, `K`, and -- under [`WithDiffusion`](@ref) -- `D`) -- the tail shared by one elliptic Picard
-iteration ([`Picard_iteration!`](@ref)), once it has updated `h` by its linear solve. The water depth `b` is left untouched here in either case until we step out of the
+iteration ([`Picard_iteration!`](@ref)), once it has updated `h` by its linear solve. The water thickness `b` is left untouched here in either case until we step out of the
 head solve entirely and update `b` following Eq. 2 of
 https://gmd.copernicus.org/articles/11/2955/2018/.
 """
@@ -497,7 +497,7 @@ function refresh_head_dependents!(s::State, g::Grid, p::ModelParameters, mt::Mel
     compute_pw!(s, p) # update water pressure
     compute_dpwdxy!(s, g) # update the water pressure gradient in both x and y in one kernel, feeds the sensible-heat term (via compute_mdot! below)
     compute_N!(s, p, cnc) # update effective pressure (ice overburden pressure - pw)
-    kfs isa ImplicitUpwind && solve_gap_iterate!(gc, ds, s, g, p) # ConsistentGapCoupling under WithDiffusion: SUHMO's gap at the new N for the conductance (compute_b_w_iterate!); no-op otherwise
+    kfs isa ImplicitUpwind && solve_gap_iterate!(gc, ds, s, g, p) # ConsistentGapCoupling under WithDiffusion: SUHMO's gap at the new N for the transmissivity (compute_b_w_iterate!); no-op otherwise
 
     compute_face_flux!(s, p, kfs, gc) # face transmissivity K_x/K_y, flux q and Reynolds number Re on faces, lag-free and in one kernel -- K_x/K_y are exactly what the next linear solve assembles, so the solve and every flux diagnostic see the same flux (water_flux.jl)
     compute_Re!(s) # update the Reynold's number based on the Re_x and Re_y doing an average over the four faces of a grid cell

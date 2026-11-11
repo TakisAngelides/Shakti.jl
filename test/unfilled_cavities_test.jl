@@ -332,13 +332,13 @@
             @test abs(res[4, 4]) < 1e-9 * scale
         end
 
-        @testset "empty cavity neither carries nor draws water: conductance from the water depth" begin
+        @testset "empty cavity neither carries nor draws water: transmissivity from the water thickness" begin
             un = make_sim(UnfilledCavities())
             s = un.state
             s.b .= 1e-3
-            s.W .= 1e-3             # the conductance reads the water W
+            s.W .= 1e-3             # the transmissivity reads the water W
             s.W[3, 3] = 1e-4        # nearly dry
-            s.W[4, 3] = 0.0         # dry: no water, no conductance (no floor at b_min)
+            s.W[4, 3] = 0.0         # dry: no water, no transmissivity (no floor at b_min)
             Shakti.compute_b_w!(s, un.p)
             s.dhdx .= 0.0; s.dhdy .= 0.0 # no gradient: the upwind face takes the smaller cell
             @test s.b_w[3, 3] ≈ 1e-4
@@ -349,7 +349,7 @@
             @test s.K_x[3, 3] < s.K_x[3, 4] # (2,3)-(3,3) face (one cell nearly dry) vs a full-full face elsewhere
         end
 
-        @testset "Upwind face conductance: the donor cell sets it" begin
+        @testset "Upwind face transmissivity: the donor cell sets it" begin
             @test Shakti.face_mean(Upwind(), 1.0, 5.0, +1.0) == 5.0 # head higher at the high index: water leaves it
             @test Shakti.face_mean(Upwind(), 1.0, 5.0, -1.0) == 1.0
             @test Shakti.face_mean(Upwind(), 1.0, 5.0, 0.0) == 1.0  # no gradient: the smaller
@@ -378,7 +378,7 @@
                 Kf = s.K_x[4, 3] * (1 + p.omega * s.Re_x[4, 3])
                 @test Kf ≈ K0(donor_w) rtol = 1e-9
             end
-            # an arithmetic mean would let the empty cell discharge through its neighbour's conductance
+            # an arithmetic mean would let the empty cell discharge through its neighbour's transmissivity
             s.dhdx .= 0.0; s.dhdx[4, 3] = -1.0 # water leaves (3,3), the nearly empty cell
             Shakti.compute_face_flux!(s, p, Arithmetic())
             Karith = s.K_x[4, 3] * (1 + p.omega * s.Re_x[4, 3])

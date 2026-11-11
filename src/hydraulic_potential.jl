@@ -6,11 +6,11 @@
 # 2026, Eq. 7) keeps it: phi = rho_w g (zb + h_w) + pw, with pw the pressure at the top of the flowing
 # water and h_w its thickness. In Shakti's variables h_w = b in a filled cell, and in an unfilled cell
 # (unfilled_cavities.jl) Shakti's head is already h = zb - (b - W) = zb + W - b, W the
-# water depth. So in every regime
+# water thickness. So in every regime
 #     phi / (rho_w g) = h + b,
 # and the only term missing from the flux is -K grad(b). [`SheetTopPotential`](@ref) adds it: the flux
 # becomes q = -K grad(h + b), with b the gap at the start of the step (held fixed during the head solve).
-# Under ConsistentGapCoupling the conductance takes the end-of-step gap while this jump keeps the
+# Under ConsistentGapCoupling the transmissivity takes the end-of-step gap while this jump keeps the
 # start-of-step one: a lag of O(db per step) in the flux, so the water moved in a step is off by
 # O(dt^2), the same order as the backward-Euler error of the step itself; it vanishes at steady state. The head h keeps its meaning (bed-referenced), so pw, N and the unfilled
 # criterion are unchanged; only the driving gradient changes.

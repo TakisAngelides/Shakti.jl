@@ -3,10 +3,10 @@
 # =============================================================================
 # Where the gap opens faster than water can fill it, the extra volume is empty space holding no
 # water and the water pressure is atmospheric, p_w = 0 (Schoof, Hewitt & Werder 2012, JFM 702,
-# Part 1, Sec. 4.1, region Omega^e: water depth h_w < gap height h; Wells et al. 2026, GlaDS-2,
+# Part 1, Sec. 4.1, region Omega^e: water thickness h_w < gap height h; Wells et al. 2026, GlaDS-2,
 # Eq. 1-4 for a single closure covering all regimes). Shakti's legacy equations assume the gap is
 # always full of water, which forces N above the overburden (p_w < 0) wherever sliding opens the
-# gap faster than inflow, conductance and creep closure can follow.
+# gap faster than inflow, transmissivity and creep closure can follow.
 #
 # `State.W` holds the water per unit bed area [m], so the empty part of the gap is `b - W` (`empty_gap`). Under
 # FilledCavities (SHAKTI's original sheet) nothing changes and the gap is full, `W = b`.
@@ -35,7 +35,7 @@ The gap may be partly empty (free-surface regime, `p_w = 0`), see this file's he
 cell whose head falls below the bed takes the unfilled head row (`cavity_head_terms`,
 `linear_solver.jl`): `N = po`, and the empty depth `zb - h` is the cell's storage. The water `State.W` comes
 from the water budget after the gap update ([`update_water_budget!`](@ref)), the empty part of the gap is `b - W`,
-the face conductances use the water depth `W` ([`compute_b_w!`](@ref)), and `p_w` is
+the face transmissivities use the water thickness `W` ([`compute_b_w!`](@ref)), and `p_w` is
 floored at 0. The default of [`Simulation`](@ref) (with [`IceUplift`](@ref): the GlaDS-2 sheet).
 """
 struct UnfilledCavities <: AbstractCavityFilling end
@@ -68,17 +68,17 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Water depth `s.b_w = W` as the step starts (`s.W`, the water present: the gap less its empty part under
+Water thickness `s.b_w = W` as the step starts (`s.W`, the water present: the gap less its empty part under
 [`UnfilledCavities`](@ref) or the dry volume the `b_min` clamp keeps under the filled dry floor, plus the lifted layer
-under [`IceUplift`](@ref)), never below 0; exactly `b` under SHAKTI's original sheet. The face conductances ([`compute_face_flux!`](@ref)) are built from it, so
+under [`IceUplift`](@ref)), never below 0; exactly `b` under SHAKTI's original sheet. The face transmissivities ([`compute_face_flux!`](@ref)) are built from it, so
 an empty cavity neither carries nor draws water. No floor at `min(b, p.b_min)`: a dry cell (`W = 0`)
-that kept that conductance drained water it did not have wherever its head stayed above a neighbour's
+that kept that transmissivity drained water it did not have wherever its head stayed above a neighbour's
 (a margin cell on a slope next to `LAND`), and [`update_water_budget!`](@ref)'s floor `W >= 0` then
 created it: 1.4 m^3/s on Drang Drung at 25 m, 21 times the melt input. Without the floor a dry cell's
 outflow vanishes with its water; its row stays regular through the unfilled storage `1/dt`
 (`cavity_head_terms`), or is a closed cell's once all its faces carry no water. It is the water present at the start of the step,
 not at the current head iterate: like `b` in the legacy equations it stays fixed during the Picard
-loop. That lag makes the water-depth dependence of the flux explicit in time where the water depth is
+loop. That lag makes the water-depth dependence of the flux explicit in time where the water thickness is
 free (an unfilled or uplifted cell): a step longer than the time such a cell takes to fill or drain,
 about `dx*W/(3|q|)` (minutes at 100 m for a thin free-surface layer), overshoots, and the solution
 oscillates from step to step or Picard cycles. Taking the depth at the head iterate in a plain Picard
@@ -90,22 +90,22 @@ the end-of-step depth together with the Newton terms of its dependence on the he
 compute_b_w!(s::State, p::ModelParameters) = (@parallel compute_b_w_kernel!(s.b_w, s.W); s)
 
 # The gap at the end of the step that the head rows assume (linear_solver.jl): the start-of-step gap under
-# ExplicitGapCoupling (the original scheme, which lags the gap in the conductance), the gap scheme's update G(N) under
+# ExplicitGapCoupling (the original scheme, which lags the gap in the transmissivity), the gap scheme's update G(N) under
 # ConsistentGapCoupling (SchemeGapUpdate), with its slope in the head dG/dh = -rho_w g dG/dN (central difference, as in
 # scheme_head_terms) where N follows the head (a filled cell).
-# Under the dry floor (dry_floor, run.jl) the conductance takes the water the update leaves (scheme_water of W), not the gap held
-# at b_min: a drained cell conducting at K(b_min) relayed its neighbours' water at a flat head, lost its storage slope
+# Under the dry floor (dry_floor, run.jl) the transmissivity takes the water the update leaves (scheme_water of W), not the gap held
+# at b_min: a drained cell keeping K(b_min) relayed its neighbours' water at a flat head, lost its total water thickness slope
 # (dG/dN -> 0 as W -> 0) and drove p_w to -3 po on Drang Drung (b_min = 1e-3), a state it never left. With K from W the
 # results no longer depend on b_min (b_min = 1e-3 matches b_min = 1e-6 to all printed digits there).
 # DiffusiveGapUpdate (WithDiffusion): its gap update is a global solve, so each cell takes the gap of the last solve,
-# State.b_next, and its slope State.db_next (DiffusiveCellGap). The head rows store that gap; the conductance takes the
+# State.b_next, and its slope State.db_next (DiffusiveCellGap). The head rows store that gap; the transmissivity takes the
 # smaller of it and the start-of-step gap: lagged where the gap opens (a melt opening at the iterate would close the loop
 # W -> K -> q -> mdot -> W inside the Picard iteration, see store_start_of_step_melt!), the row's own water where it closes
-# (an unfilled cell then conducts no more water than its row holds).
+# (an unfilled cell then passes on no more water than its row holds).
 struct DiffusiveCellGap{F} <: AbstractGapCoupling
     bn::F          # State.b_next
     gbn::F         # State.db_next
-    conduct::Bool  # for the conductance (min with the start-of-step gap) or for the head row's water (water_converged)
+    conduct::Bool  # for the transmissivity (min with the start-of-step gap) or for the head row's water (water_converged)
 end
 @inline iterate_gap(gc::AbstractGapCoupling, bump, bn, gbn, conduct) = cell_gap(gc, bump)
 @inline iterate_gap(::DiffusiveGapUpdate{F}, bump, bn, gbn, conduct) where F = DiffusiveCellGap{F}(bn, gbn, conduct)
@@ -123,7 +123,7 @@ end
     return rho_w * ggrav * max(zero(b), (Gm - Gp) / (2δ))
 end
 
-# The end-of-step water depth of a cell at head h and its slope dW/dh, by regime (compute_b_w_iterate!): never below 0.
+# The end-of-step water thickness of a cell at head h and its slope dW/dh, by regime (compute_b_w_iterate!): never below 0.
 @inline function iterate_water(gcc, bb, wo, h, z, po, Nv, stor, stor_up, b_min, b_max, rho_w, ggrav, mo, beta, abs_ub, A, rho_i, n_minus_1)
     x  = h - z                     # pressure head
     xo = po / (rho_w * ggrav)      # pressure head at the overburden
@@ -137,7 +137,7 @@ end
         W = end_of_step_gap(gcc, bb, wo, b_min, b_max, mo, beta, abs_ub, A, Nv, rho_i, n_minus_1)
         slope = end_of_step_gap_slope(gcc, bb, wo, b_min, b_max, mo, beta, abs_ub, A, Nv, rho_i, n_minus_1, rho_w, ggrav)
     end
-    return W > 0 ? (W, slope) : (zero(bb), zero(bb)) # no water, no conductance (compute_b_w!)
+    return W > 0 ? (W, slope) : (zero(bb), zero(bb)) # no water, no transmissivity (compute_b_w!)
 end
 
 @parallel_indices (ix, iy) function compute_b_w_iterate_kernel!(b_w, dbw_dh, b, h, zb, po, N, stor, stor_up, b_min, b_max, rho_w, ggrav, gc, melt_open0, melt_open, beta, abs_ub, A_visc, rho_i, n_minus_1, W, bump, b_next, db_next)
@@ -155,17 +155,17 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Water depth at the end of the step as a function of the current head iterate, for [`ImplicitUpwind`](@ref), and its slope
+Water thickness at the end of the step as a function of the current head iterate, for [`ImplicitUpwind`](@ref), and its slope
 `s.dbw_dh = dW/dh`. With the gap `G` the head rows assume for the end of the step (`gc`): `W = G(p_o) - (zb - h)` where the
 gap may be partly empty (`s.stor > 0`, [`UnfilledCavities`](@ref)) and `h < zb`, `W = G(0) + (h - h_o)` where the ice may be
 lifted (`s.stor_up > 0`, [`IceUplift`](@ref)) and `h > h_o`, `W = G(N)` otherwise, never below 0 (no floor, see [`compute_b_w!`](@ref)). These are
 the head rows' own water: the depth they conserve (with the melt opening of `G` from the start of the step,
 `store_start_of_step_melt!`, or at the iterate where that gives less water). Under [`ExplicitGapCoupling`](@ref) `G` is the start-of-step gap `b`
 (the head rows add the gap change only to the water budget), so a filled cell's depth is `b` with slope 0 (the gap is lagged
-in its conductance, as in the original scheme) and the unfilled and uplifted depths move one to one with the head. Under
-[`ConsistentGapCoupling`](@ref) `G` is the gap scheme's own update: the conductance of every cell then uses the end-of-step
-water depth, a filled cell's with slope `rho_w g |dG/dN|`, and the coupled head-gap step is implicit (no lag of the gap in
-the conductance either). Both are continuous across the regimes and equal `b` exactly under [`FilledCavities`](@ref),
+in its transmissivity, as in the original scheme) and the unfilled and uplifted depths move one to one with the head. Under
+[`ConsistentGapCoupling`](@ref) `G` is the gap scheme's own update: the transmissivity of every cell then uses the end-of-step
+water thickness, a filled cell's with slope `rho_w g |dG/dN|`, and the coupled head-gap step is implicit (no lag of the gap in
+the transmissivity either). Both are continuous across the regimes and equal `b` exactly under [`FilledCavities`](@ref),
 [`NoUplift`](@ref) and [`ExplicitGapCoupling`](@ref).
 """
 compute_b_w_iterate!(s::State, p::ModelParameters, gc::AbstractGapCoupling = ExplicitGapCoupling()) =
@@ -174,16 +174,16 @@ compute_b_w_iterate!(s::State, p::ModelParameters, gc::AbstractGapCoupling = Exp
 """
 $(TYPEDSIGNATURES)
 
-Keeps the melt opening at the start of the step (`s.melt_open0`, from `s.melt_open`), for the end-of-step gap in the conductance of
+Keeps the melt opening at the start of the step (`s.melt_open0`, from `s.melt_open`), for the end-of-step gap in the transmissivity of
 [`ImplicitUpwind`](@ref) ([`compute_b_w_iterate!`](@ref)); a no-op for every other K-face scheme. That gap takes its melt
 opening `dt*mdot/rho_i` from the start of the step and only its creep closure from the head iterate: the dissipation melt
 grows with the flux, so a melt opening at the iterate would close the loop `W -> K -> q -> mdot -> W` inside the Picard
 iteration, a positive feedback (the growth of a channel) with a gain of order `dt*(3/W)*mdot/rho_i`, which the iteration
 cannot follow at large `dt` (seen on a 3 m^3/s moulin at dt = 3 h). The head rows keep the melt at the iterate, so the water
-balance and its consistency with the gap update are unaffected; only the conductance lags the melt by one step, as the
-original scheme lags the whole gap. Where the melt falls within the step the conductance takes the head row's own water,
+balance and its consistency with the gap update are unaffected; only the transmissivity lags the melt by one step, as the
+original scheme lags the whole gap. Where the melt falls within the step the transmissivity takes the head row's own water,
 which is then the smaller ([`compute_b_w_iterate!`](@ref)): with the start-of-step melt a nearly empty cell kept a
-conductance for water its row had already drained below zero, and the floor of [`update_water_budget!`](@ref) made up
+transmissivity for water its row had already drained below zero, and the floor of [`update_water_budget!`](@ref) made up
 the difference (Helheim at 500 m, dt = 1 day, cold start: the dissipation melt halved within the step, a gap 1.7 mm
 larger, 9e-4 of the melt created, and the step never passed [`water_converged`](@ref)).
 """
@@ -220,7 +220,7 @@ end
         if stor_up[ix, iy] > 0
             hp <= ho && hn > ho && (hn = ho + ins) # filled -> uplifted
             hp > ho && hn < ho && (hn = ho)        # uplifted -> filled
-            hp > ho && (hn = min(hn, hp + (bc + hp - ho))) # within uplifted: the water depth at most doubles per iteration
+            hp > ho && (hn = min(hn, hp + (bc + hp - ho))) # within uplifted: the water thickness at most doubles per iteration
         end
         if (land || ocean) && mask[ix, iy] == GROUNDED # outflow-only LAND/OCEAN faces (compute_face_masks!): open while h + b >= the boundary head (b: the face's gap jump, SheetTopPotential)
             ix > 1          && closes_inflow(mask[ix-1, iy], land, ocean) && (hn = stop_at_boundary_head(hn, hp, h[ix-1, iy] - db_x[ix, iy], ins))
@@ -253,7 +253,7 @@ kilometres. Without the cap the iteration jumped between the bed and the overbur
 under 1.5 to 3 km of ice, dt = 1 h: 500 of 500 iterations from step 5, and the water budget off by 10 to 100 times the
 melt; with the cap 3 to 16 iterations at dt = 1 h and 1 day), and a cold start of the dry floor diverged at the first step
 (Greenland and Antarctica 16 km, Thwaites 2 km at `dt = 1 h`): the first linear solve pushes the melt through the floor's
-conductance, the head overshoots past the overburden, the gap sits at `b_max`, opening no longer takes up the melt, and the
+transmissivity, the head overshoots past the overburden, the gap sits at `b_max`, opening no longer takes up the melt, and the
 dissipation melt feeds itself to NaN. With the cap every step converged on all three at `dt = 1 h` (30 days), `6 h` and
 `24 h` (90 days), in at most about 30 iterations. Relative to `N`, the cap moves the high-suction cells (`N` up to
 thousands of times `po`) geometrically: half the overburden head instead left the first step of Antarctica and Thwaites
@@ -272,19 +272,19 @@ on the same fixture in 66 iterations, and the linear bound left that step unconv
 
 **Regime stops** (wherever `stor > 0`, [`UnfilledCavities`](@ref), or `stor_up > 0`, [`IceUplift`](@ref)): an iterate
 that crosses a regime boundary (the bed `zb` between the unfilled and filled rows, the overburden head `h_o` between the
-filled and uplifted rows) stops just inside the new regime. The head row's storage slope jumps at these boundaries, from
-`1/dt` (an unfilled or uplifted cell, plus the Newton terms of its water depth) to the creep derivative of a filled cell
+filled and uplifted rows) stops just inside the new regime. The head row's total water thickness slope jumps at these boundaries, from
+`1/dt` (an unfilled or uplifted cell, plus the Newton terms of its water thickness) to the creep derivative of a filled cell
 (orders of magnitude smaller, and zero at `N = 0`), so one Newton step from the filled side lands far into the other
-regime, where the water depth hits its floor and the Newton terms vanish, and the next step lands far back: the iteration
+regime, where the water thickness hits its floor and the Newton terms vanish, and the next step lands far back: the iteration
 cycles (seen on SHW12 at dt = 1 h). From a point at the boundary the row is convex on the unfilled and uplifted side and
 concave on the filled side, so Newton then approaches the root without crossing back. The same remedy as the "chopping"
 of phase transitions in fully implicit reservoir simulators. Inside the unfilled and uplifted regimes the step is limited
-too, as reservoir simulators limit the saturation change per Newton iteration: an uplifted cell's water depth at most
+too, as reservoir simulators limit the saturation change per Newton iteration: an uplifted cell's water thickness at most
 doubles per iteration, and the head of an unfilled cell sinks below the bed at most twice as deep per iteration, or by 3/4
-of the gap if that is more (the gap empties in two iterations; below `zb - b` the water depth is at its floor and the head
+of the gap if that is more (the gap empties in two iterations; below `zb - b` the water thickness is at its floor and the head
 of a dry cell reaches its value, which can be tens of metres below the bed, in about fifteen iterations). The factor 2
 costs no time against 4 on Drang Drung (dt = 1 h to 1 day) and gives the same solution; at 8 a dt = 1 day run fails (a
-singular head matrix after a runaway step). Without it, a Newton step from a thin layer, where the conductance and its
+singular head matrix after a runaway step). Without it, a Newton step from a thin layer, where the transmissivity and its
 Newton terms are small, can land kilometres away (seen on Drang Drung at dt = 1 h: one cell 1.1 km below the bed, then a
 neighbour 67 km above the overburden, then overflow).
 

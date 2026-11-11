@@ -20,7 +20,7 @@
 # The filled and unfilled rows get the source (W_old - b_old)/dt: water lifted last step is released first.
 # The row is chosen from the previous Picard iterate (h > h_o), as for the unfilled row; its diagonal 1/dt
 # replaces the creep derivative, which vanishes at N = 0. The flux through an uplifted cell uses the water
-# layer W for its conductance, and its head h = h_o + (W - b) already contains the thickness of
+# layer W for its transmissivity, and its head h = h_o + (W - b) already contains the thickness of
 # the lifted water (with SheetTopPotential the potential is h + b, GlaDS-2 Eq. 7 exactly).
 #
 # State.stor_up = 1/dt marks cells where uplift is allowed (GROUNDED under IceUplift, 0 otherwise: the

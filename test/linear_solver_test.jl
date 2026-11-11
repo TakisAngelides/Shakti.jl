@@ -64,7 +64,7 @@
         @test issymmetric(sals.M)
 
         # SALS bakes the minus sign for off-diagonal (neighbor) entries
-        # directly into nzval; MFLS stores the raw positive face conductance
+        # directly into nzval; MFLS stores the raw positive face transmissivity
         # and the minus sign is applied later, in the matvec -- so the
         # diagonal compares directly, but each off-diagonal comparison needs
         # a sign flip.

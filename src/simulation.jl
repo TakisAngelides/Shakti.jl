@@ -157,7 +157,7 @@ $(TYPEDSIGNATURES)
 A sheet: the four choices that together make one physical model of the water at the bed, passed to
 [`Simulation`](@ref) as `sheet`. Build one with [`GlaDS2Sheet`](@ref) (the default) or [`ShaktiSheet`](@ref); a
 `Simulation` keyword (`cavity_filling`, `uplift`, `hydraulic_potential`, `gap_coupling`) overrides its field.
-The face conductance is not part of the sheet: it follows from the cavity filling and uplift (`k_face_choice`).
+The face transmissivity is not part of the sheet: it follows from the cavity filling and uplift (`k_face_choice`).
 """
 struct Sheet{CF <: AbstractCavityFilling, UP <: AbstractIceUplift, HP <: AbstractHydraulicPotential, GCP <: AbstractGapCoupling}
     cf::CF
@@ -207,21 +207,21 @@ warns once per session), one row `(applies, level, message)` each. `applies` and
 """
 const OPTION_RULES = (
     # An averaged face lets an unfilled cell's outflow outgrow its water: the arithmetic mean gives a dry cell half its
-    # neighbour's conductance, and the water it then delivers is created by the W >= 0 floor of update_water_budget!
+    # neighbour's transmissivity, and the water it then delivers is created by the W >= 0 floor of update_water_budget!
     # (Thwaites 2 km, uplift, dt = 1 h: 1.7e7 m^3/s after 12 h against 500 m^3/s of melt, lifting the ice by hundreds of
     # metres). The harmonic mean closes every face of a dry cell, so it never wets again.
     (o -> o.free_surface && (o.kfs isa Arithmetic || o.kfs isa GapMean || o.kfs isa Harmonic), :error,
      o -> "k_face_choice = \"$(k_face_name(o.kfs))\" with $(sheet_name(o)) does not conserve water: " *
-          ((o.kfs isa Arithmetic || o.kfs isa GapMean) ? "a dry cell discharges through half its neighbour's conductance and the water it lacks is created. " :
-                                  "a dry cell's faces have no conductance, so it never refills. ") *
+          ((o.kfs isa Arithmetic || o.kfs isa GapMean) ? "a dry cell discharges through half its neighbour's transmissivity and the water it lacks is created. " :
+                                  "a dry cell's faces have no transmissivity, so it never refills. ") *
           "Use \"implicit_upwind\" (the default), or cavity_filling = FilledCavities(), uplift = NoUplift() for SHAKTI's original filled sheet."),
-    # "upwind" lags the water depth: correct, but stable only for dt < dx*W/(3|q|), minutes at 100 m (at 3 h a non-finite
+    # "upwind" lags the water thickness: correct, but stable only for dt < dx*W/(3|q|), minutes at 100 m (at 3 h a non-finite
     # gap in step 1 without uplift, 500 Picard iterations and b = 1.7 m with it); it is kept, with a warning, as the only
     # free-surface face for the symmetric solvers (Cholesky, CG, matrix-free).
     (o -> o.free_surface && o.kfs isa Upwind && !o.k_face_default, :warn,
-     o -> "k_face_choice = \"upwind\" with $(sheet_name(o)) lags the water depth: stable only for dt < dx*W/(3|q|) (minutes at 100 m), " *
+     o -> "k_face_choice = \"upwind\" with $(sheet_name(o)) lags the water thickness: stable only for dt < dx*W/(3|q|) (minutes at 100 m), " *
           "above which the gap overshoots or the Picard iteration cycles. Use \"implicit_upwind\" (the default) at longer dt."),
-    # The Newton terms of the donors' water depths make the head matrix non-symmetric (add_water_depth_newton!).
+    # The Newton terms of the donors' water thicknesses make the head matrix non-symmetric (add_water_depth_newton!).
     (o -> o.kfs isa ImplicitUpwind && !(hasproperty(o.ps, :ls) && supports_nonsymmetric(o.ps.ls)), :error,
      o -> "k_face_choice = \"implicit_upwind\"" * (o.k_face_default ? " (the default with $(sheet_name(o)))" : "") *
           " assembles a non-symmetric head matrix: it needs a PicardSolver with LUDirectSolver(grid), CUDSSDirectSolver(grid) " *
@@ -241,25 +241,25 @@ const OPTION_RULES = (
      o -> "N_min > 0, N_max < Inf or a CellNClamping bound tighter than [0, Inf) with $(sheet_name(o)) contradicts the unfilled " *
           "(N = po) and uplifted (N = 0) head rows. These sheets bound N by po - pw already; for a floor on N use IceUplift " *
           "(water above the overburden lifts the ice), or use the filled sheet (FilledCavities(), NoUplift())."),
-    # implicit_upwind faces on the filled dry floor with the explicit gap update: the donors' water depths follow the
+    # implicit_upwind faces on the filled dry floor with the explicit gap update: the donors' water thicknesses follow the
     # gap, which the explicit update lets overshoot. On the stuck-cells fixture b reaches 2 km in step 3 and 3e11 m in
     # step 4 (check_gap_height stops it); FullyImplicitGapScheme keeps it at 0.2 m.
     (o -> o.kfs isa ImplicitUpwind && o.gs isa ExplicitGapScheme && o.cf isa FilledCavities && o.up isa NoUplift &&
           o.gcp isa ConsistentGapCoupling && o.ds isa NoDiffusion, :warn_once,
      o -> "k_face_choice = \"implicit_upwind\" on the filled sheet's dry floor with ExplicitGapScheme can run away: the explicit " *
-          "gap update overshoots the water depths the faces conduct by. Use FullyImplicitGapScheme (the default)."),
+          "gap update overshoots the water thicknesses that set the transmissivity of the faces. Use FullyImplicitGapScheme (the default)."),
     # The free-surface layer is the water of an unfilled cavity (s.stor > 0, free_surface_weight): other sheets have none.
     (o -> free_surface_on(o.p) && !(o.cf isa UnfilledCavities), :warn,
      o -> "fs_factor/fs_omega != 1 with $(sheet_name(o)) has no effect: the free-surface layer is the water of an unfilled " *
           "cavity, which needs cavity_filling = UnfilledCavities()."),
-    # A ramp narrower than fs_blend_monotone lets the conductance fall as the head rises, and a cell can have two steady
+    # A ramp narrower than fs_blend_monotone lets the transmissivity fall as the head rises, and a cell can have two steady
     # states. On the SHW12 ramp (m = 50 mm/d) a jump (fs_blend = 0) left 54 cells unfilled at dt = 10 min, 57-60 at 1 h,
     # 117 at 6 h and 84-90 at 1 day, each steady (|dh/dt| < 1e-10 m/d) and kept when dt changed; fs_blend = 0.5 and the
     # default 0.65 gave 54 on every path, and 0.65 gave the same state at 1 h and 1 day on Drang Drung.
     (o -> free_surface_on(o.p) && o.cf isa UnfilledCavities && o.p.fs_blend < fs_blend_monotone(o.p.fs_factor, o.p.fs_omega), :warn_once,
-     o -> "fs_blend = $(o.p.fs_blend) < $(round(fs_blend_monotone(o.p.fs_factor, o.p.fs_omega); digits = 3)) lets the conductance " *
+     o -> "fs_blend = $(o.p.fs_blend) < $(round(fs_blend_monotone(o.p.fs_factor, o.p.fs_omega); digits = 3)) lets the transmissivity " *
           "of an unfilled cell fall as its head rises near h = zb: a cell can then have two steady states, one each side of " *
-          "h = zb, and which one a run reaches can depend on dt. A wider fs_blend keeps the conductance monotone."),
+          "h = zb, and which one a run reaches can depend on dt. A wider fs_blend keeps the transmissivity monotone."),
 )
 
 """
@@ -346,7 +346,7 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
 - `k_face_choice`: `"arithmetic"`, `"harmonic"`, `"gap_mean"` ([`GapMean`](@ref)), `"upwind"` or `"implicit_upwind"`, or the scheme itself (`Arithmetic()`,
   `ImplicitUpwind()`, ...; see [`AbstractKFaceScheme`](@ref));
   by default `"implicit_upwind"` under [`UnfilledCavities`](@ref) or [`IceUplift`](@ref) (so with the default sheet),
-  `"arithmetic"` otherwise. Where the water depth is free (a free surface or an uplift layer) the flux is a kinematic
+  `"arithmetic"` otherwise. Where the water thickness is free (a free surface or an uplift layer) the flux is a kinematic
   wave in it, `q ~ K(W)*grad(zb)`; with `W` lagged to the start of the step a face mean is unstable (explicit central
   advection) at any `dt`, and `"upwind"` is stable only for `dt < dx*W/(3|q|)` (minutes at 100 m).
   `"implicit_upwind"` ([`ImplicitUpwind`](@ref)) takes `W` at the end of the step and is stable at any `dt`; it needs
@@ -378,7 +378,7 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
   [`ConsistentGapCoupling`](@ref) (they assume the change the gap scheme itself makes, so the head equation and the gap update
   store the same water at any `dt`; needed with the fully implicit gap scheme when `dt*A*|N|^(n-1)*N` is not
   small, and with [`UnfilledCavities`](@ref)/[`IceUplift`](@ref) at large `dt`). Default: `ConsistentGapCoupling()`. Pass `ExplicitGapCoupling()` to reproduce results from before this default. With
-  `"implicit_upwind"` the conductance then also takes the end-of-step gap, so the head-gap step is implicit throughout.
+  `"implicit_upwind"` the transmissivity then also takes the end-of-step gap, so the head-gap step is implicit throughout.
   With [`WithDiffusion`](@ref) (SUHMO) `ConsistentGapCoupling()` solves the coupled gap system at every Picard iteration
   (`DiffusiveGapUpdate`), one extra linear solve per iteration (two with `"implicit_upwind"`), with any cavity
   filling and uplift.
@@ -430,9 +430,9 @@ function Simulation(grid, state, tsteps, dt, p, mi::AbstractMeltInput, sl::Abstr
     # factor in creep_length's cutoff branch, see gap_height.jl) is nonzero.
     cls = iszero(p.b_c) ? StandardCreep() : CreepCutoff()
 
-    # K-face averaging scheme setup. Unfilled cavities need the donor-cell (upwind) face conductance, see Upwind
-    # (k_face_scheme.jl): with an average, a nearly empty cell discharges through its neighbour's much larger conductance.
-    # Under a free surface the implicit water depth is the default; averaged faces are refused there (OPTION_RULES).
+    # K-face averaging scheme setup. Unfilled cavities need the donor-cell (upwind) face transmissivity, see Upwind
+    # (k_face_scheme.jl): with an average, a nearly empty cell discharges through its neighbour's much larger transmissivity.
+    # Under a free surface the implicit water thickness is the default; averaged faces are refused there (OPTION_RULES).
     free_surface = cavity_filling isa UnfilledCavities || uplift isa IceUplift
     k_face_default = k_face_choice === nothing
     kfs = k_face_scheme(k_face_default ? (free_surface ? ImplicitUpwind() : Arithmetic()) : k_face_choice)

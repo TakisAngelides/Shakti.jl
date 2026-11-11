@@ -195,11 +195,36 @@
             for (i, j) in ((2, 3), (4, 3), (3, 2), (3, 4))
                 T_prime_b[i, j] = -5.0                     # freeze the four neighbours of (3, 3)
             end
+            W0 = Array(state.W)
             r = update_frozen_mask!(state, p, T_prime_b)
             @test r.n_frozen == 4 && r.n_isolated == 1
             @test state.mask[3, 3] == FROZEN_BED && state.b[3, 3] == 0
+            @test W0[3, 3] > 0
+            @test r.discarded_b ≈ W0[2, 3] + W0[4, 3] + W0[3, 2] + W0[3, 4] + W0[3, 3] # the isolated cell's water counts too
             @test freeze_isolated!(state, p) == 0          # nothing left to isolate
             @test state.mask[2, 2] == GROUNDED             # a corner neighbour keeps its other drainage
+        end
+
+        @testset "englacial water is discarded and reported with the cell, and starts at zero on thaw" begin
+            mask = base_mask()
+            state = State(grid)
+            set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub_y, ieb, taub_x, taub_y)
+            state.b_e .= 0.2                               # as if e_v > 0: only the bookkeeping is tested here
+            W0 = Array(state.W)
+            T_prime_b = zeros(nx, ny); T_prime_b[3, 3] = -5.0
+            r = update_frozen_mask!(state, p, T_prime_b)
+            @test r.n_frozen == 1 && r.n_isolated == 0
+            @test r.discarded_b ≈ W0[3, 3] + 0.2
+            @test state.b_e[3, 3] == 0 && state.b_e[2, 3] == 0.2
+            state.b_e[3, 3] = 0.3                          # thawing must not keep a stale value
+            T_prime_b[3, 3] = 5.0
+            @test update_frozen_mask!(state, p, T_prime_b).n_thawed == 1
+            @test state.b_e[3, 3] == 0
+            new = copy(state.mask); new[2, 3] = OTHER_BASIN
+            W1 = Array(state.W)
+            r = set_mask!(state, p, new)
+            @test r.n_off == 1 && r.discarded_b ≈ W1[2, 3] + 0.2
+            @test state.b_e[2, 3] == 0
         end
 
         @testset "sliding is kept on faces next to non-GROUNDED cells" begin

@@ -383,7 +383,7 @@ Recomputes every field derived from the current `h`, `b` and mask with the simul
 [`AbstractCellNClamping`](@ref), outflow-only faces, cavity filling, uplift, diffusion and gap coupling. The setup and mask
 helpers ([`set_initial_conditions!`](@ref), [`freeze_cells!`](@ref), [`thaw_cells!`](@ref), [`set_mask!`](@ref),
 [`update_frozen_mask!`](@ref)) know only the `State` and `ModelParameters`, so they leave `N` without the cell clamps,
-the outflow-only faces open and the face conductances arithmetic. Every step refreshes them before its first solve
+the outflow-only faces open and the face transmissivities arithmetic. Every step refreshes them before its first solve
 (`prepare_head_solve!`), but what is read before that saw the helper's version: the observer's frame 0, step 1's
 start-of-step melt ([`ImplicitUpwind`](@ref)) and freeze-on capacity, and a coupled model reading `N` or `mdot` after a
 mask change. Called by `Simulation` at construction and by the `Simulation` methods of the mask helpers; `h` and `b` are
@@ -576,7 +576,7 @@ function step_h!(hs::PicardHeadScheme, sim::Simulation)
 end
 
 # The time step for the water test of the Picard loop (water_converged, elliptic_solver.jl), 0 where it does not apply: the
-# head rows conserve exactly the conductance's water depth b_w only under ImplicitUpwind with ConsistentGapCoupling, and
+# head rows conserve exactly the transmissivity's water thickness b_w only under ImplicitUpwind with ConsistentGapCoupling, and
 # the water at the start of the step (W) is budgeted with these rows only under UnfilledCavities; a binding N clamp's held rows conserve
 # nothing. Under IceUplift with UnfilledCavities N is in [0, po] already, so a floor at or below 0 and no cap never binds.
 water_check_dt(sim::Simulation) = sim.kfs isa ImplicitUpwind && sim.gcp isa ConsistentGapCoupling && sim.cf isa UnfilledCavities &&
@@ -735,9 +735,9 @@ Whether the `b_min` floor is dry: [`ConsistentGapCoupling`](@ref) under [`Filled
 The head rows then store the water `W` (`State.W`), moved by the gap scheme's update with no lower clamp
 ([`scheme_water`](@ref)), and [`compute_b!`](@ref) holds the gap at `b_min` with the volume below the water dry
 (`b - W`), so the head equation and the gap update store the same water also where creep closes the gap within a
-step. The conductances take the water too ([`compute_b_w!`](@ref), `end_of_step_gap`): a dry floor does not conduct.
-Conducting at `K(b_min)` it relayed its neighbours' water at an almost flat head while its row had lost its storage
-slope, which pinned Drang Drung at `b_min` with `p_w ~ -3 po` (b_min = 1e-3); with the conductance from the water, the
+step. The transmissivities take the water too ([`compute_b_w!`](@ref), `end_of_step_gap`): a dry floor carries no water.
+With `K(b_min)` it relayed its neighbours' water at an almost flat head while its row had lost its total water thickness
+slope, which pinned Drang Drung at `b_min` with `p_w ~ -3 po` (b_min = 1e-3); with the transmissivity from the water, the
 results there do not depend on `b_min`. Under [`UnfilledCavities`](@ref) the floor's volume
 is part of the cavity's empty volume instead, and with [`IceUplift`](@ref) the floor stays full. Not under [`WithDiffusion`](@ref),
 whose gap solve clamps at `b_min` ([`solve_b_diffusion!`](@ref)).
@@ -775,8 +775,8 @@ $(TYPEDSIGNATURES)
 
 Evolves the gap height `sim.state.b` for one timestep ([`compute_b!`](@ref), dispatching
 internally on `sim.ds`/`sim.gs`), sets the water `W` for it (`update_water!`), then refreshes everything that depends on it (`beta`, `lc`) so it is ready for the
-*next* timestep's Picard loop, and the face diagnostics `b_x`/`b_y` (no longer read by the solve; the face conductances
-take the water depth `b_w`, [`compute_face_flux!`](@ref)).
+*next* timestep's Picard loop, and the face diagnostics `b_x`/`b_y` (no longer read by the solve; the face transmissivities
+take the water thickness `b_w`, [`compute_face_flux!`](@ref)).
 """
 function step_b!(sim::Simulation)
 
@@ -789,7 +789,7 @@ function step_b!(sim::Simulation)
 
     compute_beta!(s, p, sim.oss) # opening-by-sliding parameter depends on the new b
     compute_lc!(s, p, sim.cls)   # ice-creep length scale depends on the new b
-    compute_b_x!(s)          # water depth on x faces
-    compute_b_y!(s)          # water depth on y faces
+    compute_b_x!(s)          # water thickness on x faces
+    compute_b_y!(s)          # water thickness on y faces
 
 end

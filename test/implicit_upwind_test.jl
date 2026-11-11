@@ -1,4 +1,4 @@
-    @testset "ImplicitUpwind (water depth at the end of the step, Newton in W)" begin
+    @testset "ImplicitUpwind (water thickness at the end of the step, Newton in W)" begin
 
         sl = RegularizedCoulombSlidingLaw(0.25)
         ub = 30.0 / (365 * 86400)
@@ -39,7 +39,7 @@
             return (water(s) .- W_old) ./ sim.dt[] .+ div .- (Array(s.mdot) ./ p.rho_w .+ Array(s.ieb))
         end
 
-        @testset "no free water depth: the heads of Upwind" begin
+        @testset "no free water thickness: the heads of Upwind" begin
             a = ramp(kface = "upwind", cf = FilledCavities())
             b = ramp(kface = "implicit_upwind", cf = FilledCavities())
             for _ in 1:3
@@ -50,7 +50,7 @@
         end
 
         @testset "Newton coefficient is d|q|/dW of the donor (omega = $omega)" for omega in (0.0, 1e-4, 0.8)
-            sim = ramp(omega = omega, m_mmd = omega > 0.1 ? 0.02 : 5.0) # rough flow (omega = 0.8) conducts ~100 times less: less input for a free surface
+            sim = ramp(omega = omega, m_mmd = omega > 0.1 ? 0.02 : 5.0) # rough flow (omega = 0.8) carries ~100 times less: less input for a free surface
             for _ in 1:3
                 step!(sim)
             end
@@ -72,8 +72,8 @@
 
         @testset "head matrix is the Jacobian of the row residual (laminar, $(nameof(typeof(gc)))$(isempty(fs) ? "" : ", free surface"))" for (gc, fs) in
                 ((ExplicitGapCoupling(), (;)), (ConsistentGapCoupling(), (;)), (ExplicitGapCoupling(), (fs_factor = 4.0, fs_blend = 2.0)))
-            # laminar: the conductance depends on the head only through the water depth (more input: laminar flow conducts more,
-            # and both regimes are wanted). Under ConsistentGapCoupling the filled cells' water depth is the gap scheme's G(N(h)) too.
+            # laminar: the transmissivity depends on the head only through the water thickness (more input: laminar flow carries more,
+            # and both regimes are wanted). Under ConsistentGapCoupling the filled cells' water thickness is the gap scheme's G(N(h)) too.
             # The free-surface ramp over twice the gap puts every unfilled cell inside it (e = zb - h < b), where the weight moves
             # with the head, and keeps d|q|/dh > 0 (no clamp).
             sim = ramp(omega = 0.0, m_mmd = 50.0, gc = gc, fs = fs)
@@ -85,7 +85,7 @@
             Shakti.prepare_head_solve!(sim)
             sals = sim.hs.ps.ls.sals
             # The rows assembled at h hold the Newton terms J*(h - h^k) at h^k = h, which cancel: M(h)*h - rhs(h) is
-            # the residual of the implicit (end-of-step water depth) equations at h.
+            # the residual of the implicit (end-of-step water thickness) equations at h.
             gct = Shakti.gap_coupling_terms(sim)
             function residual(h)
                 s.h .= h
@@ -120,12 +120,12 @@
             @test last(w(0.001)) ≈ (first(w(0.001 - 1e-9)) - first(w(0.001))) / 1e-9 rtol = 1e-5 # slope in h = -slope in e
             @test_throws ArgumentError ModelParameters(fs_factor = 0.0)
             @test_throws ArgumentError ModelParameters(fs_blend = -0.1)
-            # The narrowest ramp that keeps the conductance monotone in the head (laminar binds for fs_omega >= 1)
+            # The narrowest ramp that keeps the transmissivity monotone in the head (laminar binds for fs_omega >= 1)
             @test Shakti.fs_blend_monotone(4.0, 2.0) ≈ 0.645 atol = 1e-3
             @test Shakti.fs_blend_monotone(4.0, 2.0) <= ModelParameters().fs_blend
             @test Shakti.fs_blend_monotone(1.0, 2.0) == 0.0
 
-            # Laminar, a free-surface donor conducts fs_factor = 4 times the duct (g W^3/(3 nu)); fully turbulent, with omega
+            # Laminar, a free-surface donor carries fs_factor = 4 times the duct (g W^3/(3 nu)); fully turbulent, with omega
             # doubled (the mirrored duct's Re = 2|q|/nu), sqrt(2) times
             sim = ramp(m_mmd = 5.0)
             for _ in 1:3
@@ -161,7 +161,7 @@
             u = unfilled(a) .& unfilled(b)
             @test any(u) && sum(Array(b.state.W)[u]) < 0.9 * sum(Array(a.state.W)[u])
 
-            # No unfilled cavities, no free surface; a ramp too narrow to keep the conductance monotone warns, the default not
+            # No unfilled cavities, no free surface; a ramp too narrow to keep the transmissivity monotone warns, the default not
             @test_logs (:warn, r"has no effect") match_mode = :any ramp(kface = "upwind", cf = FilledCavities(), fs = (fs_factor = 4.0, fs_blend = 0.5))
             @test_logs (:warn, r"fs_blend = 0.0 < 0.645") match_mode = :any ramp(fs = (fs_factor = 4.0, fs_blend = 0.0))
             @test_logs (:warn, r"fs_blend = 0.5 < 0.645") match_mode = :any ramp(fs = (fs_factor = 4.0, fs_blend = 0.5))
@@ -207,12 +207,12 @@
         end
 
         @testset "dry cells next to the LAND margin drain no water they do not have ($kface)" for kface in ("upwind", "implicit_upwind")
-            # Cells with no water (W = 0) whose head stays above the LAND neighbour's: with a conductance floor at
+            # Cells with no water (W = 0) whose head stays above the LAND neighbour's: with a transmissivity floor at
             # min(b, b_min) they kept draining, and update_water_budget!'s W >= 0 floor created that water (Drang Drung at 25 m:
-            # 1.4 m^3/s, 21 times the melt input; here ~6 % of the input under Upwind). The water depth now has no floor.
+            # 1.4 m^3/s, 21 times the melt input; here ~6 % of the input under Upwind). The water thickness now has no floor.
             sim = ramp(kface = kface, b_min = 1e-3)
             s, nx = sim.state, sim.grid.nx
-            s.W[nx-4:nx-1, :] .= 0 # the water the rows and conductances read
+            s.W[nx-4:nx-1, :] .= 0 # the water the rows and transmissivities read
             W_old = water(s)
             step!(sim)
             @test first(Shakti.picard_status(sim.hs))
@@ -220,7 +220,7 @@
             res = budget_residual(sim, W_old)
             @test maximum(abs, res[g]) < 1e-9 * maximum(abs, Array(s.ieb)[g])
             @test abs(sum(res[g])) < 1e-9 * sum(Array(s.ieb)[g])
-            if kface == "upwind" # start-of-step water depth: the dry cells stay dry and discharge nothing into LAND
+            if kface == "upwind" # start-of-step water thickness: the dry cells stay dry and discharge nothing into LAND
                 @test all(iszero, Array(s.b_w)[nx-4:nx-1, :])
                 @test all(iszero, Array(s.q_x)[nx, :])
             end
@@ -248,10 +248,10 @@
         end
 
         @testset "uplift: a 3 m^3/s moulin at dt = 3 h and 1 day" begin
-            # The moulin fixture of ice_uplift_test.jl, where the start-of-step water depth needs dt <= 30 min (and even there the
+            # The moulin fixture of ice_uplift_test.jl, where the start-of-step water thickness needs dt <= 30 min (and even there the
             # moulin cell lifts and drops on alternate steps). The uplift decays as sliding and melt open the gap at N = 0. At dt = 1 day
             # the explicit gap scheme itself fails (creep*dt ~ 4 collapses the gap to b_min), so that step uses the fully implicit one.
-            # The default gap coupling of implicit_upwind (ConsistentGapCoupling) is used: end-of-step gap in the conductance too.
+            # The default gap coupling of implicit_upwind (ConsistentGapCoupling) is used: end-of-step gap in the transmissivity too.
             nx, ny = 6, 6
             grid = Grid(nx, ny, 1e3, 1e3)
             mask = fill(GROUNDED, nx, ny); mask[end, :] .= OCEAN; mask[1, :] .= LAND; mask[:, 1] .= OTHER_BASIN
@@ -308,7 +308,7 @@
                 step!(a); step!(c)
             end
             @test Array(c.state.h) ≈ Array(a.state.h) rtol = 1e-6
-            # unfilled cavities, implicit water depth, every gap scheme (the explicit one at dt = 3 h: at 1 day creep*dt ~ 2 makes
+            # unfilled cavities, implicit water thickness, every gap scheme (the explicit one at dt = 3 h: at 1 day creep*dt ~ 2 makes
             # the explicit gap update itself collapse to b_min): the empty volume stays within its limits (no water created or
             # lost by the bookkeeping) and the water budget closes
             for (gap, dt) in ((ExplicitGapScheme(), 3 * 3600.0), (FullyImplicitGapScheme(), 86400.0))
@@ -403,7 +403,7 @@
             @test nd(R, -1.0) == R && nd(-T, 1.0) == -T                           # the flip counter leaves polished faces alone
             @test Shakti.donor_side(T, 1.0, 0.5) == 1 && Shakti.donor_side(-T, 0.5, 1.0) == -1 && Shakti.donor_side(-R, 0.5, 1.0) == -1
             iu = ImplicitUpwind()
-            @test Shakti.face_conductance(iu, 3.0, GROUNDED, 2.0, GROUNDED, Shakti.face_select(iu, -T)) == 2.0 # thinner cell's conductance
+            @test Shakti.face_conductance(iu, 3.0, GROUNDED, 2.0, GROUNDED, Shakti.face_select(iu, -T)) == 2.0 # thinner cell's transmissivity
             @test Shakti.face_conductance(iu, 3.0, GROUNDED, 2.0, GROUNDED, Shakti.face_select(iu, -R)) == 3.0 # refrozen donor's
             # a step on the ramp starts with every donor reset, and the steady result is that of Upwind's donors
             sim = ramp(up = IceUplift())

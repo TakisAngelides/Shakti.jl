@@ -5,7 +5,7 @@
 # compute_lc! are then refreshed from the new b, ready to be read by the next time step
 # (the next compute_b! call reads beta; the head assembly kernels,
 # linear_solver.jl, read lc). compute_b_x!/compute_b_y! are refreshed too, but the Picard
-# loop no longer reads b_x/b_y (the face conductances take the water depth b_w,
+# loop no longer reads b_x/b_y (the face transmissivities take the water thickness b_w,
 # compute_face_flux!); they are kept as face diagnostics.
 #
 # This file is included before simulation.jl (same reason melt_rate.jl is

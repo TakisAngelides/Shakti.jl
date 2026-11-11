@@ -16,7 +16,7 @@
         G      = fill(0.06, nx, ny)
         taub_x = zeros(nx + 1, ny)
         taub_y = zeros(nx, ny + 1)
-        # The face conductances use the water depth at the start of the step (the water W), so dt must resolve
+        # The face transmissivities use the water thickness at the start of the step (the water W), so dt must resolve
         # how fast an uplift layer drains: at dt = 3 h the moulin cell's 0.7 m layer (K up 1e8-fold) empties
         # within the step and Picard cycles; at 30 min it converges and the budget closes to round-off.
         dt     = 1800.0

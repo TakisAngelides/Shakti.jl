@@ -32,7 +32,7 @@ Freezes every cell where `freeze_mask` is `true` and currently `GROUNDED` to
 `LAND`/`OTHER_BASIN`/already `FROZEN_BED` -- are left untouched, so passing an overly broad mask
 is harmless, not an error).
 
-Sets `b:=0` and `pw:=0` on those cells, and zeroes the water `W`, then refreshes everything that depends on `s.mask`/`s.b`/
+Sets `b:=0` and `pw:=0` on those cells, and zeroes the water `W` and the englacial water `b_e`, then refreshes everything that depends on `s.mask`/`s.b`/
 `s.pw`: `s.h = zb` on those cells (`pw = 0`; the other cells keep their head), the cell-centred `s.K`
 (`b=0` gives `K=0` exactly; the face transmissivities are rebuilt by the next refresh), `s.valid_x`/`s.valid_y` via
 [`compute_face_masks!`](@ref), and
@@ -49,7 +49,7 @@ afterwards ([`refresh_state!`](@ref)).
 
 # Limitation
 
-Freezing is a cutoff, not a phase-change model: any water still held in a freezing cell (the filled gap and any uplift layer) is
+Freezing is a cutoff, not a phase-change model: any water still held in a freezing cell (the filled gap, any uplift layer and the englacial water) is
 discarded, not refrozen onto the ice base, and no latent heat is applied. Gradual refreezing is
 the job of the energy balance already in [`compute_mdot!`](@ref) (the `q_T` conductive-loss term
 drives `mdot < 0` and shrinks `b` on cold ice), so a more negative `T_freeze` lets that dry the
@@ -97,24 +97,27 @@ function thaw_cells!(s::State, p::ModelParameters, thaw_mask::AbstractMatrix{Boo
     return s
 end
 
-# The water the cells hold (State.W).
-held_water(s::State, cells) = sum(s.W .* cells)
+# The water the cells hold: the subglacial water State.W and the englacial water State.b_e (zero for e_v = 0).
+held_water(s::State, cells) = sum((s.W .+ s.b_e) .* cells)
 
-# A cell leaving the dynamic sheet keeps no gap and no water.
+# A cell leaving the dynamic sheet keeps no gap and no water, subglacial or englacial.
 function clear_water!(s::State, cells)
     z = zero(eltype(s.b))
     @. s.b = ifelse(cells, z, s.b)
     @. s.W = ifelse(cells, z, s.W)
+    @. s.b_e = ifelse(cells, z, s.b_e)
     return s
 end
 
 # A cell entering the dynamic sheet gets the gap b_min but no water: an empty cavity, or a dry floor. Only the filled
 # sheet without the dry floor, whose water is b itself, still starts these cells with b_min of water (constrain_water!,
-# at the next refresh).
+# at the next refresh). The englacial water starts at zero too, so the first step's change of it, from b_e, is water the
+# step delivers rather than water left over from before the cell entered.
 function seed_empty!(s::State, p::ModelParameters, cells)
     z = zero(eltype(s.b))
     @. s.b = ifelse(cells, p.b_min, s.b)
     @. s.W = ifelse(cells, z, s.W)
+    @. s.b_e = ifelse(cells, z, s.b_e)
     return s
 end
 
@@ -138,14 +141,20 @@ Freezes ([`freeze_cells!`](@ref)) every `GROUNDED` cell none of whose four neigh
 has nowhere to go and, where its creep term vanishes (e.g. `N = 0` under `N_min = 0`), its head-equation
 row is all zero and the solve fails. Freezing such a cell can isolate no other one (an isolated cell has
 no `GROUNDED` neighbour), so one pass suffices. One stencil kernel and a count, run where the mask
-changes, not per step. Returns the number of cells frozen.
+changes, not per step. Returns the number of cells frozen; [`update_frozen_mask!`](@ref) and
+[`set_mask!`](@ref) also add the water these cells held to their `discarded_b`.
 """
-function freeze_isolated!(s::State, p::ModelParameters)
+freeze_isolated!(s::State, p::ModelParameters) = freeze_isolated_water!(s, p)[1]
+
+# freeze_isolated!, also returning the water (W + b_e, m summed over cells) the frozen cells held.
+function freeze_isolated_water!(s::State, p::ModelParameters)
     iso = similar(s.mask, Bool)
     @parallel (1:size(s.mask, 1), 1:size(s.mask, 2)) isolated_cells_kernel!(iso, s.mask)
     n_iso = count(iso)
-    n_iso > 0 && freeze_cells!(s, p, iso)
-    return n_iso
+    n_iso == 0 && return (n_iso, zero(eltype(s.b)))
+    w_iso = held_water(s, iso) # read before freeze_cells! zeroes it
+    freeze_cells!(s, p, iso)
+    return (n_iso, w_iso)
 end
 
 """
@@ -172,8 +181,9 @@ happens. Intended to be called whenever the basal temperature is refreshed (ther
 timescale), not every hydrology step.
 
 Returns `(n_frozen, n_thawed, discarded_b, n_isolated)`: the number of cells that changed each way, the sum
-of the water depth (m; the water `W`, the filled gap plus the uplift layer) over the freezing cells, i.e.
-the water thickness discarded by freezing
+of the water thickness (m; the water `W`, the filled gap plus the uplift layer, and the englacial water `b_e`) over the
+freezing cells, including the cells [`freeze_isolated!`](@ref) freezes afterwards, i.e. the water thickness discarded by
+freezing
 (multiply by `dx*dy` for a volume, see the limitation note in [`freeze_cells!`](@ref)).
 """
 function update_frozen_mask!(s::State, p::ModelParameters, T_prime_b::AbstractMatrix)
@@ -188,7 +198,8 @@ function update_frozen_mask!(s::State, p::ModelParameters, T_prime_b::AbstractMa
         freeze_cells!(s, p, freeze_mask)
     end
     n_thawed > 0 && thaw_cells!(s, p, thaw_mask)
-    n_isolated = freeze_isolated!(s, p)   # freezing can cut a GROUNDED cell off from every drainage path
+    n_isolated, w_iso = freeze_isolated_water!(s, p)   # freezing can cut a GROUNDED cell off from every drainage path
+    discarded_b += w_iso
     return (n_frozen = n_frozen, n_thawed = n_thawed, discarded_b = discarded_b, n_isolated = n_isolated)
 end
 
@@ -202,7 +213,8 @@ cells frozen where the host still has them grounded (the frozen bed is handled b
 [`update_frozen_mask!`](@ref) after this). Call it at each coupling step, before the hydrology step,
 so Shakti never solves where the host has no grounded ice and never ignores where it does.
 
-- A cell that stops being `GROUNDED` loses its gap and water (discarded, returned as in [`update_frozen_mask!`](@ref)) and takes the
+- A cell that stops being `GROUNDED` loses its gap, water and englacial water (discarded, returned as in [`update_frozen_mask!`](@ref), together with
+  the water of any cell [`freeze_isolated!`](@ref) freezes afterwards) and takes the
   prescribed `pw` of its new category ([`apply_boundary_pw!`](@ref)).
 - A cell that becomes `GROUNDED` is seeded at `b = p.b_min` with no water, as a thawing cell is; its `pw` (the
   Dirichlet value of its old category) is the initial guess of the next head solve.
@@ -230,6 +242,7 @@ function set_mask!(s::State, p::ModelParameters, new_mask::AbstractMatrix)
     compute_cell_K!(s, p) # the face transmissivities are rebuilt by the next refresh (compute_face_flux!)
     compute_face_masks!(s)
     compute_N!(s, p)
-    n_isolated = freeze_isolated!(s, p)   # kept FROZEN_BED cells can cut a new GROUNDED cell off from every drainage path
+    n_isolated, w_iso = freeze_isolated_water!(s, p)   # kept FROZEN_BED cells can cut a new GROUNDED cell off from every drainage path
+    discarded_b += w_iso
     return (n_on = n_on, n_off = n_off, discarded_b = discarded_b, n_isolated = n_isolated)
 end

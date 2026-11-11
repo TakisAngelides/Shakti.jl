@@ -102,7 +102,7 @@ function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, sl::Abst
     compute_dhdx!(s, g)
     compute_dhdy!(s, g)
 
-    # Set the face fields of the water depth according to the center fields of the water depth via simple arithmetic mean interpolation
+    # Set the face fields of the water thickness according to the center fields of the water thickness via simple arithmetic mean interpolation
     compute_b_x!(s)
     compute_b_y!(s)
 
@@ -110,7 +110,7 @@ function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, sl::Abst
     # guess, no lag) from the quadratic in Re that Eq. 5, 7 (Sommers et al. 2018)
     # reduces to once Re = |q|/nu is substituted in, by the same face kernel
     # every Picard iteration uses (refresh_head_dependents!), so q_x/q_y/Re start
-    # consistent with the initial water depth b_w and dhdx/dhdy.
+    # consistent with the initial water thickness b_w and dhdx/dhdy.
     compute_face_flux!(s, p) # face transmissivity K_x/K_y, q and Re on faces (water_flux.jl); the Simulation's own k-face scheme is applied from the first step's refresh on
     compute_Re!(s) # cell-centered average of Re_x/Re_y, feeds compute_cell_K! below
 

@@ -16,12 +16,12 @@ struct State{A <: AbstractArray}
     h::A          # hydraulic head
     pw::A         # water pressure
     po::A         # ice overburden pressure
-    b::A          # water depth
-    b_w::A        # water depth the face conductances are built from [m] (the water W, floored; unfilled_cavities.jl): at the start of the step, or at the end of it from the head iterate under ImplicitUpwind. Equals b exactly under FilledCavities and NoUplift
+    b::A          # water thickness
+    b_w::A        # water thickness the face transmissivities are built from [m] (the water W, floored; unfilled_cavities.jl): at the start of the step, or at the end of it from the head iterate under ImplicitUpwind. Equals b exactly under FilledCavities and NoUplift
     fsw::A        # free-surface weight of the cell, 0 (duct, b^3 g/(12 nu)) to 1 (free surface), and its slope in the head dfsw_dh (free_surface_weight, water_flux.jl); zero unless p.fs_factor/fs_omega != 1
     dfsw_dh::A
-    dbw_dh::A     # dW/dh of b_w under ImplicitUpwind (1 where the water depth is free, unfilled or uplifted, 0 elsewhere); zero otherwise
-    W::A          # water per bed area [m] (GAP-5), read by the head rows, conductances, bump, freeze-on cap and wall diffusion: evolved from the water budget under the elliptic scheme with UnfilledCavities (water_is_budgeted, run.jl), the water the gap and head leave otherwise. The empty part of the gap is max(0, b - W) (empty_gap: an unfilled cavity, or the dry floor), the water above it max(0, W - b) (water_above_gap: the uplift layer)
+    dbw_dh::A     # dW/dh of b_w under ImplicitUpwind (1 where the water thickness is free, unfilled or uplifted, 0 elsewhere); zero otherwise
+    W::A          # water per bed area [m] (GAP-5), read by the head rows, transmissivities, bump, freeze-on cap and wall diffusion: evolved from the water budget under the elliptic scheme with UnfilledCavities (water_is_budgeted, run.jl), the water the gap and head leave otherwise. The empty part of the gap is max(0, b - W) (empty_gap: an unfilled cavity, or the dry floor), the water above it max(0, W - b) (water_above_gap: the uplift layer)
     b_e::A        # englacial water e_v*clamp(h - zb, 0, po/(rho_w g)) at the end of the last step [m] (p.e_v > 0; store_englacial_water!, linear_solver.jl): the start-of-step value of the englacial storage, kept rather than recomputed from h since po changes between steps; zero for e_v = 0
     stor::A       # water storage coefficient of an unfilled cavity [1/s]: 1/dt on GROUNDED cells under UnfilledCavities, 0 otherwise (0 = legacy, always-filled gap)
     stor_up::A    # storage coefficient of the uplift layer [1/s]: 1/dt on GROUNDED cells under IceUplift, 0 otherwise (0 = legacy, no cap on pw)
@@ -33,14 +33,14 @@ struct State{A <: AbstractArray}
     abs_ub::A     # absolute value of the sliding velocity
     mdot::A       # melt rate
     melt_open::A  # rate the melt opens the gap [m/s of ice], written by compute_mdot!: mdot/rho_i, or less the uniform melt under gap_opening_melt = :exclude_uniform. Every gap update takes it; mdot stays the water source
-    melt_open0::A # melt_open at the start of the step (ImplicitUpwind with ConsistentGapCoupling: the melt opening of the end-of-step gap in the conductance, compute_b_w_iterate!); untouched otherwise
+    melt_open0::A # melt_open at the start of the step (ImplicitUpwind with ConsistentGapCoupling: the melt opening of the end-of-step gap in the transmissivity, compute_b_w_iterate!); untouched otherwise
     dh_it::A      # the previous head iteration's (limited) step of each cell, for the oscillation damping of limit_head_step! (unfilled_cavities.jl); zeroed at the start of each step; zero without an active PicardGuard
     mdot_min::A   # floor on mdot this step, -rho_i*C (freeze-on capacity); applied when p.limit_freeze_on
     Q_b::A        # frictional (sliding) heat |u_b . taub| [W/m^2], written by compute_mdot! (0 when that term is off)
     Q_diss::A     # heat dissipated by water flowing down the driving head gradient rho_w*g*|q . grad(h)| [W/m^2] (grad(h + b) under SheetTopPotential; 0 when off)
     Q_sens::A     # sensible heat ct*cw*rho_w*(q . grad(pw)) [W/m^2] (0 when off)
     Re::A         # Reynolds number
-    K::A          # hydraulic conductivity
+    K::A          # transmissivity
     G::A          # geothermal heat flux
     q_T::A        # conductive heat flux escaping into cold ice above the bed (e.g. Yelmo's
                   # Q_ice_b), subtracted from mdot's numerator in compute_mdot!. Zero by default
@@ -61,13 +61,13 @@ struct State{A <: AbstractArray}
     db_x::A       # jump of the gap height across the x-face, b[i] - b[i-1] [m], between two GROUNDED cells, +-b of the grounded cell on a face to OCEAN/LAND, under SheetTopPotential; zero otherwise
     q_x::A        # water flux in x direction
     Re_x::A       # Reynolds number in x direction
-    b_x::A        # water depth in x direction
+    b_x::A        # water thickness in x direction
     ub_x::A       # sliding velocity in x direction
     taub_x::A     # basal shear stress in x direction
     dpwdx::A      # gradient of water pressure in x direction
     D_x::A        # channel-wall diffusion coefficient in x direction (SUHMO Eq. 10, WithDiffusion only -- see AbstractDiffusionScheme, linear_solver.jl)
     K_x::A        # face transmissivity in x direction: what the linear system assembles and q_x is built from (compute_face_flux!, water_flux.jl)
-    Jw_x::A       # ImplicitUpwind: Newton coefficient of the x-face flux in the donor's head through its water depth [m/s], signed by donor side (water_depth_newton_kernel!); zero otherwise
+    Jw_x::A       # ImplicitUpwind: Newton coefficient of the x-face flux in the donor's head through its water thickness [m/s], signed by donor side (water_depth_newton_kernel!); zero otherwise
     don_x::A      # ImplicitUpwind: donor side of the x-face this step, sign(+1 high index, -1 low index) * (1 + number of donor flips), 0 = not set (update_donor_kernel!, water_flux.jl), DONOR_REFROZEN/DONOR_THINNER after polishing (polish_donors!); zero otherwise
     valid_x::A    # 1.0 where the x-face does NOT touch an OTHER_BASIN or FROZEN_BED cell, else 0.0
 
@@ -76,7 +76,7 @@ struct State{A <: AbstractArray}
     db_y::A       # jump of the gap height across the y-face, the y-face counterpart of db_x
     q_y::A        # water flux in y direction
     Re_y::A       # Reynolds number in y direction
-    b_y::A        # water depth in y direction
+    b_y::A        # water thickness in y direction
     ub_y::A       # sliding velocity in y direction
     taub_y::A     # basal shear stress in y direction
     dpwdy::A      # gradient of water pressure in y direction

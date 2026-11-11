@@ -41,7 +41,7 @@ compute_cell_K!(s::State, p::ModelParameters) = (@parallel compute_K_kernel!(s.K
 # =============================================================================
 # The linear system and every flux-derived diagnostic (q, Re, the dissipation melt, D) must see
 # the same face flux, or mass is conserved by one flux while melt/Re are computed from another.
-# Per face: laminar conductance K0 = face_conductance(b^3*g/(12*nu)) of the two cells (the
+# Per face: laminar transmissivity K0 = face_conductance(b^3*g/(12*nu)) of the two cells (the
 # grounded cell's own value at an OCEAN/LAND face, 0 at a face touching OTHER_BASIN/FROZEN_BED or
 # the domain edge); Re from the lag-free quadratic at the top of this file, with
 # D = K0*|dh|/nu; then K_face = K0/(1 + omega*Re) and q = -K_face*dh (so |q|/nu == Re exactly).
@@ -52,7 +52,7 @@ compute_cell_K!(s::State, p::ModelParameters) = (@parallel compute_K_kernel!(s.K
 # has no shear either). Laminar, that is q = g W^3 |grad h|/(3 nu), 4 times the duct's b^3 g/(12 nu) at the same depth;
 # and the Reynolds number of the mirrored duct is 2|q|/nu, so omega counts twice (fs_omega = 2) for the same wall
 # friction (Darcy-Weisbach f = 48 omega). Each cell carries a weight w from 0 (duct: filled, uplifted, or not GROUNDED)
-# to 1 (free surface): its laminar conductance is c0 (1 + (fs_factor - 1) w) W^3, its omega omega (1 + (fs_omega - 1) w).
+# to 1 (free surface): its laminar transmissivity is c0 (1 + (fs_factor - 1) w) W^3, its omega omega (1 + (fs_omega - 1) w).
 # w ramps up with the empty depth e = zb - h of an unfilled cell (s.stor > 0) over e = fs_blend * b (smoothstep; a jump
 # at h = zb for fs_blend = 0). Re_x/Re_y stay |q|/nu.
 @inline function free_surface_weight(stor, mask, h, zb, b, blend)
@@ -70,7 +70,7 @@ end
     return
 end
 free_surface_on(p::ModelParameters) = p.fs_factor != 1 || p.fs_omega != 1
-# The smallest fs_blend at which a cell's conductance never falls as its head rises. Inside the ramp the water depth is
+# The smallest fs_blend at which a cell's transmissivity never falls as its head rises. Inside the ramp the water thickness is
 # b (1 - fs_blend t) and w = t^2 (3 - 2t), t = e/(fs_blend b); with a = fs_factor - 1, o = fs_omega - 1 the flux does not
 # fall if 3 >= (1 - fs_blend t) 6t(1 - t)/fs_blend * c(t), with c = a/(1 + a w) laminar and a/(1 + a w) - o/(1 + o w)
 # fully turbulent (in between, a mix of the two). 0.645 for fs_factor = 4, fs_omega = 2. Below it the equations can
@@ -92,8 +92,8 @@ function fs_blend_monotone(fs_factor, fs_omega)
 end
 compute_free_surface_weight!(s::State, p::ModelParameters) =
     (free_surface_on(p) && @parallel free_surface_weight_kernel!(s.fsw, s.dfsw_dh, s.stor, s.mask, s.h, s.zb, s.b, p.fs_blend); s)
-# The weight of a face: of the cell whose conductance the face takes (the donor under Upwind/ImplicitUpwind, the grounded
-# cell at an OCEAN/LAND face), the mean of the two for a mean of the two conductances.
+# The weight of a face: of the cell whose transmissivity the face takes (the donor under Upwind/ImplicitUpwind, the grounded
+# cell at an OCEAN/LAND face), the mean of the two for a mean of the two transmissivities.
 @inline face_weight(K0, Ka, Kb, wa, wb) = K0 == Ka ? wa : (K0 == Kb ? wb : (wa + wb) / 2)
 
 @parallel_indices (ix, iy) function compute_face_flux_kernel!(K_x, K_y, q_x, q_y, Re_x, Re_y, b, mask, dhdx, dhdy, valid_x, valid_y, c0, nu, omega, kfs::AbstractKFaceScheme, dsel_x, dsel_y, fsw, fs_c, fs_o)
@@ -135,7 +135,7 @@ end
 $(TYPEDSIGNATURES)
 
 Updates the face transmissivities `s.K_x`/`s.K_y`, fluxes `s.q_x`/`s.q_y` and Reynolds numbers
-`s.Re_x`/`s.Re_y` together, lag-free, from the current `s.b_w` (the water depth, `s.b` unless cavities are
+`s.Re_x`/`s.Re_y` together, lag-free, from the current `s.b_w` (the water thickness, `s.b` unless cavities are
 unfilled, see [`compute_b_w!`](@ref))/`s.dhdx`/`s.dhdy` -- the version
 used in the Picard loop ([`refresh_head_dependents!`](@ref)).
 
@@ -144,23 +144,23 @@ used in the Picard loop ([`refresh_head_dependents!`](@ref)).
 `s.K_x`/`s.K_y` are exactly the coefficients the linear system assembles (`linear_solver.jl`), so
 the flux the solve conserves and the `q` every diagnostic reads (Re, the dissipation melt term,
 SUHMO's `D`, output) are the same numbers. Face rules come from [`face_conductance`](@ref): at an
-`OCEAN`/`LAND` face the grounded cell's own gap height sets the conductance (averaging in the
+`OCEAN`/`LAND` face the grounded cell's own gap height sets the transmissivity (averaging in the
 Dirichlet cell's placeholder `b = 0` would cut the outlet flux by a factor of 8). With
-`D = K0*|dh|/nu` (`K0` the laminar face conductance), `omega*Re^2 + Re - D = 0` is solved as
+`D = K0*|dh|/nu` (`K0` the laminar face transmissivity), `omega*Re^2 + Re - D = 0` is solved as
 `Re = 2*D / (1 + sqrt(1 + 4*omega*D))` (see the notes at the top of `water_flux.jl`). With `p.fs_factor`/`p.fs_omega`
-set, an unfilled cell's conductance is `fs_factor` times larger and its `omega` `fs_omega` times larger, weighted by
+set, an unfilled cell's transmissivity is `fs_factor` times larger and its `omega` `fs_omega` times larger, weighted by
 `s.fsw` (`free_surface_weight`); `s.Re_x`/`s.Re_y` stay `|q|/nu`.
 """
 compute_face_flux!(s::State, p::ModelParameters, kfs::AbstractKFaceScheme = Arithmetic(), gc::AbstractGapCoupling = ExplicitGapCoupling()) =
     (compute_b_w!(s, p); compute_free_surface_weight!(s, p); @parallel compute_face_flux_kernel!(s.K_x, s.K_y, s.q_x, s.q_y, s.Re_x, s.Re_y, s.b_w, s.mask, s.dhdx, s.dhdy, s.valid_x, s.valid_y, p.g / (12 * p.nu), p.nu, p.omega, kfs, s.dhdx, s.dhdy, s.fsw, p.fs_factor - 1, p.fs_omega - 1); s)
 
-# Under ImplicitUpwind the face flux q = -K(W_d)*dphi of a face depends on the head through the water depth W_d of
+# Under ImplicitUpwind the face flux q = -K(W_d)*dphi of a face depends on the head through the water thickness W_d of
 # its donor d (the higher-potential cell), where that depth is free (s.dbw_dh = 1: unfilled or uplifted). With
 # K0 = c0*W^3 and Re from omega*Re^2 + Re - K0*|dphi|/nu = 0 (compute_face_flux_kernel!), the derivative of
 # |q| = nu*Re at fixed dphi is d|q|/dW = 3*K0*|dphi|/(W*(1 + 2*omega*Re)) (3 K/W laminar, 3/2 K/W turbulent), and
 # per head of the donor J = d|q|/dW * dW/dh [m/s] (the head row divides it by the face spacing). Jw_x[i] stores +J if the
 # donor is the cell at the high index i and -J if it is the cell at i - 1; 0 if the donor's depth is not free, if it
-# is not GROUNDED (inflow from an OCEAN/LAND cell: the face takes the grounded cell's conductance, see
+# is not GROUNDED (inflow from an OCEAN/LAND cell: the face takes the grounded cell's transmissivity, see
 # face_conductance, which this head row does not linearize), if the face carries no flux, or if its donor is frozen on
 # the downstream side (update_donor_kernel!, or a DONOR_THINNER face whose thinner cell is downstream: there dF/dh_d
 # has the opposite sign, which would break the M-matrix
@@ -210,7 +210,7 @@ end
 """
 $(TYPEDSIGNATURES)
 
-[`ImplicitUpwind`](@ref) method: the face fluxes from the donor's water depth at the end of the step
+[`ImplicitUpwind`](@ref) method: the face fluxes from the donor's water thickness at the end of the step
 ([`compute_b_w_iterate!`](@ref), from the current head iterate and the gap coupling `gc`), and the Newton coefficients `s.Jw_x`/`s.Jw_y` of
 their dependence on the donor's head through that depth (`water_depth_newton_kernel!`), which the head
 rows add (`add_water_depth_newton!`, `linear_solver.jl`). The donor of a face is the higher-potential cell, except
@@ -229,22 +229,22 @@ end
 # donor (+1 the cell at the high index, -1 at the low index), flips counts how often it changed within this step (reset
 # at the start of the step, reset_donors!). Normally the donor is the higher-potential cell, as in Upwind. A face whose
 # donor has changed MAX_DONOR_FLIPS times keeps it for the rest of the step: where the flow reverses across a face
-# between a thick layer and a thin one, the face conductance jumps by orders of magnitude with the sign of dphi, and
+# between a thick layer and a thin one, the face transmissivity jumps by orders of magnitude with the sign of dphi, and
 # Newton can cycle across that jump (seen on Drang Drung at dt = 1 h and 1 day: a face next to a blister flipping every
 # iteration, K between 5e-4 and 30). The flux q = -K dphi itself is continuous at the reversal (it is 0 there); the
-# frozen face just keeps the conductance of the earlier donor, the larger one in that case, so the error is at most that
-# of a mean of the two conductances on that one face, and only where the flow direction is undecided. The water budget
+# frozen face just keeps the transmissivity of the earlier donor, the larger one in that case, so the error is at most that
+# of a mean of the two transmissivities on that one face, and only where the flow direction is undecided. The water budget
 # is unaffected (both cells see the same face flux).
 # Once the head has converged, polish_donors! revisits the frozen faces: one whose flow ended up against its frozen
 # donor (frozen on the downstream side) is refrozen on its upwind side, |don| = DONOR_REFROZEN, and the head iterated
-# again; a refrozen face that reverses once more takes the conductance of the thinner of its two cells, |don| =
+# again; a refrozen face that reverses once more takes the transmissivity of the thinner of its two cells, |don| =
 # DONOR_THINNER (the Upwind face mean at no flow, the smaller error of the two donors), and is left there. At most
 # MAX_DONOR_POLISH_ROUNDS rounds per step. On Drang Drung (dt = 1 h to 1 day) this removed nearly all faces left frozen
 # downstream at the end of a step (dt = 1 day: 31 of 364 steps with such faces -> 2, dt = 1 h: 11 of 8760 -> 0) at the
 # same cost and with no failed steps; the year-end N moved by at most 0.01 MPa (0.04 MPa on the water-surface potential).
 const MAX_DONOR_FLIPS = 4
 const DONOR_REFROZEN = 1000 # |don| of a face refrozen on its upwind side by polish_donors!
-const DONOR_THINNER = 2000  # |don| of a refrozen face that reversed again: the thinner cell's conductance
+const DONOR_THINNER = 2000  # |don| of a refrozen face that reversed again: the thinner cell's transmissivity
 const MAX_DONOR_POLISH_ROUNDS = 3
 @inline function next_donor(d, dh, maxflips)
     sd = dh > 0 ? one(d) : (dh < 0 ? -one(d) : zero(d))
@@ -274,9 +274,9 @@ every other K-face scheme. Also zeroes the previous head steps of the oscillatio
 reset_donors!(::AbstractKFaceScheme, s::State) = (fill!(s.dh_it, 0); s)
 reset_donors!(::ImplicitUpwind, s::State) = (fill!(s.don_x, 0); fill!(s.don_y, 0); fill!(s.dh_it, 0); s)
 
-# Side of the cell whose water depth sets the conductance of a face with donor d (+1 the cell at the high index, -1 at
+# Side of the cell whose water thickness sets the transmissivity of a face with donor d (+1 the cell at the high index, -1 at
 # the low index, 0 while not set): the donor, or for a DONOR_THINNER face the thinner cell (Wa, Wb the low/high-index
-# water depths; the low-index cell on a tie, as min in face_mean).
+# water thicknesses; the low-index cell on a tie, as min in face_mean).
 @inline donor_side(d, Wa, Wb) = abs(d) >= DONOR_THINNER ? (Wb < Wa ? one(d) : -one(d)) : sign(d)
 # Donor of a frozen face after polishing at the converged head (dh the head gradient across it), see polish_donors!.
 @inline function polished_donor(d, dh, maxflips)
@@ -298,7 +298,7 @@ $(TYPEDSIGNATURES)
 
 Polishes the frozen face donors of [`ImplicitUpwind`](@ref) at a converged head and returns the number of faces changed
 (0 for every other K-face scheme): a face frozen on its downstream side is refrozen on its upwind side, and one that
-was refrozen and reversed again takes the conductance of its thinner cell (see the notes above `MAX_DONOR_FLIPS`).
+was refrozen and reversed again takes the transmissivity of its thinner cell (see the notes above `MAX_DONOR_FLIPS`).
 The Picard loop ([`Picard_loop!`](@ref)) iterates the head again while this changes
 faces, up to `MAX_DONOR_POLISH_ROUNDS` times per step.
 """

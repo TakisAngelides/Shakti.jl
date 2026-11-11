@@ -64,7 +64,7 @@
         @test_throws r"never refills" Shakti.check_options(o(kfs = Harmonic(), k_face_default = false))
         @test_throws r"non-symmetric head matrix: it needs" Shakti.check_options(o(ps = chol_ps()))
         @test_throws r"tighter than \[0, Inf\)" Shakti.check_options(o(p = ModelParameters(e_v = 0.0, N_min = 1e3)))
-        @test_logs (:warn, r"lags the water depth") Shakti.check_options(o(kfs = Upwind(), k_face_default = false))
+        @test_logs (:warn, r"lags the water thickness") Shakti.check_options(o(kfs = Upwind(), k_face_default = false))
         @test_logs Shakti.check_options(o(cf = FilledCavities(), up = NoUplift(), free_surface = false, kfs = Arithmetic(), ps = chol_ps(),
                                           p = ModelParameters(e_v = 0.0, N_min = 1e3)))   # the filled sheet takes averaged faces and N clamps
     end

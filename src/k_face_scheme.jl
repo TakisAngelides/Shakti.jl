@@ -1,24 +1,24 @@
 """
 $(TYPEDSIGNATURES)
 
-How hydraulic conductivity `K` is combined across two neighbouring `GROUNDED` cells' shared face
-into a single face conductance -- multiple dispatch on the concrete subtype picks arithmetic or
+How transmissivity `K` is combined across two neighbouring `GROUNDED` cells' shared face
+into a single face transmissivity -- multiple dispatch on the concrete subtype picks arithmetic or
 harmonic averaging, the donor cell's value ([`Upwind`](@ref)), or the donor's value at the end-of-step
-water depth ([`ImplicitUpwind`](@ref)) (see [`compute_K_face`](@ref) and `boundary_K_face`).
+water thickness ([`ImplicitUpwind`](@ref)) (see [`compute_K_face`](@ref) and `boundary_K_face`).
 """
 abstract type AbstractKFaceScheme end
 
 """
 $(TYPEDSIGNATURES)
 
-Arithmetic-mean face conductance.
+Arithmetic-mean face transmissivity.
 """
 struct Arithmetic <: AbstractKFaceScheme end
 
 """
 $(TYPEDSIGNATURES)
 
-Harmonic-mean face conductance: penalizes a face where either neighbour has low conductivity more
+Harmonic-mean face transmissivity: penalizes a face where either neighbour has low transmissivity more
 strongly than the arithmetic mean does.
 """
 struct Harmonic <: AbstractKFaceScheme end
@@ -26,9 +26,9 @@ struct Harmonic <: AbstractKFaceScheme end
 """
 $(TYPEDSIGNATURES)
 
-Face conductance of the mean gap: `K` at the arithmetic mean of the two cells' gaps, which is `((cbrt(K1) + cbrt(K2)) / 2)^3`
+Face transmissivity of the mean gap: `K` at the arithmetic mean of the two cells' gaps, which is `((cbrt(K1) + cbrt(K2)) / 2)^3`
 since the laminar `K` goes as `b^3`. SUHMO's own face rule (Felden et al. 2023: the gap is averaged onto the face, then
-cubed). Next to a dry or thin neighbour it gives a channel cell an eighth of its conductance where [`Arithmetic`](@ref)
+cubed). Next to a dry or thin neighbour it gives a channel cell an eighth of its transmissivity where [`Arithmetic`](@ref)
 gives a half, so less water leaves a channel sideways. Like `Arithmetic` it lets an unfilled cell's outflow outgrow its
 water, so it is refused under a free surface.
 """
@@ -37,10 +37,10 @@ struct GapMean <: AbstractKFaceScheme end
 """
 $(TYPEDSIGNATURES)
 
-Face conductance between cells `(i1,j1)` and `(i2,j2)` from `face_mean`: `(K[i1,j1] + K[i2,j2]) / 2` under
+Face transmissivity between cells `(i1,j1)` and `(i2,j2)` from `face_mean`: `(K[i1,j1] + K[i2,j2]) / 2` under
 [`Arithmetic`](@ref), `2*K[i1,j1]*K[i2,j2] / (K[i1,j1] + K[i2,j2] + eps)` under [`Harmonic`](@ref), and the smaller of the
 two under [`Upwind`](@ref) when no head difference is given (the donor's otherwise, see the four-argument `face_mean`).
-[`ImplicitUpwind`](@ref) builds its faces in `compute_face_flux!` from the donor's water depth instead.
+[`ImplicitUpwind`](@ref) builds its faces in `compute_face_flux!` from the donor's water thickness instead.
 Here @inline can help the compiler optimize its code and reduce the cost of function calls.
 """
 @inline compute_K_face(kfs::AbstractKFaceScheme, K, i1, j1, i2, j2) = face_mean(kfs, K[i1, j1], K[i2, j2])
@@ -57,10 +57,10 @@ Scalar form of [`compute_K_face`](@ref): the arithmetic or harmonic mean of two 
 """
 $(TYPEDSIGNATURES)
 
-Upwind (donor-cell) face conductance: the value of the cell the water flows OUT of, i.e. of the
+Upwind (donor-cell) face transmissivity: the value of the cell the water flows OUT of, i.e. of the
 higher-head cell (the smaller one when the head difference is zero). A cell that is nearly empty then
-cannot discharge through the (much larger) conductance of the cell it flows into, which an average
-would allow: outflow is limited by the water depth of the donor, as for free-surface flow. Needs the
+cannot discharge through the (much larger) transmissivity of the cell it flows into, which an average
+would allow: outflow is limited by the water thickness of the donor, as for free-surface flow. Needs the
 head difference across the face, `dh = h[i] - h[i-1]`; the K-face schemes that do not use it ignore it.
 Evaluated from the previous Picard iterate's head (like every other coefficient); a face coefficient is
 still one number per face, so the assembled matrix stays symmetric.
@@ -80,20 +80,20 @@ at the low index, `b` at the high index): only [`Upwind`](@ref) uses it.
 """
 $(TYPEDSIGNATURES)
 
-[`Upwind`](@ref) face conductance built from the donor's water depth at the END of the step, as a function
+[`Upwind`](@ref) face transmissivity built from the donor's water thickness at the END of the step, as a function
 of the head iterate, instead of at its start: `W = b - max(0, zb - h)` in a cell whose gap may be partly
 empty ([`UnfilledCavities`](@ref)) and `W = b + max(0, h - h_o)` in one where the ice may be lifted
 ([`IceUplift`](@ref)), `b` itself held at its start-of-step value as everywhere else
-([`compute_b_w_iterate!`](@ref), `unfilled_cavities.jl`). Where the water depth is free (a free surface or an
+([`compute_b_w_iterate!`](@ref), `unfilled_cavities.jl`). Where the water thickness is free (a free surface or an
 uplift layer) the flux is a kinematic wave in it, `q ~ K(W) grad(zb)`: with `W` lagged ([`Upwind`](@ref)) that
 wave is explicit in time and stable only for `dt < dx*W/(3|q|)`, minutes at 100 m. Here it is backward Euler
 and stable at any `dt`. Each head solve also takes the Newton terms of the face flux's dependence on the
-donor's water depth (`water_depth_newton_kernel!`, `water_flux.jl`), so the Picard iteration is
+donor's water thickness (`water_depth_newton_kernel!`, `water_flux.jl`), so the Picard iteration is
 Newton's method in `W` and converges at any `dt` (a plain fixed point in `W` does not, see
 [`compute_b_w!`](@ref)). Those terms couple each face to its donor cell only, so the assembled matrix is no
 longer symmetric: it needs [`LUDirectSolver`](@ref), `CUDSSDirectSolver(grid)` (`structure = :general`, the default) or
 [`BiCGStabIterativeSolver`](@ref).
-Without unfilled cavities and uplift every water depth is the gap and this is [`Upwind`](@ref) exactly.
+Without unfilled cavities and uplift every water thickness is the gap and this is [`Upwind`](@ref) exactly.
 """
 struct ImplicitUpwind <: AbstractKFaceScheme end
 
@@ -114,9 +114,9 @@ $(TYPEDSIGNATURES)
 """
 $(TYPEDSIGNATURES)
 
-Face value of a cell-centred conductance (`Ka` in a cell with mask `ma`, `Kb` in its neighbour
+Face value of a cell-centred transmissivity (`Ka` in a cell with mask `ma`, `Kb` in its neighbour
 with mask `mb`), symmetric in its two cells so both sides of a face read the same value -- the
-face conductance [`compute_face_flux!`](@ref) (`water_flux.jl`) builds `s.K_x`/`s.K_y` from, and
+face transmissivity [`compute_face_flux!`](@ref) (`water_flux.jl`) builds `s.K_x`/`s.K_y` from, and
 therefore exactly what the linear system assembles:
 
 - both `GROUNDED`: the K-face scheme's mean (`kfs`);
@@ -141,7 +141,7 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Face conductance between a solved (`GROUNDED`) cell `(i1,j1)` and its neighbour `(i2,j2)`, aware
+Face transmissivity between a solved (`GROUNDED`) cell `(i1,j1)` and its neighbour `(i2,j2)`, aware
 of what kind of cell the neighbour is. The assembly kernels no longer call this -- they read the
 face transmissivities `s.K_x`/`s.K_y` built by [`compute_face_flux!`](@ref) via
 [`face_conductance`](@ref), which applies the same rules below -- it is kept for external use.
@@ -156,10 +156,10 @@ face transmissivities `s.K_x`/`s.K_y` built by [`compute_face_flux!`](@ref) via
   crosses into a frozen cell) stated directly rather than left to fall out of the arithmetic.
 - `OCEAN`/`LAND`: real Dirichlet drainage boundaries, but `K` there is a bookkeeping placeholder
   (`b` is forced to `0` at those cells in [`set_initial_conditions!`](@ref), since they have no
-  physical gap height), not an actual conductivity. Folding that `0` into [`compute_K_face`](@ref)
+  physical gap height), not an actual transmissivity. Folding that `0` into [`compute_K_face`](@ref)
   would spuriously choke off drainage -- especially under [`Harmonic`](@ref), where one side being
   `0` collapses the whole face to `0`. Uses the solved cell's own `K` instead, i.e. treats
-  conductivity as extending unchanged up to the boundary.
+  transmissivity as extending unchanged up to the boundary.
 - `GROUNDED`: both sides are real hydrology cells, use the K-face scheme (`kfs`).
 """
 @inline function boundary_K_face(kfs::AbstractKFaceScheme, K, mask, i1, j1, i2, j2)
@@ -167,7 +167,7 @@ face transmissivities `s.K_x`/`s.K_y` built by [`compute_face_flux!`](@ref) via
     if m2 == OTHER_BASIN || m2 == FROZEN_BED
         return zero(eltype(K))
     elseif m2 == OCEAN || m2 == LAND
-        return K[i1, j1] # if the neighbour is land or ocean, there is no meaningful conductivity value K there so we just use the center value at i1, j1 for that cell face
+        return K[i1, j1] # if the neighbour is land or ocean, there is no meaningful transmissivity value K there so we just use the center value at i1, j1 for that cell face
     else
         return compute_K_face(kfs, K, i1, j1, i2, j2)
     end
