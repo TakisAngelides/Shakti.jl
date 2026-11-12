@@ -1,6 +1,6 @@
 #=
 # [Gap coupling](@id GapCoupling)
-Each step has two parts: the head equation is solved for the hydraulic head `h`, then the gap
+Each step has two parts. The head equation is solved for the reduced head `h`, then the gap
 height `b` is moved by the gap scheme. The head equation contains the storage term `db/dt`, which it
 cannot read from the gap update that has not run yet, so it has to assume how far the gap moves in
 this step. `gap_coupling` chooses that assumption:

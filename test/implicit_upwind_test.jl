@@ -6,8 +6,9 @@
         # 1-D bed ramp after Schoof, Hewitt & Werder (2012) Fig. 7, 40 x 3 cells of 100 m: sliding over the bumps opens the
         # gap faster than the melt fills it in the upper part (free surface, pw = 0), the lower part is filled; LAND margin
         # in the last column. Melt terms off, so the melt input m is the only source and mdot does not depend on the head.
-        ramp_params(; b_min = 1e-6, e_v = 0.0, omega = 1e-4, outflow = true, kw...) =
-            ModelParameters(; br = 0.1, lr = 2.0, b_min = b_min, e_v = e_v, omega = omega,
+        # The free-surface layer is off here unless a test passes fs_factor/fs_omega (it is on by default).
+        ramp_params(; b_min = 1e-6, e_v = 0.0, omega = 1e-4, outflow = true, fs_factor = 1.0, fs_omega = 1.0, kw...) =
+            ModelParameters(; br = 0.1, lr = 2.0, b_min = b_min, e_v = e_v, omega = omega, fs_factor = fs_factor, fs_omega = fs_omega,
                             mdot_includes_G = false, mdot_includes_frictional = false, mdot_includes_potential = false,
                             mdot_includes_sensible = false, mdot_includes_qT = false, limit_freeze_on = false,
                             outflow_only_land = outflow, outflow_only_ocean = outflow, kw...)
@@ -144,7 +145,7 @@
                 @test q1[i, j] / q0[i, j] ≈ ratio rtol = rtol
             end
 
-            # Off by default; with the default ramp (fs_blend = 0.65) the step converges at dt = 1 day, the budget closes,
+            # Off (fs_factor = fs_omega = 1) against on; with the default ramp (fs_blend = 0.65) the step converges at dt = 1 day, the budget closes,
             # and the unfilled water is shallower than in the duct
             a = ramp(dt = 86400.0, m_mmd = 50.0)
             b = ramp(dt = 86400.0, m_mmd = 50.0, fs = (fs_factor = 4.0, fs_omega = 2.0))
@@ -161,8 +162,10 @@
             u = unfilled(a) .& unfilled(b)
             @test any(u) && sum(Array(b.state.W)[u]) < 0.9 * sum(Array(a.state.W)[u])
 
-            # No unfilled cavities, no free surface; a ramp too narrow to keep the transmissivity monotone warns, the default not
-            @test_logs (:warn, r"has no effect") match_mode = :any ramp(kface = "upwind", cf = FilledCavities(), fs = (fs_factor = 4.0, fs_blend = 0.5))
+            # On by default; no unfilled cavities, no free surface and no warning; a ramp too narrow to keep the transmissivity
+            # monotone warns, the default not
+            @test ModelParameters().fs_factor == 4 && ModelParameters().fs_omega == 2 && Shakti.free_surface_on(ModelParameters())
+            @test_logs min_level = Base.CoreLogging.Warn ramp(kface = "arithmetic", cf = FilledCavities(), fs = (fs_factor = 4.0, fs_omega = 2.0))
             @test_logs (:warn, r"fs_blend = 0.0 < 0.645") match_mode = :any ramp(fs = (fs_factor = 4.0, fs_blend = 0.0))
             @test_logs (:warn, r"fs_blend = 0.5 < 0.645") match_mode = :any ramp(fs = (fs_factor = 4.0, fs_blend = 0.5))
             @test_logs min_level = Base.CoreLogging.Warn ramp(fs = (fs_factor = 4.0, fs_omega = 2.0))

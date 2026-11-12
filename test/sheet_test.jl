@@ -28,16 +28,30 @@
         @test Array(short.state.h) == Array(long.state.h)
     end
 
-    @testset "ShaktiSheet(original = true) is the old keyword set, step for step" begin
+    @testset "ShaktiSheet(original = true) is the old keyword set with two-way outlets, step for step" begin
         preset = Simulation(grid, make_state(p), 2, dt, p, ConstantMeltInput(), sl; ps = chol_ps(), sheet = ShaktiSheet(original = true))
-        old    = Simulation(grid, make_state(p), 2, dt, p, ConstantMeltInput(), sl; ps = chol_ps(),
+        p_two  = ModelParameters(e_v = 0.0, b_min = 1e-6, outflow_only_land = false, outflow_only_ocean = false)
+        old    = Simulation(grid, make_state(p_two), 2, dt, p_two, ConstantMeltInput(), sl; ps = chol_ps(),
                             cavity_filling = FilledCavities(), uplift = NoUplift(), hydraulic_potential = BedPotential(),
                             gap_coupling = ExplicitGapCoupling())
         @test options(preset) == options(old) ==
               (FilledCavities, NoUplift, BedPotential, ExplicitGapCoupling, Arithmetic, NoObserver)
+        @test !preset.p.outflow_only_land && !preset.p.outflow_only_ocean     # the outlets of the original model pass water both ways
+        @test p.outflow_only_land && p.outflow_only_ocean                     # the p passed in is left as it is
+        @test preset.p.fs_factor == p.fs_factor && preset.p.b_min == p.b_min  # and the rest of p is kept
         run!(preset); run!(old)
         @test Array(preset.state.h) == Array(old.state.h) && Array(preset.state.b) == Array(old.state.b)
         @test typeof(ShaktiSheet().hp) == SheetTopPotential && typeof(ShaktiSheet().gcp) == ConsistentGapCoupling
+        @test !ShaktiSheet().two_way_outlets && !GlaDS2Sheet().two_way_outlets && ShaktiSheet(original = true).two_way_outlets
+        filled = Simulation(grid, make_state(p), 1, dt, p, ConstantMeltInput(), sl; ps = chol_ps(), sheet = ShaktiSheet())
+        @test filled.p.outflow_only_land && filled.p.outflow_only_ocean       # outflow only by default
+    end
+
+    @testset "PicardSolver with the default iterations and tolerance" begin
+        ps = PicardSolver(LUDirectSolver(grid), grid)
+        @test ps.iters == 500 && ps.tol == floattype(1e-6) && ps.atol == 0
+        ps = PicardSolver(LUDirectSolver(grid), grid; tol = 1e-8, alpha = 0.5)
+        @test ps.iters == 500 && ps.tol == floattype(1e-8) && ps.hr isa UnderHeadRelaxation
     end
 
     @testset "a keyword overrides the sheet's field; k_face_choice takes the scheme itself" begin

@@ -58,8 +58,8 @@ run!(sim)
 ```
 
 The ISSM reproduction adds `b_min = 1e-3, b_max = 1.0` to the parameters (ISSM's gap limits) and
-`cavity_filling = FilledCavities(), uplift = NoUplift(), hydraulic_potential = BedPotential(),
-gap_coupling = ExplicitGapCoupling()` to `Simulation`.
+`sheet = ShaktiSheet(original = true)` (`FilledCavities`, `NoUplift`, `BedPotential`, `ExplicitGapCoupling` and two-way
+outlets) to `Simulation`.
 
 | Run | `N/p_o` | Mean `N` | Max `b` | Max `Re` | Correlation of `N` with ISSM |
 |---|---|---|---|---|---|

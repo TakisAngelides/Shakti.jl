@@ -53,9 +53,8 @@ sim = Simulation(grid, state, nsteps, floattype(dt), p, ConstantMeltInput(), sl;
 run!(sim)
 ```
 
-For the original equations, add `b_min = 1e-3` to the parameters and
-`cavity_filling = FilledCavities(), uplift = NoUplift(), hydraulic_potential = BedPotential(),
-gap_coupling = ExplicitGapCoupling()` to `Simulation`.
+For the original equations, add `b_min = 1e-3` to the parameters and `sheet = ShaktiSheet(original = true)`
+(`FilledCavities`, `NoUplift`, `BedPotential`, `ExplicitGapCoupling` and two-way outlets) to `Simulation`.
 
 | Run | Grid | Grounded | Steps | `N/p_o` | Mean `N` | Max `b` | Max `Re` |
 |---|---|---|---|---|---|---|---|

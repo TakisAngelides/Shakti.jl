@@ -88,7 +88,7 @@ network [Sommers2018](@cite). The transmissivity is built from the water thickne
 \mathrm{Re} = \frac{2 D}{1 + \sqrt{1 + 4 \omega D}} .
 ```
 
-### Free-surface layer (optional)
+### Free-surface layer
 
 The law above is flow in a duct, between the bed and the ice, with no slip on both walls. The water of an unfilled
 cavity has air above it instead, and its surface carries no shear. The mid-plane of a duct carries no shear either, so a
@@ -110,9 +110,9 @@ In the turbulent limit this is ``\sqrt{2}`` times the duct's flux at the same de
 the bed alone holds the layer against the gradient, ``\tau = \rho_w g W |\nabla\hat{h}|``, where the duct's two walls
 share ``\rho_w g b |\nabla\hat{h}|``.
 
-[Sommers2018](@cite) and [Wells2026](@cite) keep the duct law in every regime, and so does Shakti by default. The
-free-surface law is switched on with `fs_factor = 4` and `fs_omega = 2`. Each cell then carries a weight ``w`` from 0
-(duct) to 1 (free surface), and
+[Sommers2018](@cite) and [Wells2026](@cite) keep the duct law in every regime. Shakti.jl uses the free-surface law
+in unfilled cells by default (`fs_factor = 4`, `fs_omega = 2`), and `fs_factor = fs_omega = 1` keeps the duct law
+everywhere. Each cell carries a weight ``w`` from 0 (duct) to 1 (free surface), and
 
 ```math
 K = \frac{g\, W^3 \left(1 + (f_K - 1)\, w\right)}{12 \nu \left(1 + \omega (1 + (f_{\omega} - 1)\, w)\,\mathrm{Re}\right)},
@@ -140,7 +140,7 @@ water stored in the ice above the bed, the englacial storage of [Sommers2018](@c
 b_e = e_v \frac{p_w}{\rho_w g} = e_v \left( h - z_b - (W - b) \right),
 ```
 
-with the englacial void ratio ``e_v`` (`e_v = 0` by default). The second form follows from the definition
+with the englacial porosity ``e_v`` (`e_v = 0` by default). The second form follows from the definition
 of ``h``. The closure makes ``W - b`` a function of ``h`` in each regime, so ``b_e`` is a function of ``h``
 and ``p_o``:
 
@@ -279,6 +279,7 @@ boundary conditions:
 By default `OCEAN` and `LAND` faces are outflow only (`outflow_only_land`, `outflow_only_ocean`): the
 face closes when the boundary head is above the hydraulic head ``\hat{h}`` of the grounded cell, so water
 can only flow out of the grounded cell into the ocean or land, never from the boundary into the grounded cell.
+`ShaktiSheet(original = true)` keeps them open in both directions.
 
 ## Parameters
 
@@ -296,7 +297,7 @@ The default values of `ModelParameters`:
 | ``b_r``, ``l_r`` | `br`, `lr` | 0.1 m, 2 m | bump height and spacing |
 | ``b_c`` | `b_c` | 0 (``l_c = b``) | creep cutoff [Felden2023](@cite) |
 | ``c_t``, ``c_w`` | `ct`, `cw` | 7.5 × 10⁻⁸ K Pa⁻¹, 4220 J kg⁻¹ K⁻¹ | change of melting point with pressure, heat capacity of water |
-| ``e_v`` | `e_v` | 0 | englacial void ratio |
+| ``e_v`` | `e_v` | 0 | englacial porosity |
 | ``p_{\mathrm{atm}}`` | `p_atm` | 0 Pa | pressure at `LAND` and of the sea surface |
 | ``b_{\mathrm{min}}``, ``b_{\mathrm{max}}`` | `b_min`, `b_max` | 10⁻⁶ m, ∞ | bounds on ``b`` |
 | ``N_{\mathrm{min}}``, ``N_{\mathrm{max}}`` | `N_min`, `N_max` | −∞, ∞ | bounds on ``N`` |

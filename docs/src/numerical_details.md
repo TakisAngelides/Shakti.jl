@@ -135,10 +135,9 @@ itself rather than the change of the head.
 
 ## [The free-surface switch](@id FreeSurfaceSwitch)
 
-The [free-surface layer](@ref "Free-surface layer (optional)") changes the flux law where the head of a cell falls
+The [free-surface layer](@ref "Free-surface layer") changes the flux law where the head of a cell falls
 below the bed and the water gets a free surface. It acts only under `UnfilledCavities`, since only an unfilled
-cell has air above its water. On the other sheets its factors have no effect, and building the `Simulation` warns that they need
-`UnfilledCavities`. The water of an
+cell has air above its water. On the other sheets its factors have no effect. The water of an
 unfilled cell has no shear at its top, so it flows like the lower half of a duct twice as thick, whose mid-plane
 has no shear either. In laminar flow that layer carries four times the water of a duct of the same water
 thickness, and the Reynolds number of the twice-as-thick duct is twice that of the layer.
@@ -146,8 +145,8 @@ thickness, and the Reynolds number of the twice-as-thick duct is twice that of t
 A cell of weight ``w`` multiplies its laminar transmissivity by ``1 + (f_K - 1)\, w`` and its ``\omega`` by
 ``1 + (f_{\omega} - 1)\, w`` ([Face flux](@ref FaceFlux)). With `fs_factor` ``= f_K = 4`` and `fs_omega`
 ``= f_{\omega} = 2``, a full free-surface layer carries four times as much water as a duct of the same water
-thickness in laminar flow, and ``\sqrt{2}`` times as much in fully turbulent flow. The layer is off by default
-(`fs_factor = fs_omega = 1`).
+thickness in laminar flow, and ``\sqrt{2}`` times as much in fully turbulent flow. The layer is on by default, and
+`fs_factor = fs_omega = 1` switches it off.
 
 With a sharp switch (`fs_blend = 0`) the weight jumps from 0 to 1 where the head reaches the bed, so the
 transmissivity of a cell jumps by ``f_K``. Near ``h = z_b`` the outflow of a cell then falls as its head rises,

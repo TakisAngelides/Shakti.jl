@@ -330,6 +330,14 @@ end
 """
 $(TYPEDSIGNATURES)
 
+The same with the defaults, up to `iters = 500` iterations a step and relative tolerance `tol = 1e-6`, the values of the
+examples on real glaciers. `PicardSolver(LUDirectSolver(grid), grid)` is the solver of the default sheet on the CPU.
+"""
+PicardSolver(ls::AbstractLinearSolver, g::Grid; iters::Integer = 500, tol = 1e-6, kw...) = PicardSolver(iters, tol, ls, g; kw...)
+
+"""
+$(TYPEDSIGNATURES)
+
 Solves the nonlinear elliptic equation for hydraulic head at the current timestep via Picard
 iteration ([`Picard_loop!`](@ref)), updating `state` and `ps` (`ps.converged`/`ps.last_iter`) in
 place.

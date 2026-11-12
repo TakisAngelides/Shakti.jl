@@ -106,7 +106,7 @@ the free-surface sheets. Within a step, a face whose donor has reversed four tim
 the iteration cannot cycle on it. A face to an `OCEAN` or `LAND` cell takes the grounded cell's ``W``, and
 a face to `OTHER_BASIN`, `FROZEN_BED` or the edge of the grid has ``K_f = 0``.
 
-With the [free-surface layer](@ref "Free-surface layer (optional)") on, each cell's ``W^3`` is first multiplied by
+With the [free-surface layer](@ref "Free-surface layer") on (the default), each cell's ``W^3`` is first multiplied by
 ``1 + (f_K - 1)\, w``, its weight ``w`` taken at the head iterate, and the face's ``\omega`` becomes
 ``\omega_f = \omega\,(1 + (f_{\omega} - 1)\, w_f)``. ``w_f`` is the weight of the cell whose transmissivity the face takes
 (the donor, or the grounded cell at a boundary face), or the mean of the two cells' weights for a mean of their
@@ -134,7 +134,8 @@ ocean spans the same distance ``\Delta_f`` between two cell centres as an interi
 holds no gap, ``b = 0``, so its hydraulic head is ``h_D`` itself, and the gap jump across the face is the
 grounded cell's gap, ``\pm b^{(m)}_P``.
 
-The boundary faces are outflow-only by default (`outflow_only_land`, `outflow_only_ocean`). The flux out of
+The boundary faces are outflow-only by default (`outflow_only_land`, `outflow_only_ocean`), and `ShaktiSheet(original = true)`
+keeps them open in both directions. The flux out of
 a grounded cell ``P`` through such a face is
 
 ```math
@@ -237,7 +238,7 @@ the imbalance ``\mathcal{R}`` of the row divided by how strongly the row respond
 ``\mathcal{W} = \mathcal{G}(N)``. On thick ice near ``N = p_o`` creep closes the gap almost completely within the
 step, whatever the exact ``N``, and a nearly closed gap can barely change. Under 1000 m of ice, with a time step of one day and no
 sliding, a gap that the update closes to 1 mm gives ``\mathrm d\mathcal{W}/\mathrm dh \approx 3 \times 10^{-6}``, so where ``K_f`` is small too, an imbalance of 10 mm of water over the step
-gives a step of about 3000 m of head. That is more than three times the 917 m between the bed and the overburden
+gives a step of about 3000 m of head. That is more than three times the 910 m between the bed and the overburden
 head, while the head that balances the water lies about 500 m away. As the head rises, ``N`` falls, creep slows and
 ``\mathrm d\mathcal{W}/\mathrm dh`` grows quickly, which the slope at the iterate does not see. The cap stops this overshoot. With
 ``e_v > 0`` the gradient in the step is the total water thickness gradient ``\mathrm d\mathcal{W}/\mathrm dh + e_v``, about 30 times larger at ``e_v = 10^{-4}``. This straight part
@@ -330,7 +331,7 @@ equation,
 The original scheme then advances the gap with `ExplicitGapScheme` at the converged ``N``, so its head equation
 and its gap update agree, but the gap update is stable only for ``\Delta t\, R < 2``
 ([Accuracy of the gap update](@ref GapAccuracy)). `ShaktiSheet(original = true)` selects `FilledCavities`,
-`NoUplift`, `BedPotential` and `ExplicitGapCoupling`. With `ExplicitGapScheme` and `"arithmetic"` faces added,
+`NoUplift`, `BedPotential`, `ExplicitGapCoupling` and boundary faces open in both directions. With `ExplicitGapScheme` and `"arithmetic"` faces added,
 Shakti.jl solves these equations with their time discretization, on a finite-volume grid in place of their finite
 elements. The original code solves for the head at the vertices of a triangular mesh and holds the gap, the
 Reynolds number and hence ``K`` constant on each triangle. Two details still differ. Their transmissivity is
@@ -1022,9 +1023,10 @@ W^{(m+1)}_P = \max\!\left(0,\; W^{(m)}_P + \Delta t \left( \frac{\dot m_P}{\rho_
 and ``b^{(m+1)}_e = b_e(h^{(m+1)})`` is stored for the next step. The
 gap is updated separately ([Gap update](@ref GapUpdate)), so the empty part of the gap is ``b^{(m+1)} - W^{(m+1)}``,
 and any water above the gap is the uplift layer. On the other sheets the water thickness is not advanced from the
-budget. On the dry floor the gap update sets ``W^{(m+1)}`` ([Gap update](@ref GapUpdate)). Otherwise the water
-thickness is the new gap plus the
-uplift layer, ``W^{(m+1)} = b^{(m+1)} + (h^{(m+1)} - h_o)_+``, which under `ConsistentGapCoupling` is
+budget. On the dry floor (`FilledCavities`, `NoUplift` and `ConsistentGapCoupling` without gap diffusion) the gap
+update sets ``W^{(m+1)}`` ([Gap update](@ref GapUpdate)). Otherwise the water thickness is the new gap, plus the
+uplift layer under `IceUplift`, ``W^{(m+1)} = b^{(m+1)} + (h^{(m+1)} - h_o)_+``. Under `NoUplift` it is the gap alone,
+``W^{(m+1)} = b^{(m+1)}``, even where ``h^{(m+1)} > h_o``. Under `ConsistentGapCoupling` this is
 ``\mathcal{W}_P(h^{(m+1)})``.
 
 ## [Conservation](@id Conservation)
@@ -1052,7 +1054,12 @@ the face (``\Delta y`` for an ``x`` face). Faces to `OTHER_BASIN`, `FROZEN_BED` 
 flux. ``V_{\mathrm{created}}`` is the water a step leaves beyond its sources and fluxes. It has three sources.
 
 1. Under `UnfilledCavities`, the floor ``W \ge 0`` of the update above. A cell whose fluxes take out more water
-   than it holds has its water thickness set to zero, which creates the missing water.
+   than it holds has its water thickness set to zero, which creates the missing water. With `"upwind"` faces this
+   happens above the time-step limit of the rule, and with `"implicit_upwind"` faces only in unconverged steps
+   ([Why the water thickness is differentiated](@ref WhyDifferentiate)). The averaging rules (`"arithmetic"`, `"harmonic"`, `"gap_mean"`) would do so at
+   any time step, which is why they are refused under `UnfilledCavities`. Where the head rows and the gap update
+   disagree on the water, as under `ExplicitGapCoupling` or in an unconverged step, the difference stays in
+   ``W - b``, as empty gap or as water above the gap, and creates water only where it drives ``W`` below zero.
 2. On the other sheets, the coupling. Their water thickness is taken from the head and the gap, not advanced
    with the fluxes, so it differs from the budget wherever the head rows and the gap update disagree on the water.
    Under `ExplicitGapCoupling` they disagree wherever creep is fast or a clamp at ``b_{\min}`` or ``b_{\max}``
@@ -1061,8 +1068,22 @@ flux. ``V_{\mathrm{created}}`` is the water a step leaves beyond its sources and
 
 `water_created(sim)` returns ``V_{\mathrm{created}}`` of the last step and its sums over all steps, also summed by
 sign (`gross_created`, `gross_lost`) so that water created in one cell or step and lost in another does not cancel.
-Under `ConsistentGapCoupling` a converged step creates water of the order of the Picard tolerance times the input;
-under `ExplicitGapCoupling` it creates percents of the input or more. Water removed by mask changes is not part of
+Under `ConsistentGapCoupling` a converged step creates water of the order of the Picard tolerance times the input,
+and under `ExplicitGapCoupling` percents of the input or more.
+
+Where the water test applies ([Convergence tests](@ref ConvergenceTests)), it also bounds what a converged step can
+create. Each cell is balanced to ``\epsilon_w \Sigma_P``, so
+
+```math
+\left| V_{\mathrm{created}} \right| \lesssim \epsilon_w \sum_P \Sigma_P \, \Delta x \Delta y ,
+```
+
+with ``\Sigma_P`` the cell's water in the gap at the start and the end of the step, the change of its englacial
+water, and the magnitudes of its melt (or freeze-on) and input from above over the step. The englacial water
+itself and the face fluxes do not enter. This is a worst case, far above the water converged steps create in
+practice. But it is set by the water in the gap as well as by the sources, so where the gap holds much more water
+than the sources bring in one step, the bound allows a created water that is a sizeable fraction of that step's
+input. Water removed by mask changes is not part of
 it ([Mask changes](@ref MaskChanges)).
 
 ## [Melt on the grid](@id MeltOnTheGrid)

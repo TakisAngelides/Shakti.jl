@@ -155,8 +155,10 @@ target_time(ts::AdaptiveTimeStep) = ts.target_time
 $(TYPEDSIGNATURES)
 
 A sheet: the four choices that together make one physical model of the water at the bed, passed to
-[`Simulation`](@ref) as `sheet`. Build one with [`GlaDS2Sheet`](@ref) (the default) or [`ShaktiSheet`](@ref); a
-`Simulation` keyword (`cavity_filling`, `uplift`, `hydraulic_potential`, `gap_coupling`) overrides its field.
+[`Simulation`](@ref) as `sheet`, and its outlets. Build one with [`GlaDS2Sheet`](@ref) (the default) or
+[`ShaktiSheet`](@ref). A `Simulation` keyword (`cavity_filling`, `uplift`, `hydraulic_potential`, `gap_coupling`)
+overrides its field. `two_way_outlets = true` keeps the `LAND` and `OCEAN` faces open in both directions, whatever
+`ModelParameters`' `outflow_only_land`/`outflow_only_ocean` say (`Sheet(cf, up, hp, gcp)` leaves them to `ModelParameters`).
 The face transmissivity is not part of the sheet: it follows from the cavity filling and uplift (`k_face_choice`).
 """
 struct Sheet{CF <: AbstractCavityFilling, UP <: AbstractIceUplift, HP <: AbstractHydraulicPotential, GCP <: AbstractGapCoupling}
@@ -164,7 +166,9 @@ struct Sheet{CF <: AbstractCavityFilling, UP <: AbstractIceUplift, HP <: Abstrac
     up::UP
     hp::HP
     gcp::GCP
+    two_way_outlets::Bool
 end
+Sheet(cf, up, hp, gcp) = Sheet(cf, up, hp, gcp, false)
 
 """
 $(TYPEDSIGNATURES)
@@ -179,10 +183,14 @@ GlaDS2Sheet() = Sheet(UnfilledCavities(), IceUplift(), SheetTopPotential(), Cons
 $(TYPEDSIGNATURES)
 
 SHAKTI's sheet (Sommers et al. 2018): [`FilledCavities`](@ref) and [`NoUplift`](@ref), with `"arithmetic"` faces, so
-`p_w` may leave `[0, p_o]`. With `original = true` also [`BedPotential`](@ref) and [`ExplicitGapCoupling`](@ref): the
-original equations bit for bit. Otherwise [`SheetTopPotential`](@ref) and [`ConsistentGapCoupling`](@ref).
+`p_w` may leave `[0, p_o]`. With `original = true` also [`BedPotential`](@ref), [`ExplicitGapCoupling`](@ref) and
+two-way outlets (`LAND` and `OCEAN` faces open in both directions, whatever
+`ModelParameters`' `outflow_only_land`/`outflow_only_ocean` say), which give the head equation of the original model. Its gap update
+also needs `gap_scheme = ExplicitGapScheme()`. Otherwise [`SheetTopPotential`](@ref), [`ConsistentGapCoupling`](@ref)
+and the outlets of `ModelParameters` (outflow only by default). With filled cavities there is no free-surface layer, so
+`fs_factor`/`fs_omega` change nothing.
 """
-ShaktiSheet(; original::Bool = false) = original ? Sheet(FilledCavities(), NoUplift(), BedPotential(), ExplicitGapCoupling()) :
+ShaktiSheet(; original::Bool = false) = original ? Sheet(FilledCavities(), NoUplift(), BedPotential(), ExplicitGapCoupling(), true) :
                                                    Sheet(FilledCavities(), NoUplift(), SheetTopPotential(), ConsistentGapCoupling())
 
 # A face scheme by name (k_face_choice) or as itself.
@@ -195,6 +203,10 @@ k_face_scheme(name::AbstractString) =
     name == "implicit_upwind" ? ImplicitUpwind() :
     error("Unknown k_face_choice: \"$name\" (expected \"arithmetic\", \"harmonic\", \"gap_mean\", \"upwind\" or \"implicit_upwind\")")
 k_face_name(kfs::AbstractKFaceScheme) = kfs isa ImplicitUpwind ? "implicit_upwind" : kfs isa GapMean ? "gap_mean" : lowercase(string(nameof(typeof(kfs))))
+
+# p with LAND and OCEAN faces open in both directions (a Sheet with two_way_outlets, ShaktiSheet(original = true)).
+two_way_outlets(p::ModelParameters) =
+    typeof(p)((k in (:outflow_only_land, :outflow_only_ocean) ? false : getfield(p, k) for k in fieldnames(typeof(p)))...)
 
 sheet_name(o) = "$(nameof(typeof(o.cf)))/$(nameof(typeof(o.up)))"
 
@@ -248,10 +260,6 @@ const OPTION_RULES = (
           o.gcp isa ConsistentGapCoupling && o.ds isa NoDiffusion, :warn_once,
      o -> "k_face_choice = \"implicit_upwind\" on the filled sheet's dry floor with ExplicitGapScheme can run away: the explicit " *
           "gap update overshoots the water thicknesses that set the transmissivity of the faces. Use FullyImplicitGapScheme (the default)."),
-    # The free-surface layer is the water of an unfilled cavity (s.stor > 0, free_surface_weight): other sheets have none.
-    (o -> free_surface_on(o.p) && !(o.cf isa UnfilledCavities), :warn,
-     o -> "fs_factor/fs_omega != 1 with $(sheet_name(o)) has no effect: the free-surface layer is the water of an unfilled " *
-          "cavity, which needs cavity_filling = UnfilledCavities()."),
     # A ramp narrower than fs_blend_monotone lets the transmissivity fall as the head rises, and a cell can have two steady
     # states. On the SHW12 ramp (m = 50 mm/d) a jump (fs_blend = 0) left 54 cells unfilled at dt = 10 min, 57-60 at 1 h,
     # 117 at 6 h and 84-90 at 1 day, each steady (|dh/dt| < 1e-10 m/d) and kept when dt changed; fs_blend = 0.5 and the
@@ -342,7 +350,9 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
   identically zero the way `p.br`/`p.b_c` do): pass `WithDiffusion(ls)` explicitly, with `ls` a
   second, independent [`AbstractLinearSolver`](@ref) instance for `b`'s own diffusion operator.
 - `sheet`: [`GlaDS2Sheet`](@ref) (default) or [`ShaktiSheet`](@ref), a [`Sheet`](@ref) bundling `cavity_filling`, `uplift`,
-  `hydraulic_potential` and `gap_coupling`. Each of these keywords, when passed, overrides the sheet's field.
+  `hydraulic_potential` and `gap_coupling`. Each of these keywords, when passed, overrides the sheet's field. A sheet
+  with two-way outlets (`ShaktiSheet(original = true)`) stores `p` with `outflow_only_land = outflow_only_ocean = false`
+  in the `Simulation` (`sim.p`), and the `p` passed in is left as it is.
 - `k_face_choice`: `"arithmetic"`, `"harmonic"`, `"gap_mean"` ([`GapMean`](@ref)), `"upwind"` or `"implicit_upwind"`, or the scheme itself (`Arithmetic()`,
   `ImplicitUpwind()`, ...; see [`AbstractKFaceScheme`](@ref));
   by default `"implicit_upwind"` under [`UnfilledCavities`](@ref) or [`IceUplift`](@ref) (so with the default sheet),
@@ -350,8 +360,8 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
   wave in it, `q ~ K(W)*grad(zb)`; with `W` lagged to the start of the step a face mean is unstable (explicit central
   advection) at any `dt`, and `"upwind"` is stable only for `dt < dx*W/(3|q|)` (minutes at 100 m).
   `"implicit_upwind"` ([`ImplicitUpwind`](@ref)) takes `W` at the end of the step and is stable at any `dt`; it needs
-  a Picard solver with [`LUDirectSolver`](@ref) or `CUDSSDirectSolver(grid)` (`structure = :general`, the default) in `ps`, and
-  `Simulation` errors otherwise. `"upwind"` is the faster opt-out at short steps.
+  a Picard solver with [`LUDirectSolver`](@ref), `CUDSSDirectSolver(grid)` (`structure = :general`, the default) or
+  [`BiCGStabIterativeSolver`](@ref) in `ps`, and `Simulation` errors otherwise. `"upwind"` is the faster opt-out at short steps.
 - `cell_N_clamping`: [`NoCellNClamping`](@ref) (default, no-op) or a [`CellNClamping`](@ref)
   overriding specific cells' `N_min`/`N_max` on top of `p`'s global values (see
   `cell_N_clamping.jl`).
@@ -370,7 +380,7 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
   pressure may exceed the overburden, `N < 0`). The defaults, `UnfilledCavities()` and `IceUplift()` with
   `hydraulic_potential = SheetTopPotential()`, are the sheet of GlaDS-2 (Wells et al. 2026), with the pressure bounded
   by `0 <= p_w <= p_o` (the range a coupled ice model's sliding law expects). Pass `sheet = ShaktiSheet()` for SHAKTI's
-  sheet (`ShaktiSheet(original = true)` for its original equations bit for bit).
+  sheet (`ShaktiSheet(original = true)`, with `gap_scheme = ExplicitGapScheme()`, for its original equations).
 - `observer`: [`NoObserver`](@ref) (default), `IOObserver(obs, times, NetCDFFileWriter(), path)` (writes the
   `State` fields named in `obs` at the steps `times`; also `HDF5FileWriter()`, `JLD2FileWriter()`, `CSVFileWriter()`)
   or `LiveObserver(obs, times)` (keeps them in memory).
@@ -394,10 +404,11 @@ model parameters `p`, melt input `mi`, and sliding law `sl`.
 # Combinations
 
 Which options go together is decided in one place, `Shakti.OPTION_RULES`, checked once all
-defaults are resolved. Refused (an error): an averaged face (`Arithmetic`, `Harmonic`) under a free surface
-(`UnfilledCavities` or `IceUplift`); `ImplicitUpwind` without a solver for non-symmetric matrices; a `WithDiffusion`
-gap solver without a gap-system method; `N` clamps tighter than `[0, Inf)` under a free surface. Warned: `Upwind` chosen
-under a free surface, and `ImplicitUpwind` on the filled dry floor with `ExplicitGapScheme`.
+defaults are resolved. Refused with an error are an averaged face (`Arithmetic`, `Harmonic`, `GapMean`) under a free
+surface (`UnfilledCavities` or `IceUplift`), `ImplicitUpwind` without a solver for non-symmetric matrices, a `WithDiffusion`
+gap solver without a gap-system method, and `N` clamps tighter than `[0, Inf)` under a free surface. Warned about are
+`Upwind` chosen under a free surface, `ImplicitUpwind` on the filled dry floor with `ExplicitGapScheme`, and `fs_blend`
+below `fs_blend_monotone` with the free-surface layer on and `UnfilledCavities`.
 """
 function Simulation(grid, state, tsteps, dt, p, mi::AbstractMeltInput, sl::AbstractSlidingLaw; gap_scheme::AbstractGapScheme = FullyImplicitGapScheme(), ps = nothing, k_face_choice = nothing, verbose = false, cell_N_clamping::AbstractCellNClamping = NoCellNClamping(), timestep_scheme::AbstractTimeStepScheme = FixedTimeStep(), diffusion_scheme::AbstractDiffusionScheme = NoDiffusion(), head_extrapolation_order::Int = 1, sheet::Sheet = GlaDS2Sheet(), cavity_filling::Union{Nothing, AbstractCavityFilling} = nothing, hydraulic_potential::Union{Nothing, AbstractHydraulicPotential} = nothing, uplift::Union{Nothing, AbstractIceUplift} = nothing, gap_coupling::Union{Nothing, AbstractGapCoupling} = nothing, observer::AbstractObserver = NoObserver())
 
@@ -406,6 +417,7 @@ function Simulation(grid, state, tsteps, dt, p, mi::AbstractMeltInput, sl::Abstr
     uplift = something(uplift, sheet.up)
     hydraulic_potential = something(hydraulic_potential, sheet.hp)
     gap_coupling = something(gap_coupling, sheet.gcp)
+    sheet.two_way_outlets && (p = two_way_outlets(p))
 
     # Check that all tracked observables are valid State fields
     for name in (observer isa NoObserver ? String[] : observer.tracked_obs)

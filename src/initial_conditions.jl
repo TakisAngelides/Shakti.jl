@@ -96,7 +96,7 @@ function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, sl::Abst
     compute_dpwdy!(s, g)
     compute_N!(s, p) # Effective pressure
 
-    compute_h!(s, p) # Hydraulic head h = pw/(rho_w * g) + zb
+    compute_h!(s, p) # reduced head h = pw/(rho_w * g) + zb
 
     # Gradients of hydraulic head
     compute_dhdx!(s, g)

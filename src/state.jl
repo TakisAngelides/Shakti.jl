@@ -13,7 +13,7 @@ that operate on them. Build one with `State(grid)`, then populate it via
 struct State{A <: AbstractArray}
 
     # Center fields
-    h::A          # hydraulic head
+    h::A          # reduced head (the hydraulic head is h + b)
     pw::A         # water pressure
     po::A         # ice overburden pressure
     b::A          # water thickness

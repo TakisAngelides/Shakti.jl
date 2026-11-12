@@ -6,7 +6,7 @@
 
 Shakti.jl is a Julia implementation of the transient subglacial hydrology model Shakti of
 [Sommers et al. (2018)](https://doi.org/10.5194/gmd-11-2955-2018). On a regular grid it evolves the
-water-filled gap between ice and bed and gives the hydraulic head, the water flux and the effective
+gap between ice and bed and the water in it, and gives the reduced head, the water flux and the effective
 pressure at the ice base. One set of equations covers both distributed (laminar) and channelized
 (turbulent) drainage, and which one forms is decided by the solution dynamically.
 
@@ -21,7 +21,7 @@ Channel-wall diffusion from Suhmo is available as an option.
 
 ## Aim
 
-The aim is a finite differences Julia implementation of the Shakti model, with optional extensions of the physics, that is fast enough to be coupled to an ice-flow model such as
+The aim is a finite-volume Julia implementation of the Shakti model, with optional extensions of the physics, that is fast enough to be coupled to an ice-flow model such as
 [Yelmo](https://github.com/fesmc/yelmo) over long simulations, on CPU and GPU.
 
 ## Installation
@@ -69,7 +69,7 @@ set_initial_conditions!(state, grid, p, sl, mask, A_visc, zb, zs, b, G, ub_x, ub
 
 # 10 days of 1 h steps. The head is solved by Picard iteration with a sparse LU solver
 # (CUDSSDirectSolver(grid; structure = :general) instead of LUDirectSolver(grid) to run on GPU).
-ps  = PicardSolver(200, 1e-6, LUDirectSolver(grid), grid)
+ps  = PicardSolver(LUDirectSolver(grid), grid) # up to 500 iterations a step, relative tolerance 1e-6
 sim = Simulation(grid, state, 240, floattype(3600.0), p, # tsteps = 240, dt = 3600 (gap_scheme = FullyImplicitGapScheme() and sheet = GlaDS2Sheet() by default)
                  ConstantMeltInput(), sl; ps = ps, # type of englacial to subglacial melt input, sliding law, which picard solver
                  observer = IOObserver(["h", "N", "b"], 0:24:240, NetCDFFileWriter(), "output.nc")) # write h, N, b every 24 steps to a file
@@ -77,7 +77,7 @@ run!(sim)
 
 state.N   # effective pressure [Pa]
 state.b   # gap height [m]
-state.h   # hydraulic head [m]
+state.h   # reduced head [m]
 ```
 
 Every option, and when to choose it, is explained in the

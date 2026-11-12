@@ -18,14 +18,14 @@ struct ModelParameters{F <: AbstractFloat, NE1, NE2, NE3}
     br::F      # bedrock bump height
     lr::F      # bedrock bump spacing
     b_c::F     # creep cutoff length scale (see AbstractCreepLengthScheme, gap_height.jl); 0 by default, i.e. l_c = b (StandardCreep)
-    ct::F      # change of pressure melting point with temperature
+    ct::F      # change of pressure melting point with pressure (K/Pa)
     cw::F      # heat capacity of water
     p_atm::F   # atmospheric pressure, used as the Dirichlet reference for LAND/OCEAN BCs
-    b_min::F   # minimum water thickness
-    b_max::F   # maximum water thickness (Inf by default, i.e. no cap -- see docstring below)
+    b_min::F   # minimum gap height
+    b_max::F   # maximum gap height (Inf by default, i.e. no cap -- see docstring below)
     N_min::F   # minimum effective pressure (-Inf by default, i.e. no floor -- see docstring below)
     N_max::F   # maximum effective pressure (Inf by default, i.e. no cap -- see docstring below)
-    e_v::F     # englacial storage void ratio
+    e_v::F     # englacial porosity
     T_freeze::F       # basal temperature relative to pressure melting (K): T_prime_b < T_freeze freezes a GROUNDED cell, used by update_frozen_mask! (frozen_bed.jl)
     T_hysteresis::F   # thaw threshold sits this far (K, >= 0) above T_freeze: a FROZEN_BED cell thaws once T_prime_b >= T_freeze + T_hysteresis; 0 => single threshold, no hysteresis
     fs_factor::F      # laminar transmissivity of a free-surface (unfilled) layer relative to b^3 g/(12 nu): 1 = off (SHAKTI), 4 = g W^3/(3 nu) (free_surface_weight, water_flux.jl)
@@ -38,7 +38,7 @@ struct ModelParameters{F <: AbstractFloat, NE1, NE2, NE3}
     mdot_includes_qT::Bool          # include (subtract) the conductive-heat-into-ice term q_T in compute_mdot!
     gap_opening_melt::Symbol        # melt in the gap's opening term: :full (SHAKTI, all of mdot) or :exclude_uniform (net uniform melt makes water, not gap; see the docstring below)
     limit_freeze_on::Bool           # cap freeze-on at the water the gap can supply this step (mdot >= -rho_i*C, see freeze_on_capacity!)
-    outflow_only_land::Bool         # LAND faces pass water out of the grounded ice only, never in (compute_face_masks!, mask.jl)
+    outflow_only_land::Bool         # LAND faces pass water out of the grounded ice only, never in (compute_face_masks!, mask.jl), ShaktiSheet(original = true) keeps them open in both directions
     outflow_only_ocean::Bool        # same for OCEAN faces (false allows ocean water into the bed, e.g. tidal intrusion)
     n_exp::NE1         # canonical_exponent(n), see the fast-exponentiation note below
     n_minus_1_exp::NE2 # canonical_exponent(n - 1)
@@ -108,17 +108,26 @@ cell thaws once `T_prime_b >= T_freeze + T_hysteresis`; in between, a cell keeps
 so noise around a single threshold can't make it flicker. `T_hysteresis = 0` recovers a single
 threshold. Unused unless `update_frozen_mask!` is called.
 
-`fs_factor`, `fs_omega` and `fs_blend` (defaults `1`, `1`, `0.65`: off) treat the water of an unfilled cavity
+`fs_factor`, `fs_omega` and `fs_blend` (defaults `4`, `2`, `0.65`, so the layer is on) treat the water of an unfilled cavity
 ([`UnfilledCavities`](@ref)) as a free-surface layer, with air above it, instead of a duct between bed and ice. A layer
 of depth `W` with no shear at its surface flows as the lower half of a duct of gap `2W`: laminar, `q = g W^3 |grad h|/(3 nu)`,
 four times the duct's `g W^3/(12 nu)` (`fs_factor = 4`), and the Reynolds number of that duct is `2|q|/nu`, so `omega`
 counts twice (`fs_omega = 2`) for the same wall friction. Fully turbulent, the flux is then `sqrt(2)` times the duct's at
-the same depth, as a force balance on the layer gives. `fs_blend` ramps a cell from duct to free surface over an empty
-depth `zb - h` of `fs_blend * b` (smoothstep). Below `fs_blend = 0.645` (for `fs_factor = 4`; `fs_blend_monotone`) the
+the same depth, as a force balance on the layer gives. `fs_factor = fs_omega = 1` switches the layer off (the duct
+everywhere). The layer only exists in an unfilled cavity, so under [`FilledCavities`](@ref) (both [`ShaktiSheet`](@ref)s)
+these parameters change nothing. `fs_blend` ramps a cell from duct to free surface over an empty
+depth `zb - h` of `fs_blend * b` (smoothstep). Below `fs_blend = 0.645` (for `fs_factor = 4`, `fs_omega = 2`, from `fs_blend_monotone`) the
 transmissivity falls as the head rises somewhere in the ramp, and a cell can have two steady states, one each side of
 `h = zb`: with a jump (`fs_blend = 0`) the SHW12 ramp at 50 mm/d settled on 54, 84 or 117 unfilled cells depending on
 `dt`, each a steady state that a later change of `dt` kept. The default `0.65` keeps the transmissivity monotone and gave
-one state at every `dt` on the ramp and on Drang Drung, at about the Picard iterations of the duct law. See `free_surface_weight` (`water_flux.jl`).
+one state at every `dt` on the ramp and on Drang Drung, at about the Picard iterations of the duct law. Other
+`fs_factor`/`fs_omega` need their own bound, `Shakti.fs_blend_monotone(fs_factor, fs_omega)`, and `Simulation` warns
+when `fs_blend` lies below it. See `free_surface_weight` (`water_flux.jl`).
+
+`outflow_only_land` and `outflow_only_ocean` (default `true`) let a `LAND` or `OCEAN` face pass water out of the grounded
+ice only. A face whose fixed head lies above the cell's is closed (`compute_face_masks!`, `mask.jl`).
+`outflow_only_ocean = false` lets seawater into the bed. [`ShaktiSheet`](@ref)`(original = true)` sets both to `false` in
+the `Simulation`, so its outlets stay open in both directions.
 
 `mdot_includes_G`/`mdot_includes_frictional`/`mdot_includes_potential`/`mdot_includes_sensible`/
 `mdot_includes_qT` each independently switch one term of [`compute_mdot!`](@ref) on or off --
@@ -182,8 +191,8 @@ function ModelParameters(;
     e_v = 0.0,
     T_freeze = -1.0, # K below pressure melting, the same cutoff the pan_antarctica/Greenland drivers hard-coded (T_prime_b < -1)
     T_hysteresis = 0.5, # K; 0 disables hysteresis (a cell hovering at the threshold can then freeze/thaw repeatedly, resetting b/pw each time)
-    fs_factor = 1.0,
-    fs_omega = 1.0,
+    fs_factor = 4.0, # free-surface layer on (unfilled cavities only), 1 = off
+    fs_omega = 2.0,  # 1 = off
     fs_blend = 0.65, # >= fs_blend_monotone(4, 2) = 0.645: the transmissivity never falls as the head rises
     mdot_includes_G = true,
     mdot_includes_frictional = true,

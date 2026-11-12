@@ -1,7 +1,7 @@
 #=
 # [Parabolic head scheme](@id ParabolicScheme)
 With `e_v = 0` (the default) the head has no memory: each step solves an elliptic equation, and
-`h` jumps to the balance of the current gap and input. A non-zero englacial void ratio `e_v` adds
+`h` jumps to the balance of the current gap and input. A non-zero englacial porosity `e_v` adds
 the storage term `e_v ∂h/∂t` of [Sommers2018](@cite) (Eq. 13), so the head equation becomes
 parabolic and `h` takes time to follow a change in the input. The same [`PicardSolver`](@ref) solves
 both: with `e_v > 0` its rows also store the englacial water `e_v (h - z_b)`, between the bed and the
