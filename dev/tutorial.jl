@@ -57,8 +57,9 @@ One code per cell. It sets the boundary conditions:
 * `OTHER_BASIN`  ice outside the basin or no data and this cell is closed so no water crosses in
 * `FROZEN_BED`  frozen bed cell with `p_w = 0` that is closed (set by `update_frozen_mask!` described in step 12)
 
-The grid edge is closed, so every grounded region needs an outlet. Water leaves through `LAND`/`OCEAN`
-faces and never enters so `outflow_only_land` and `outflow_only_ocean` are by default true and described in step 5.
+The grid edge is closed, so every grounded region needs an outlet. By default water leaves through `LAND`/`OCEAN`
+faces and never enters (`outflow_only_land` and `outflow_only_ocean`, step 5). `ShaktiSheet(original = true)` (step 7)
+keeps them open in both directions.
 =#
 mask = fill(GROUNDED, nx, ny)
 mask[1, :] .= LAND                  # terminus at x = 0
@@ -87,7 +88,7 @@ ub_y   = zeros(nx, ny + 1)
 ieb    = fill(1.0 / (365 * 86400.0), nx, ny)   # 1 m/a
 taub_x, taub_y = zeros(nx + 1, ny), zeros(nx, ny + 1);
 
-# The geometry along `x` is described by a flat bed and the ice-sheet margin of SHMIP [deFleurian2018](@cite), which is 1 m thick at the outlet and about 520 m thick 20 km inland.
+# The geometry along `x` is described by a flat bed and the ice-sheet margin of SHMIP [deFleurian2018](@cite), which is 1 m thick at the outlet and about 525 m thick 20 km inland.
 # The slab is uniform in the `y` direction.
 xg = grid.x ./ 1e3
 geo = Figure(size = (720, 280))
@@ -139,12 +140,12 @@ geo
 | `b_max` | m | `Inf` | upper clamp of the gap height; ISSM's Shakti uses `1.0`. A finite value hides a gap runaway, `Inf` lets `check_gap_height` report it |
 | `N_min` | Pa | `-Inf` | lower clamp of `N`; off. On the default sheet `IceUplift` (step 7, [Wells2026](@cite)) already bounds `N >= 0` physically; a value `> 0` is refused with it |
 | `N_max` | Pa | `Inf` | upper clamp of `N`; off. On the default sheet `UnfilledCavities` (step 7, [Wells2026](@cite)) already bounds `N <= p_o` (`p_w >= 0`); a finite value is refused with it |
-| `e_v` | - | `0` | englacial void ratio ([Sommers2018](@cite) Eq. 13); `0` elliptic head equation, `> 0` parabolic, see the [Parabolic scheme](@ref ParabolicScheme) page |
+| `e_v` | - | `0` | englacial porosity ([Sommers2018](@cite) Eq. 13). `0` gives an elliptic head equation and `> 0` a parabolic one, see the [Parabolic scheme](@ref ParabolicScheme) page |
 | `T_freeze` | K | `-1.0` | `update_frozen_mask!` (step 12) freezes a cell when its basal temperature relative to pressure melting drops below this |
 | `T_hysteresis` | K | `0.5` | a frozen cell thaws at `T_freeze + T_hysteresis`; `0` gives one threshold, at which a cell might flicker |
-| `fs_factor` | - | `1` | transmissivity of the water in an unfilled cavity relative to the duct law; `4` is the free-surface law ``g W^3/(3\nu)``, see [Free-surface layer (optional)](@ref) |
-| `fs_omega` | - | `1` | ``\omega`` multiplier in an unfilled cavity; `2` is the Reynolds number of the mirrored duct, ``2|q|/\nu`` |
-| `fs_blend` | - | `0.65` | ramps an unfilled cell from duct to free surface over an empty depth of `fs_blend` times the gap; below 0.645 (for `fs_factor = 4`) the transmissivity falls as the head rises and the steady state can depend on `dt` (warned about) |
+| `fs_factor` | - | `4` | transmissivity of the water in an unfilled cavity relative to the duct law. `4` is the free-surface law ``g W^3/(3\nu)`` (see [Free-surface layer](@ref)), and `1` (with `fs_omega = 1`) keeps the duct law. No effect under `FilledCavities` |
+| `fs_omega` | - | `2` | ``\omega`` multiplier in an unfilled cavity. `2` gives the Reynolds number of the mirrored duct, ``2|q|/\nu``, and `1` the duct's |
+| `fs_blend` | - | `0.65` | ramps an unfilled cell from duct to free surface over an empty depth of `fs_blend` times the gap. Below 0.645 (for `fs_factor = 4`, `fs_omega = 2`) the transmissivity falls as the head rises and the steady state can depend on `dt` (warned about) |
 | `mdot_includes_G` | - | `true` | melt rate includes the geothermal flux |
 | `mdot_includes_frictional` | - | `true` | melt rate includes frictional heating |
 | `mdot_includes_potential` | - | `true` | melt rate includes potential-energy dissipation |
@@ -152,7 +153,7 @@ geo
 | `mdot_includes_qT` | - | `true` | melt rate includes the conductive heat into the ice |
 | `gap_opening_melt` | - | `:full` | which melt opens the gap: `:full` all of it (SHAKTI); `:exclude_uniform` leaves out the net uniform melt ``G + Q_b - q_T`` where the ice rests on its bumps, so it makes water but no gap ([Melt in the gap opening](@ref GapOpeningMelt)) |
 | `limit_freeze_on` | - | `true` | floors the melt rate at the freeze-on the gap can absorb this step (`freeze_on_capacity!`, step 12), so freezing never takes `b` below `b_min` or more water than a cell holds; `false` lets the melt rate freeze as much as the energy balance asks |
-| `outflow_only_land` | - | `true` | `LAND` outlets let water out, never in |
+| `outflow_only_land` | - | `true` | `LAND` outlets let water out, never in. `ShaktiSheet(original = true)` (step 7) sets both to `false` |
 | `outflow_only_ocean` | - | `true` | the same for `OCEAN` outlets; `false` could help to model tidal intrusion |
 =#
 p = ModelParameters();
@@ -276,6 +277,7 @@ step 8 solves in every Picard iteration.
 | `"upwind"` | the same, but at the water thickness of the *start* of the step | symmetric, so Cholesky and CG are allowed | ``\Delta t < \Delta x\, W / (3 \lvert q \rvert)``, minutes at 100 m | the water thickness is then explicit in time. Warns with `UnfilledCavities` or `IceUplift` |
 | `"arithmetic"` | mean of the two cells | symmetric | - | default with `FilledCavities` and `NoUplift`. Refused with `UnfilledCavities` or `IceUplift`, where it creates water |
 | `"harmonic"` | harmonic mean of the two cells, which is lower than the arithmetic mean where one cell has a small ``K`` | symmetric | - | same restriction as `"arithmetic"` |
+| `"gap_mean"` | ``K`` of the mean water thickness of the two cells, the face rule of Suhmo [Felden2023](@cite) | symmetric | - | same restriction as `"arithmetic"` |
 
 ### Gap coupling and the water budget
 Each step solves the head equation and then moves the gap with the gap scheme (step 9). The head equation contains the change of the
@@ -295,11 +297,13 @@ The [Gap coupling](@ref GapCoupling) page runs both on this tutorial's glacier a
 ```julia
 sheet = GlaDS2Sheet()     # UnfilledCavities, IceUplift, SheetTopPotential, ConsistentGapCoupling
 sheet = ShaktiSheet()     # FilledCavities, NoUplift, SheetTopPotential, ConsistentGapCoupling
-sheet = ShaktiSheet(original = true)   # FilledCavities, NoUplift, BedPotential, ExplicitGapCoupling
+sheet = ShaktiSheet(original = true)   # FilledCavities, NoUplift, BedPotential, ExplicitGapCoupling, two-way outlets
 sim = Simulation(grid, state, nsteps, dt, p, mi, sl; ps = ps, sheet = sheet)
 ```
-`ShaktiSheet(original = true)` already contains `BedPotential()` and `ExplicitGapCoupling()`: nothing has to be passed on top of it.
-It reproduces the equations of Shakti bit for bit. A keyword passed to `Simulation` replaces the field of `sheet` it names, so one
+`ShaktiSheet(original = true)` already contains `BedPotential()` and `ExplicitGapCoupling()`, and keeps the `LAND` and `OCEAN`
+faces open in both directions (it sets `outflow_only_land` and `outflow_only_ocean` of `sim.p` to `false`). It gives the head equation of Shakti.
+For its time discretization of the gap as well, also pass `gap_scheme = ExplicitGapScheme()` (step 9). The details that still
+differ from the finite elements of Shakti are listed in [Gap couplings](@ref GapCouplings). A keyword passed to `Simulation` replaces the field of `sheet` it names, so one
 choice can be changed without building a new sheet:
 ```julia
 sim = Simulation(grid, state, nsteps, dt, p, mi, sl; ps = ps, sheet = ShaktiSheet(), hydraulic_potential = BedPotential())
@@ -310,7 +314,7 @@ sim = Simulation(grid, state, nsteps, dt, p, mi, sl; ps = ps, k_face_choice = "u
 Which to choose:
 * default: bounded ``p_w``, a closed water budget, large steps (hours to days)
 * Shakti's sheet: `ShaktiSheet()`, with which Cholesky and CG are allowed
-* the original equations bit for bit: `ShaktiSheet(original = true)`
+* the original equations: `ShaktiSheet(original = true)` with `gap_scheme = ExplicitGapScheme()`
 =#
 sheet = GlaDS2Sheet();
 
@@ -320,15 +324,16 @@ The head equation is nonlinear, and a Picard iteration solves it: each iteration
 for the head with the linear solver and repeats until the head stops changing. Both objects are created explicitly:
 ```julia
 ls = LUDirectSolver(grid)                       # linear solver
-max_iter, tol = 200, 1e-6   # Picard iterations per step and tolerance
-ps = PicardSolver(max_iter, tol, ls, grid)           # Picard solver, passed to Simulation as ps = ps
+ps = PicardSolver(ls, grid)                     # Picard solver, passed to Simulation as ps = ps
+ps = PicardSolver(ls, grid; iters = 200, tol = 1e-8)   # the same with other settings
+ps = PicardSolver(200, 1e-8, ls, grid)          # the same, positional
 ```
-`PicardSolver(iters, tol, ls, grid; alpha, atol, check_every)` works for any `e_v` (englacial storage), zero or not:
+`PicardSolver(ls, grid; iters, tol, alpha, atol, check_every)` works for any `e_v` (englacial storage), zero or not.
 
 | Argument | Default | Meaning |
 |:---------|:--------|:--------|
-| `iters` | - | the largest number of Picard iterations per step. A step that does not converge within it is counted in `unconverged` (step 11) and warns |
-| `tol` | - | relative tolerance: the iteration stops when the largest head change of an iteration, divided by the largest head, is below `tol` |
+| `iters` | `500` | the largest number of Picard iterations per step. A step that does not converge within it is counted in `unconverged` (step 11) and warns |
+| `tol` | `1e-6` | relative tolerance. The iteration stops when the largest head change of an iteration, divided by the largest head, is below `tol` |
 | `ls` | - | the linear solver of the table below |
 | `grid` | - | the grid of step 2 |
 | `alpha` | `nothing` | under-relaxation in `(0, 1]`. The new head is `alpha` times the solve plus `1 - alpha` times the previous iterate. Use `alpha < 1` when the iteration stalls or oscillates; it needs more iterations. `nothing` is no relaxation |
@@ -376,8 +381,7 @@ Other solver keywords of `Simulation`:
 * `diffusion_scheme = NoDiffusion()` (default)  `WithDiffusion(ls2)` adds Suhmo's channel-wall diffusion of the gap [Felden2023](@cite). It solves a second linear system, for the gap, so `ls2` is a second solver instance next to the head solver's `ls`; see the [Suhmo page](@ref SUHMO)
 =#
 ls = LUDirectSolver(grid)
-max_iter, tol = 200, 1e-6   # Picard iterations per step and tolerance
-ps = PicardSolver(max_iter, tol, ls, grid);
+ps = PicardSolver(ls, grid);   # up to 500 iterations a step, tolerance 1e-6
 
 #=
 ## 9. Gap scheme and time step
@@ -395,7 +399,7 @@ Time step (`timestep_scheme` keyword):
 |:---------|:--------|
 | `dt_min`, `dt_max` | smallest and largest step allowed, in seconds |
 | `target_time` | the total simulated time (seconds, counted from the start of this run) that the run should cover. `run!` stops once the simulated time reaches it, and the last step is shortened to land exactly on it. The number of steps is not known in advance, so `nsteps` of the `Simulation` is only an upper bound, e.g. `ceil(target_time / dt_min)` |
-| `safety_factor` | `nothing` (default): no extra cap, `dt` is set by the head solve alone. A number, e.g. `0.3`: also require ``dt \le \text{safety\_factor}/r``, where ``r = A |N|^{n-1} N + |u_b|/l_r`` is the rate (in 1/s) at which the gap relaxes by creep and by sliding, taken as its maximum over the cells with ``b > b_{min}``. So `dt` is at most `safety_factor` times the gap's relaxation time, which keeps the gap accurate (it is an accuracy cap, not needed for stability) |
+| `safety_factor` | `nothing` (default) adds no extra cap, so `dt` is set by the head solve alone. A number, e.g. `0.3`, also requires ``dt \le \text{safety\_factor}/r``, where ``r = A |N|^{n-1} N + |u_b|/l_r`` is the rate (in 1/s) at which the gap relaxes by creep and by sliding (the sliding part only while ``b`` is below the bump height), taken as its maximum over the cells with ``b > b_{min}``. So `dt` is at most `safety_factor` times the gap's relaxation time, which keeps the gap accurate (it is an accuracy cap, not needed for stability) |
 | `use_percentile`, `percentile` | take the `percentile`-th quantile of ``r`` instead of its maximum, so that a single stiff cell does not shrink the step for the whole domain (needs a sort each step, so it is slower) |
 
 For example, one year with a step that adapts between 10 minutes and 2 days and is also capped by the gap rate:
@@ -510,7 +514,7 @@ Between steps (`step!(sim)` advances one) a host model can:
 ## 13. Plot
 The slab is uniform in `y`, so only a profile along `x` is plotted: the effective pressure, the gap
 height and the Reynolds number on days 0, 1, 10, 30 and 100, from the NetCDF file.
-* `N` is smallest at the outlet but not zero. The ice there is thin (11.5 m at the first grounded cell, 1 m at the terminus
+* `N` is smallest at the outlet but not zero. The ice there is thin (11.6 m at the first grounded cell, 1 m at the terminus
   itself), so ``p_o`` is only 0.1 MPa. The water drains at atmospheric pressure, ``p_w = 0``, so ``N = p_o - p_w = p_o``
   and `N/p_o = 1` there. ``N`` would reach zero only if ``p_w`` rose to ``p_o``.
 * `N` is set within a day. The gap takes about 100 days: it opens near the outlet, where the
