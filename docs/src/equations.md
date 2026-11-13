@@ -199,7 +199,7 @@ L \dot m
   = Q_G
   + \underbrace{|\mathbf{u}_b \cdot \boldsymbol{\tau}_b|}_{Q_b}
   \underbrace{- \rho_w g\, \mathbf{q} \cdot \nabla \hat{h}}_{Q_{\mathrm{diss}}}
-  + \underbrace{c_t c_w \rho_w\, \mathbf{q} \cdot \nabla p_w}_{Q_{\mathrm{sens}}}
+  + \underbrace{c_t c_w \rho_w\, \mathbf{q} \cdot \nabla p_b}_{Q_{\mathrm{sens}}}
   - Q_T ,
 ```
 
@@ -207,8 +207,15 @@ with the geothermal heat flux ``Q_G``, the frictional heat ``Q_b`` of sliding wi
 ``\boldsymbol{\tau}_b``, the heat ``Q_{\mathrm{diss}} = \rho_w g K |\nabla\hat{h}|^2 \ge 0`` dissipated by the
 flow, the sensible heat ``Q_{\mathrm{sens}}`` needed to keep the water at the pressure-melting point
 (which falls by ``c_t`` per Pascal), and the conductive heat flux ``Q_T`` into the ice. We assume that water is always at its pressure-melting point temperature, so that water that flows
-towards lower pressure, ``\mathbf{q} \cdot \nabla p_w < 0``, is warmed to its rising melting point, which
-takes heat from melting. Each term can be turned off (`mdot_includes_*` in `ModelParameters`).
+towards lower pressure, ``\mathbf{q} \cdot \nabla p_b < 0``, is warmed to its rising melting point, which
+takes heat from melting. The pressure is the water pressure at the bed,
+``p_b = p_w + \rho_w g W = \rho_w g (\hat{h} - z_b)``, which with the bed elevation makes up the head that drives
+the flux. The pressure in the sheet is hydrostatic, so the pressures at different heights in it differ by multiples
+of ``\rho_w g W``, and their gradients differ by terms of order ``\rho_w g W/\ell``, with ``\ell`` the horizontal
+distance over which ``W`` changes by about itself. The depth-integrated flux already neglects terms of that order.
+The pressure ``p_w`` at the top of the sheet would add ``-c_t c_w \rho_w^2 g\, \mathbf{q}\cdot\nabla W``, which in a
+filled cell is an explicit centred advection of the start-of-step gap by the flux, and is unstable
+([Melt rate](@ref) in the discretization). Each term can be turned off (`mdot_includes_*` in `ModelParameters`).
 ``\boldsymbol{\tau}_b`` comes from a sliding law in ``N`` and ``\mathbf{u}_b`` (table in
 [the tutorial](@ref "Sliding law")) or from an ice-flow model. Freeze-on (``\dot m < 0``) is limited
 to the water the gap holds. Optionally, net uniform melt makes water but no gap where the ice rests on its

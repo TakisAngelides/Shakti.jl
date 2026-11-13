@@ -1108,16 +1108,24 @@ The heat terms are built from face quantities, the flux and the gradients, which
 into cell values.
 
 The dissipation and the sensible heat are built from face products. On the staggered grid both factors of ``\mathbf{q}\cdot\nabla\hat{h}`` and of
-``\mathbf{q}\cdot\nabla p_w`` live on the faces. On face ``f``, ``q_f (\nabla\hat{h})_f`` is the power dissipated
+``\mathbf{q}\cdot\nabla p_b`` live on the faces. On face ``f``, ``q_f (\nabla\hat{h})_f`` is the power dissipated
 per unit bed area in a strip of width ``\Delta_f`` centred on the face. That strip lies half in each of the two
 cells, so each cell receives half of it,
 
 ```math
 Q_{\mathrm{diss},P} = \rho_w g \left| \sum_f s_f\, q_f (\nabla\hat{h})_f \right|, \qquad
-Q_{\mathrm{sens},P} = c_t c_w \rho_w \sum_f s_f\, q_f (\nabla p_w)_f ,
+Q_{\mathrm{sens},P} = c_t c_w \rho_w \sum_f s_f\, q_f (\nabla p_b)_f ,
 ```
 
-with ``s_f = \tfrac12`` on a face between two grounded cells. A face to an `OCEAN` or `LAND` cell has
+with ``s_f = \tfrac12`` on a face between two grounded cells. The pressure is the water pressure at the bed. On a
+face, ``(\nabla p_b)_f`` is the difference of the two cells' ``\rho_w g (h - z_b)``, not floored or capped, plus
+``\rho_w g\, \delta b_f`` under `SheetTopPotential`, over the cell spacing, so
+``(\nabla p_b)_f = \rho_w g\,[(\nabla\hat{h})_f - (\nabla z_b)_f]``. The pressure ``p_w`` at the top of the sheet
+would instead give ``-\rho_w g\, \delta b_f/\Delta_f`` where ``\hat{h}`` is smooth. The sensible heat would then
+advect the start-of-step gap by the flux with centred differences, at the speed ``\kappa |\mathbf{q}|`` with
+``\kappa = c_t c_w \rho_w^2 g/(\rho_i L) \approx 10^{-5}\,\mathrm{m^{-1}}``. An explicit centred advection grows any
+cell-to-cell sawtooth of the gap, and on Felden et al. (2023) Fig. 4 at ``\Delta x = 0.125`` m it ran away at the
+outlet. A face to an `OCEAN` or `LAND` cell has
 ``s_f = 1``. The boundary cell has no hydrology to receive its half of the heat of the outflow, so the grounded
 cell takes all of it. For uniform ``\mathbf{q}`` and ``\nabla\hat{h}`` the two ``x`` faces of a cell contribute
 ``q_x \partial_x\hat{h}`` and the two ``y`` faces ``q_y \partial_y\hat{h}``, so the sum gives

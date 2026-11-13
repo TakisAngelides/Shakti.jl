@@ -99,9 +99,10 @@ compute_b_w!(s::State, p::ModelParameters) = (@parallel compute_b_w_kernel!(s.b_
 # results no longer depend on b_min (b_min = 1e-3 matches b_min = 1e-6 to all printed digits there).
 # DiffusiveGapUpdate (WithDiffusion): its gap update is a global solve, so each cell takes the gap of the last solve,
 # State.b_next, and its slope State.db_next (DiffusiveCellGap). The head rows store that gap; the transmissivity takes the
-# smaller of it and the start-of-step gap: lagged where the gap opens (a melt opening at the iterate would close the loop
-# W -> K -> q -> mdot -> W inside the Picard iteration, see store_start_of_step_melt!), the row's own water where it closes
-# (an unfilled cell then passes on no more water than its row holds).
+# smaller of the start-of-step gap and the gap of a solve with the start-of-step melt opening (refresh_head_dependents!
+# passes melt_open0 to solve_gap_iterate!): lagged where the gap opens, as a melt opening at the iterate would close the
+# loop W -> K -> q -> mdot -> W inside the Picard iteration (see store_start_of_step_melt!; through min(b, b_next) it made
+# the outlet cell of Felden et al. Fig. 4 at dx = 0.125 m cycle), and capped at the start-of-step gap where it closes.
 struct DiffusiveCellGap{F} <: AbstractGapCoupling
     bn::F          # State.b_next
     gbn::F         # State.db_next
@@ -185,7 +186,10 @@ original scheme lags the whole gap. Where the melt falls within the step the tra
 which is then the smaller ([`compute_b_w_iterate!`](@ref)): with the start-of-step melt a nearly empty cell kept a
 transmissivity for water its row had already drained below zero, and the floor of [`update_water_budget!`](@ref) made up
 the difference (Helheim at 500 m, dt = 1 day, cold start: the dissipation melt halved within the step, a gap 1.7 mm
-larger, 9e-4 of the melt created, and the step never passed [`water_converged`](@ref)).
+larger, 9e-4 of the melt created, and the step never passed [`water_converged`](@ref)). That exception is for the
+cell-local gap update only: under [`WithDiffusion`](@ref) the transmissivity's gap is solved with the start-of-step melt
+alone ([`solve_gap_iterate!`](@ref)) and capped at the start-of-step gap ([`DiffusiveCellGap`](@ref)), and the same
+Helheim cold start converged every step that way.
 """
 store_start_of_step_melt!(::AbstractKFaceScheme, s::State) = s
 store_start_of_step_melt!(::ImplicitUpwind, s::State) = (copyto!(s.melt_open0, s.melt_open); s)

@@ -64,7 +64,7 @@ struct State{A <: AbstractArray}
     b_x::A        # water thickness in x direction
     ub_x::A       # sliding velocity in x direction
     taub_x::A     # basal shear stress in x direction
-    dpwdx::A      # gradient of water pressure in x direction
+    dpwdx::A      # gradient of the water pressure at the bed, rho_w g (hhat - zb), in x direction (sensible heat, compute_dpwdx!)
     D_x::A        # channel-wall diffusion coefficient in x direction (SUHMO Eq. 10, WithDiffusion only -- see AbstractDiffusionScheme, linear_solver.jl)
     K_x::A        # face transmissivity in x direction: what the linear system assembles and q_x is built from (compute_face_flux!, water_flux.jl)
     Jw_x::A       # ImplicitUpwind: Newton coefficient of the x-face flux in the donor's head through its water thickness [m/s], signed by donor side (water_depth_newton_kernel!); zero otherwise
@@ -79,7 +79,7 @@ struct State{A <: AbstractArray}
     b_y::A        # water thickness in y direction
     ub_y::A       # sliding velocity in y direction
     taub_y::A     # basal shear stress in y direction
-    dpwdy::A      # gradient of water pressure in y direction
+    dpwdy::A      # gradient of the water pressure at the bed in y direction
     D_y::A        # channel-wall diffusion coefficient in y direction, the y-face counterpart of D_x
     K_y::A        # face transmissivity in y direction, the y-face counterpart of K_x
     Jw_y::A       # ImplicitUpwind: the y-face counterpart of Jw_x

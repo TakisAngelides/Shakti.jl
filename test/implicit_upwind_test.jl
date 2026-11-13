@@ -580,4 +580,44 @@
             end
         end
 
+        @testset "WithDiffusion: the transmissivity takes a gap solve with the start-of-step melt" begin
+            nx, ny = 40, 3
+            grid = Grid(nx, ny, 3.9e3, 200.0)
+            x = Array(grid.x)
+            zb = repeat(80.0 .* (1 .- x ./ x[end]), 1, ny)
+            H  = repeat([400.0 * sqrt(max(0.0, 1 - xi / x[end])) for xi in x], 1, ny)
+            mask = fill(GROUNDED, nx, ny); mask[end, :] .= LAND
+            p = ramp_params()
+            state = State(grid)
+            set_initial_conditions!(state, grid, p, sl, mask, fill(5e-25, nx, ny), zb, zb .+ H, fill(0.005, nx, ny), zeros(nx, ny),
+                                    fill(ub, nx + 1, ny), zeros(nx, ny + 1), fill(5e-3 / 86400, nx, ny), zeros(nx + 1, ny), zeros(nx, ny + 1))
+            sim = Simulation(grid, state, 2, floattype(3600.0), p, ConstantMeltInput(), sl; k_face_choice = "implicit_upwind",
+                             cavity_filling = UnfilledCavities(), uplift = NoUplift(), gap_coupling = ConsistentGapCoupling(),
+                             diffusion_scheme = WithDiffusion(CholeskyDirectSolver(grid)),
+                             ps = PicardSolver(200, floattype(1e-11), LUDirectSolver(grid), grid))
+            step!(sim)
+            s = sim.state; gc = Shakti.gap_coupling_terms(sim)
+            @test gc isa Shakti.DiffusiveGapUpdate
+            g = Array(s.mask) .== GROUNDED
+            # the melt keyword is the melt opening the gap system takes
+            mo = copy(s.melt_open)
+            s.melt_open0 .= ifelse.(g, 2e-7, 0.0) # a start-of-step melt opening different from the iterate's (melt terms off, so 0)
+            Shakti.solve_gap_iterate!(gc, sim.ds, s, grid, p; melt = s.melt_open0); bn0, dbn0 = copy(s.b_next), copy(s.db_next)
+            copyto!(s.melt_open, s.melt_open0); Shakti.solve_gap_iterate!(gc, sim.ds, s, grid, p)
+            @test s.b_next == bn0 && s.db_next == dbn0
+            copyto!(s.melt_open, mo)
+            # refresh_head_dependents!: the transmissivity's water from the solve with melt_open0, the head rows' gap (the last
+            # b_next) from the iterate's melt. D is fixed here (melt terms off), so the solves can be repeated afterwards.
+            Shakti.refresh_head_dependents!(s, grid, p, sim.mt, sim.kfs, sim.sl; cnc = sim.cnc, ds = sim.ds, gc = gc)
+            bw, bn_rows = copy(s.b_w), copy(s.b_next)
+            Shakti.solve_gap_iterate!(gc, sim.ds, s, grid, p)
+            @test s.b_next == bn_rows
+            Shakti.solve_gap_iterate!(gc, sim.ds, s, grid, p; melt = s.melt_open0)
+            Shakti.compute_b_w_iterate!(s, p, gc)
+            @test s.b_w == bw
+            Shakti.solve_gap_iterate!(gc, sim.ds, s, grid, p)
+            Shakti.compute_b_w_iterate!(s, p, gc)
+            @test s.b_w != bw # the iterate's melt would give another transmissivity
+        end
+
     end

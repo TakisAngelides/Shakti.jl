@@ -147,7 +147,8 @@
                 step!(sim); push!(dts, sim.dt[]); push!(conv, first(Shakti.picard_status(sim.hs))); sim.total_time[] += sim.dt[]
             end
             @test ts.rejected[] > 0 && all(conv)
-            @test minimum(dts) < 3 * 3600.0 && maximum(dts[argmin(dts):end - 1]) == 3 * 3600.0 # halved, then grown back to dt_max
+            body = dts[1:end-1] # the last step is cut to land on target_time, so it may be the shortest
+            @test minimum(body) < 3 * 3600.0 && maximum(body[argmin(body):end]) == 3 * 3600.0 # halved, then grown back to dt_max
             @test sim.total_time[] == day
             # only the head was redone: the same steps at fixed dt give the same state bit for bit
             ref = make_sim(; up = IceUplift(), cf = UnfilledCavities(), iters = 80)

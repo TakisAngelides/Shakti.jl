@@ -552,7 +552,8 @@ explicit coupling assumed `dt*rate(N, b_old)` plus the diffusion of the old gap 
 up to 1.8 times the melt input of a step. `br` is the bump height of the cell ([`cell_gap`](@ref)), `lr` the bump
 spacing. The transmissivity keeps the start-of-step gap, except under [`ImplicitUpwind`](@ref), where it takes the smaller of
 that gap and `b_next` ([`DiffusiveCellGap`](@ref)): with [`UnfilledCavities`](@ref) a draining cell otherwise passed on
-water its row no longer held (Picard loops of 500 iterations on a moulin slab at dt = 1 day).
+water its row no longer held (Picard loops of 500 iterations on a moulin slab at dt = 1 day). That `b_next` is solved with
+the melt opening of the start of the step (`melt_open0`, [`solve_gap_iterate!`](@ref)), the head rows' with the iterate's.
 """
 struct DiffusiveGapUpdate{F} <: AbstractGapCoupling
     dt::F
@@ -1213,7 +1214,7 @@ $(TYPEDSIGNATURES)
 Rebuilds `sals.M`/`sals.rhs` in place for `b`'s own diffusion solve from the current `s`/`p`/`dt`
 -- see [`update_SALS_b_diffusion_kernel!`](@ref).
 """
-function update_SALS_b_diffusion!(sals::SparseAssembledLinearSystem, s::State, g::Grid, p::ModelParameters, dt)
+function update_SALS_b_diffusion!(sals::SparseAssembledLinearSystem, s::State, g::Grid, p::ModelParameters, dt, melt = s.melt_open)
 
     rhs = sals.rhs
     nzval = sals.M.nzval
@@ -1222,7 +1223,7 @@ function update_SALS_b_diffusion!(sals::SparseAssembledLinearSystem, s::State, g
     fill!(nzval, 0)
     fill!(rhs, 0)
 
-    @parallel (1:g.nx, 1:g.ny) update_SALS_b_diffusion_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.b, s.melt_open, s.beta, s.abs_ub, s.A_visc, s.N, s.lc, s.D_x, s.D_y, p.rho_i, p.n_minus_1_exp, g.dx2, g.dy2, dt, s.bump, p.lr)
+    @parallel (1:g.nx, 1:g.ny) update_SALS_b_diffusion_kernel!(s.mask, nzval, rhs, idxP, idxE, idxW, idxN, idxS, s.b, melt, s.beta, s.abs_ub, s.A_visc, s.N, s.lc, s.D_x, s.D_y, p.rho_i, p.n_minus_1_exp, g.dx2, g.dy2, dt, s.bump, p.lr)
 
     return
 
@@ -1273,7 +1274,7 @@ $(TYPEDSIGNATURES)
 Rebuilds `mfls.aP`/`aE`/`aW`/`aN`/`aS`/`rhs` in place for `b`'s own diffusion solve -- the
 [`MatrixFreeLinearSystem`](@ref) counterpart of `update_SALS_b_diffusion!`.
 """
-function update_MFLS_b_diffusion!(mfls::MatrixFreeLinearSystem, s::State, g::Grid, p::ModelParameters, dt)
+function update_MFLS_b_diffusion!(mfls::MatrixFreeLinearSystem, s::State, g::Grid, p::ModelParameters, dt, melt = s.melt_open)
 
     fill!(mfls.aP, 0)
     fill!(mfls.aE, 0)
@@ -1282,7 +1283,7 @@ function update_MFLS_b_diffusion!(mfls::MatrixFreeLinearSystem, s::State, g::Gri
     fill!(mfls.aS, 0)
     fill!(mfls.rhs, 0)
 
-    @parallel (1:g.nx, 1:g.ny) update_MFLS_b_diffusion_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.b, s.melt_open, s.beta, s.abs_ub, s.A_visc, s.N, s.lc, s.D_x, s.D_y, p.rho_i, p.n_minus_1_exp, g.dx2, g.dy2, dt, s.bump, p.lr)
+    @parallel (1:g.nx, 1:g.ny) update_MFLS_b_diffusion_kernel!(s.mask, mfls.aP, mfls.aE, mfls.aW, mfls.aN, mfls.aS, mfls.rhs, s.b, melt, s.beta, s.abs_ub, s.A_visc, s.N, s.lc, s.D_x, s.D_y, p.rho_i, p.n_minus_1_exp, g.dx2, g.dy2, dt, s.bump, p.lr)
 
     return
 
@@ -1328,11 +1329,18 @@ after `N`, for the transmissivity (Helheim with unfilled cavities: 106 iteration
 other gap coupling. The last call is at the converged head, so the step's own gap update ([`compute_b!`](@ref)) takes
 `b_next` without solving again. A step of `K` iterations solves the gap system `K + 1` times, `2K + 2` under
 `ImplicitUpwind` (plus one or two per donor polishing round).
+
+`melt` is the melt opening the gap system takes (default `s.melt_open`, the iterate's). The transmissivity's call passes
+the start-of-step melt `s.melt_open0` (see [`store_start_of_step_melt!`](@ref)): with the iterate's melt the loop
+melt -> gap -> K -> q -> melt closed inside the Picard iteration, with a gain of about `1.5 dt mdot/(rho_i W)`, and where
+that exceeds 1 the iteration cycles instead of converging (Felden et al. Fig. 4 at dx = 0.125 m: a 7-iteration cycle at
+the outlet cell on day 18.8). The head rows' call keeps the iterate's melt, so the water they store and the gap update
+are unchanged.
 """
-solve_gap_iterate!(::AbstractGapCoupling, ::AbstractDiffusionScheme, s::State, g::Grid, p::ModelParameters) = s
-function solve_gap_iterate!(gu::DiffusiveGapUpdate, ds::WithDiffusion, s::State, g::Grid, p::ModelParameters)
-    solve_b_diffusion!(ds.ls, s, g, p, gu.dt, s.b_next)
-    @parallel gap_iterate_slope_kernel!(s.db_next, s.b_next, s.mask, s.b, s.melt_open, s.beta, s.abs_ub, s.A_visc, s.N, s.lc, s.D_x, s.D_y, p.rho_i, p.rho_w, p.g, p.n_minus_1_exp, g.dx2, g.dy2, p.b_min, p.b_max, gu, s.bump)
+solve_gap_iterate!(::AbstractGapCoupling, ::AbstractDiffusionScheme, s::State, g::Grid, p::ModelParameters; melt = nothing) = s
+function solve_gap_iterate!(gu::DiffusiveGapUpdate, ds::WithDiffusion, s::State, g::Grid, p::ModelParameters; melt = s.melt_open)
+    solve_b_diffusion!(ds.ls, s, g, p, gu.dt, s.b_next, melt)
+    @parallel gap_iterate_slope_kernel!(s.db_next, s.b_next, s.mask, s.b, melt, s.beta, s.abs_ub, s.A_visc, s.N, s.lc, s.D_x, s.D_y, p.rho_i, p.rho_w, p.g, p.n_minus_1_exp, g.dx2, g.dy2, p.b_min, p.b_max, gu, s.bump)
     return s
 end
 
@@ -1464,9 +1472,9 @@ bundled in [`WithDiffusion`](@ref) (built the same way as `h`'s own, e.g. a seco
 its name; this instance never actually solves for `h`. `out` (default `s.b`) receives the result; `solve_gap_iterate!`
 passes `s.b_next`, keeping the start-of-step gap. The CG methods warm-start from `s.b` either way.
 """
-function solve_b_diffusion!(ls::CholeskyDirectSolver, s::State, g::Grid, p::ModelParameters, dt, out = s.b)
+function solve_b_diffusion!(ls::CholeskyDirectSolver, s::State, g::Grid, p::ModelParameters, dt, out = s.b, melt = s.melt_open)
 
-    update_SALS_b_diffusion!(ls.sals, s, g, p, dt)
+    update_SALS_b_diffusion!(ls.sals, s, g, p, dt, melt)
 
     cholesky!(ls.fact, Symmetric(ls.sals.M))
 
@@ -1483,8 +1491,8 @@ Solves SUHMO's gap system with an [`LUDirectSolver`](@ref), as the [`CholeskyDir
 system is symmetric positive definite, so Cholesky is the cheaper choice; this method lets one LU solver type serve
 both the (non-symmetric, [`ImplicitUpwind`](@ref)) head solve and the gap solve.
 """
-function solve_b_diffusion!(ls::LUDirectSolver, s::State, g::Grid, p::ModelParameters, dt, out = s.b)
-    update_SALS_b_diffusion!(ls.sals, s, g, p, dt)
+function solve_b_diffusion!(ls::LUDirectSolver, s::State, g::Grid, p::ModelParameters, dt, out = s.b, melt = s.melt_open)
+    update_SALS_b_diffusion!(ls.sals, s, g, p, dt, melt)
     lu_solve!(ls, vec(s.b))
     out .= clamp.(reshape(ls.h_vec, g.nx, g.ny), p.b_min, p.b_max)
 end
@@ -1724,9 +1732,9 @@ Solves `b`'s own coupled diffusion system (SUHMO Eq. 17), storing the (clamped) 
 the [`CGIterativeSolver`](@ref) over [`SparseAssembledLinearSystem`](@ref) method, warm-started
 from the current `s.b` (a good starting guess: `b`'s own value from the previous timestep).
 """
-function solve_b_diffusion!(ls::CGIterativeSolver{<:SparseAssembledLinearSystem}, s::State, g::Grid, p::ModelParameters, dt, out = s.b)
+function solve_b_diffusion!(ls::CGIterativeSolver{<:SparseAssembledLinearSystem}, s::State, g::Grid, p::ModelParameters, dt, out = s.b, melt = s.melt_open)
 
-    update_SALS_b_diffusion!(ls.lsy, s, g, p, dt)
+    update_SALS_b_diffusion!(ls.lsy, s, g, p, dt, melt)
     update_diag_precond!(ls.precond_diag, ls.lsy)
     precond_matrix = _cg_precond!(ls)
 
@@ -1764,9 +1772,9 @@ Solves `b`'s own coupled diffusion system (SUHMO Eq. 17), storing the (clamped) 
 the [`CGIterativeSolver`](@ref) over [`MatrixFreeLinearSystem`](@ref) method, using
 `StencilOperator` as `cg!`'s matvec, warm-started from the current `s.b`.
 """
-function solve_b_diffusion!(ls::CGIterativeSolver{<:MatrixFreeLinearSystem}, s::State, g::Grid, p::ModelParameters, dt, out = s.b)
+function solve_b_diffusion!(ls::CGIterativeSolver{<:MatrixFreeLinearSystem}, s::State, g::Grid, p::ModelParameters, dt, out = s.b, melt = s.melt_open)
 
-    update_MFLS_b_diffusion!(ls.lsy, s, g, p, dt)
+    update_MFLS_b_diffusion!(ls.lsy, s, g, p, dt, melt)
     update_diag_precond!(ls.precond_diag, ls.lsy)
     precond_matrix = _cg_precond!(ls)
 

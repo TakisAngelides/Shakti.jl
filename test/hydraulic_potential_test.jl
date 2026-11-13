@@ -112,4 +112,50 @@
             @test s.q_x[3, 3] < 0  # face (2,3)-(3,3): toward -x
         end
 
+        @testset "sensible heat: gradient of the bed pressure rho_w g (hhat - zb)" begin
+            rg = 1000.0 * 9.81
+            interior(s, i, j) = s.mask[i, j] == GROUNDED && s.mask[i-1, j] == GROUNDED && s.valid_x[i, j] == 1
+            # BedPotential, filled, no uplift: the gradient of pw, bit for bit, and the unfused functions equal the fused one
+            sim = make_sim(); s = sim.state; p = sim.p
+            @test p.rho_w * p.g == rg
+            s.h .= Array(s.zb) .+ 10.0 .+ [0.3 * sin(i + 2j) for i in 1:nx, j in 1:ny]
+            compute_pw!(s, p); compute_dpwdxy!(s, grid, p)
+            pw = Array(s.pw)
+            @test Array(s.dpwdx) == [1 < i <= nx ? ((pw[i, j] - pw[i-1, j]) / grid.dx) * s.valid_x[i, j] : 0.0 for i in 1:nx+1, j in 1:ny]
+            @test Array(s.dpwdy) == [1 < j <= ny ? ((pw[i, j] - pw[i, j-1]) / grid.dy) * s.valid_y[i, j] : 0.0 for i in 1:nx, j in 1:ny+1]
+            fx, fy = copy(s.dpwdx), copy(s.dpwdy)
+            compute_dpwdx!(s, grid, p); compute_dpwdy!(s, grid, p)
+            @test s.dpwdx == fx && s.dpwdy == fy
+            # SheetTopPotential: a level water surface hhat = h + b gives -rho_w g grad(zb) whatever the gap (no gradient of b,
+            # whereas the gradient of pw = rho_w g (h - zb) holds -rho_w g grad(b))
+            sim = make_sim(; hp = SheetTopPotential()); s = sim.state; p = sim.p
+            b, zbv = Array(s.b), Array(s.zb)
+            s.h .= 50.0 .- b
+            update_gap_jumps!(s, SheetTopPotential()); compute_pw!(s, p); compute_dpwdxy!(s, grid, p)
+            pw = Array(s.pw); nint = 0
+            for j in 2:ny, i in 2:nx
+                interior(s, i, j) || continue
+                nint += 1
+                @test s.dpwdx[i, j] ≈ -rg * (zbv[i, j] - zbv[i-1, j]) / grid.dx rtol = 1e-9
+                @test (pw[i, j] - pw[i-1, j]) / grid.dx ≈ -rg * (zbv[i, j] - zbv[i-1, j] + b[i, j] - b[i-1, j]) / grid.dx rtol = 1e-9
+            end
+            @test nint > 0
+            @test maximum(abs, [s.dpwdy[i, j] for i in 1:nx, j in 2:ny if s.mask[i, j] == GROUNDED && s.mask[i, j-1] == GROUNDED]) < 1e-9 * rg
+            # Unfilled cells: the bed pressure is rho_w g W, not the floored pw = 0
+            sim = make_sim(; hp = SheetTopPotential(), cf = UnfilledCavities()); s = sim.state; p = sim.p
+            g = grounded(s); s.stor .= ifelse.(g, 1 / dt, 0.0)
+            b, zbv = Array(s.b), Array(s.zb)
+            W = 0.5 .* b .* (1 .+ 0.2 .* [sin(3i + j) for i in 1:nx, j in 1:ny])
+            s.h .= ifelse.(g, zbv .+ W .- b, Array(s.h))
+            update_gap_jumps!(s, SheetTopPotential()); compute_pw!(s, p); compute_dpwdxy!(s, grid, p)
+            @test all(iszero, Array(s.pw)[g])
+            nint = 0
+            for j in 2:ny, i in 2:nx
+                interior(s, i, j) || continue
+                nint += 1
+                @test s.dpwdx[i, j] ≈ rg * (W[i, j] - W[i-1, j]) / grid.dx rtol = 1e-9 atol = 1e-12 * rg
+            end
+            @test nint > 0
+        end
+
     end

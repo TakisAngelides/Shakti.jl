@@ -92,8 +92,6 @@ function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, sl::Abst
     # immediately) but keeps pw/N consistent from the start.
     # Vectorized rather than a scalar for-loop so that it is GPU compatible.
     apply_boundary_pw!(s, p)
-    compute_dpwdx!(s, g) # water pressure gradient in x and y, feeds the sensible-heat term (via compute_mdot! below)
-    compute_dpwdy!(s, g)
     compute_N!(s, p) # Effective pressure
 
     compute_h!(s, p) # reduced head h = pw/(rho_w * g) + zb
@@ -101,6 +99,8 @@ function set_initial_conditions!(s::State, g::Grid, p::ModelParameters, sl::Abst
     # Gradients of hydraulic head
     compute_dhdx!(s, g)
     compute_dhdy!(s, g)
+    compute_dpwdx!(s, g, p) # gradient of the water pressure at the bed in x and y (from h, so after compute_h!), feeds the sensible-heat term (via compute_mdot! below)
+    compute_dpwdy!(s, g, p)
 
     # Set the face fields of the water thickness according to the center fields of the water thickness via simple arithmetic mean interpolation
     compute_b_x!(s)

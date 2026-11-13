@@ -53,6 +53,17 @@ the iterate, so the water balance of every cell is unaffected, and only the tran
 step. Under `ExplicitGapCoupling` the donor's water thickness is built from the start-of-step gap, which this
 step's melt has not yet opened, so the lag matters only under `ConsistentGapCoupling`.
 
+Under `WithDiffusion` the donor's gap is ``\min(b, b^{\mathrm{next}})``, with ``b^{\mathrm{next}}`` from the coupled gap
+solve at the iterate's effective pressure. That gap solve takes the melt opening from the start of the step only,
+with no exception for a falling melt. With the iterate's melt the same loop closed through ``b^{\mathrm{next}}``, at a
+cell close to steady where ``b^{\mathrm{next}} \approx b`` and the ``\min`` switches between its two sides, and the
+iteration cycled (Felden et al. (2023) Fig. 4 at ``\Delta x = 0.125`` m, a 7-iteration cycle at the outlet cell).
+A falling melt can still leave the donor's gap above the row's where both gaps close within the step, but the
+``\min`` caps it at the start-of-step gap. The cold start of Helheim at 500 m (1-day steps, unfilled cavities)
+converged every step this way, in fewer iterations (713 over 30 days instead of 761). Without diffusion the
+exception stays. There, with the start-of-step melt alone, the same cold start did not converge and created
+``4 \times 10^{-4}`` of the step's input.
+
 On the dry floor ([Gap update](@ref GapUpdate)) the water thickness is the water the gap update leaves, not the gap
 held at ``b_{\min}``, so a drained cell carries no water. Under `WithDiffusion` it is the smaller of the
 start-of-step gap and the gap of the last gap solve. Where the gap opens, the transmissivity therefore takes the

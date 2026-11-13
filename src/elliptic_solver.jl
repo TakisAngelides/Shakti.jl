@@ -503,9 +503,9 @@ function refresh_head_dependents!(s::State, g::Grid, p::ModelParameters, mt::Mel
     compute_dhdxy!(s, g) # updates gradient of h in both x and y directions in one kernel to reduce the number of kernels
 
     compute_pw!(s, p) # update water pressure
-    compute_dpwdxy!(s, g) # update the water pressure gradient in both x and y in one kernel, feeds the sensible-heat term (via compute_mdot! below)
+    compute_dpwdxy!(s, g, p) # update the bed-pressure gradient in both x and y in one kernel, feeds the sensible-heat term (via compute_mdot! below)
     compute_N!(s, p, cnc) # update effective pressure (ice overburden pressure - pw)
-    kfs isa ImplicitUpwind && solve_gap_iterate!(gc, ds, s, g, p) # ConsistentGapCoupling under WithDiffusion: SUHMO's gap at the new N for the transmissivity (compute_b_w_iterate!); no-op otherwise
+    kfs isa ImplicitUpwind && solve_gap_iterate!(gc, ds, s, g, p; melt = s.melt_open0) # ConsistentGapCoupling under WithDiffusion: SUHMO's gap at the new N, with the start-of-step melt, for the transmissivity (compute_b_w_iterate!); no-op otherwise
 
     compute_face_flux!(s, p, kfs, gc) # face transmissivity K_x/K_y, flux q and Reynolds number Re on faces, lag-free and in one kernel -- K_x/K_y are exactly what the next linear solve assembles, so the solve and every flux diagnostic see the same flux (water_flux.jl)
     compute_Re!(s) # update the Reynold's number based on the Re_x and Re_y doing an average over the four faces of a grid cell

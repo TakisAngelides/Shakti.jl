@@ -135,8 +135,8 @@ into `out` as the [`CholeskyDirectSolver`](@ref) method. `update_SALS_b_diffusio
 the fixed pattern of `ls.sals.M` (the same stencil slots as the head system), so the precomputed `vals_perm` and the
 symbolic analysis stay valid.
 """
-function solve_b_diffusion!(ls::CUDSSDirectSolver, s::State, g::Grid, p::ModelParameters, dt, out = s.b)
-    update_SALS_b_diffusion!(ls.sals, s, g, p, dt)
+function solve_b_diffusion!(ls::CUDSSDirectSolver, s::State, g::Grid, p::ModelParameters, dt, out = s.b, melt = s.melt_open)
+    update_SALS_b_diffusion!(ls.sals, s, g, p, dt, melt)
     cudss_solve!(ls)
     out .= clamp.(reshape(ls.h_vec, g.nx, g.ny), p.b_min, p.b_max)
 end
