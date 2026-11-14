@@ -72,7 +72,7 @@ struct Upwind <: AbstractKFaceScheme end
 $(TYPEDSIGNATURES)
 
 [`face_mean`](@ref) with the head difference `dh = h_b - h_a` across the face available (`a` the cell
-at the low index, `b` at the high index): only [`Upwind`](@ref) uses it.
+at the low index, `b` at the high index): only [`Upwind`](@ref) and [`ImplicitUpwind`](@ref) use it.
 """
 @inline face_mean(kfs::AbstractKFaceScheme, a, b, dh) = face_mean(kfs, a, b)
 @inline face_mean(::Upwind, a, b, dh) = dh > 0 ? b : (dh < 0 ? a : min(a, b))
@@ -93,16 +93,35 @@ Newton's method in `W` and converges at any `dt` (a plain fixed point in `W` doe
 [`compute_b_w!`](@ref)). Those terms couple each face to its donor cell only, so the assembled matrix is no
 longer symmetric: it needs [`LUDirectSolver`](@ref), `CUDSSDirectSolver(grid)` (`structure = :general`, the default) or
 [`BiCGStabIterativeSolver`](@ref).
-Without unfilled cavities and uplift every water thickness is the gap and this is [`Upwind`](@ref) exactly.
+Where the flow across a face is about to reverse, the upwind transmissivity would jump between that of the thick
+and that of the thin cell (orders of magnitude next to a blister) with the sign of a tiny head difference, and the
+iteration cycles across that jump. The face therefore blends continuously: its transmissivity is
+`K_thin + (K_up - K_thin) r(|grad h| / grad_blend)`, with `K_thin` the smaller of its two cells' transmissivities,
+`K_up` its upstream cell's and `r(t) = t^2 (3 - 2t)` up to `t = 1` (smoothstep), so it is the thinner cell's at no
+flow (the [`Upwind`](@ref) face at no flow) and the upstream cell's from a head gradient of `grad_blend` (default
+`1e-4`) on. It never exceeds the upstream cell's, so a nearly empty cell still cannot discharge through its
+neighbour's transmissivity. `grad_blend = 0` is upwind with a jump.
+Without unfilled cavities and uplift every water thickness is the gap and this is [`Upwind`](@ref) (with the blend).
 """
-struct ImplicitUpwind <: AbstractKFaceScheme end
+struct ImplicitUpwind <: AbstractKFaceScheme
+    grad_blend::floattype # the model's float type, so the kernels that read it compile on a backend without Float64 (Metal)
+end
+ImplicitUpwind(; grad_blend::Real = 1e-4) =
+    grad_blend >= 0 ? ImplicitUpwind(floattype(grad_blend)) : throw(ArgumentError("ImplicitUpwind: grad_blend must be >= 0 (got $grad_blend)"))
 
+# Share r of the upstream cell in the transmissivity of an ImplicitUpwind face at head gradient g (see ImplicitUpwind).
+@inline function upwind_share(kfs::ImplicitUpwind, g)
+    gb = oftype(g, kfs.grad_blend)
+    abs(g) >= gb && return one(g)
+    t = abs(g) / gb
+    return t * t * (3 - 2t)
+end
 @inline face_mean(::ImplicitUpwind, a, b) = min(a, b)
-@inline face_mean(::ImplicitUpwind, a, b, dh) = dh > 0 ? b : (dh < 0 ? a : min(a, b))
-# The argument compute_face_flux_kernel! (water_flux.jl) hands face_mean: under ImplicitUpwind the face donor s.don_x/
-# s.don_y, mapped to 0 (the thinner cell, min) on a DONOR_THINNER face (polish_donors!); the head gradient otherwise.
-@inline face_select(::AbstractKFaceScheme, d) = d
-@inline face_select(::ImplicitUpwind, d) = abs(d) >= DONOR_THINNER ? zero(d) : d
+@inline function face_mean(kfs::ImplicitUpwind, a, b, dh)
+    lo = min(a, b)
+    up = dh > 0 ? b : (dh < 0 ? a : lo)
+    return lo + (up - lo) * upwind_share(kfs, dh)
+end
 
 """
 $(TYPEDSIGNATURES)

@@ -6,7 +6,7 @@ boundary faces ([`picard_guard`](@ref), `run.jl`), each from the kink of the hea
 
 - `active`: any limit at all, and the oscillation damping. On under [`UnfilledCavities`](@ref) or [`IceUplift`](@ref)
   (the regime boundaries), [`ConsistentGapCoupling`](@ref), outflow-only faces, and [`ImplicitUpwind`](@ref) (whose
-  face donors flip); off for SHAKTI's original filled sheet with [`ExplicitGapCoupling`](@ref) and averaged faces.
+  face flows reverse); off for SHAKTI's original filled sheet with [`ExplicitGapCoupling`](@ref) and averaged faces.
 - `filled_cap`: the `|dN|` cap of a filled cell, under [`ConsistentGapCoupling`](@ref) (not with englacial storage on
   the filled sheet, see [`picard_guard`](@ref)).
 - `outflow_land`, `outflow_ocean`: the stops at the head of an outflow-only face (`ModelParameters.outflow_only_land`,
@@ -365,8 +365,7 @@ end
 # Stall damping of the Picard loops: when the largest head update has not fallen below its smallest value so far for
 # STALL_ITERS checks, the iteration is cycling (at a kink of the head rows that the per-cell limits of
 # limit_head_step! do not catch, e.g. a block of filled cells whose heads move together), and the step factor halves,
-# down to MIN_STALL_FACTOR. A converging iteration never triggers it; after a donor polishing round (a new set of head
-# rows, whose first updates are larger than the converged ones before it) the count starts afresh, keeping the factor.
+# down to MIN_STALL_FACTOR. A converging iteration never triggers it.
 const STALL_ITERS = 20
 const MIN_STALL_FACTOR = 1 / 8
 function stall_damping(ω, best, since, dh)
@@ -399,7 +398,7 @@ The test also does not depend on the elevation of the bed, as the relative head 
 # The water test asks for no less than WATER_TOL of the cell's own terms. The fallback asks for no less than WATER_TOL_FLOOR
 # of all its terms: the iterates it must reject are off by 0.1 to 1 (a stop of limit_head_step!), while a solved step
 # levels off at 1e-9 on a thin-ice slab and, on Helheim (500 m, dt = 1 day), at up to 1e-3 in a cell next to an uplift
-# blister whose face donor flips (the budget keeps that in W); the fallback lets such a cell through after
+# blister (the budget keeps that in W); the fallback lets such a cell through after
 # WATER_STRICT_CHECKS iterations.
 const WATER_TOL = 1e-3
 const WATER_TOL_FLOOR = 1e-2
@@ -418,8 +417,7 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Repeatedly calls [`Picard_iteration!`](@ref) (up to `ps.iters` times; a donor polishing round of [`ImplicitUpwind`](@ref)
-after the head converged adds up to `ps.check_every` more, so a polish on the last iteration is still re-solved), checking convergence every
+Repeatedly calls [`Picard_iteration!`](@ref) (up to `ps.iters` times), checking convergence every
 `ps.check_every` iterations via a relative max-norm on the head update
 (`max|delta_h| / (max|h| + eps) < ps.tol`, or `max|delta_h| < ps.atol` when `ps.atol > 0`, see
 `head_converged`), and sets `ps.converged`/`ps.last_iter` accordingly. With `p.e_v > 0` the rows store englacial water
@@ -439,13 +437,12 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
     ps.converged = false
     ps.last_iter = 0
     reset_relaxation!(ps.hr) # no-op except for AndersonHeadRelaxation, whose history is only valid within one timestep's fixed-point map
-    npol = 0 # donor polishing rounds this step (polish_donors!, ImplicitUpwind)
     ω, best, since = 1.0, Inf, 0 # stall damping: the step factor, the smallest update so far and the iterations since it
     wmiss = 0 # iterations whose head converged but whose water did not (water_converged)
 
     h_old_set || solve_gap_iterate!(gc, ds, s, grid, p) # the gap the first head rows store, unless step! has solved it (refresh_head_dependents! keeps it current after each solve)
 
-    iter, limit = 0, ps.iters # a donor polishing round may extend the limit (below)
+    iter, limit = 0, ps.iters
     @inbounds while iter < limit # start the Picard loop
         iter += 1
 
@@ -467,13 +464,6 @@ function Picard_loop!(ps::PicardSolver, state::State, grid::Grid, p::ModelParame
             ω, best, since = stall_damping(ω, best, since, delta_h_max)
             h_max = mapreduce(abs, max, s.h; init = zero(eltype(s.h)))
             if head_converged(delta_h_max, h_max, ps.tol, ps.atol)
-                if npol < MAX_DONOR_POLISH_ROUNDS && polish_donors!(kfs, s) > 0 # faces left frozen downstream: refrozen, iterate on
-                    npol += 1
-                    limit = max(limit, iter + ps.check_every) # the head converged: the polish gets its iterations even past ps.iters
-                    best, since = Inf, 0 # the polished rows' updates are measured against their own smallest, not the converged one
-                    refresh_head_dependents!(s, grid, p, mt, kfs, sl; cnc, ds, gc)
-                    continue
-                end
                 water_converged(ps, s, grid, p, gc, wdt; strict = wmiss < WATER_STRICT_CHECKS) || (wmiss += 1; continue) # the head stands still but a row is not solved: a stop of limit_head_step!, or a flux off by more than the head test sees
                 ps.converged = true
                 ps.last_iter = iter

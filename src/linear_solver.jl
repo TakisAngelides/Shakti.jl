@@ -1328,7 +1328,7 @@ Helheim at 500 m took 31 to 274 iterations per step instead of 6 to 19), and und
 after `N`, for the transmissivity (Helheim with unfilled cavities: 106 iterations in 5 days instead of 227); a no-op for every
 other gap coupling. The last call is at the converged head, so the step's own gap update ([`compute_b!`](@ref)) takes
 `b_next` without solving again. A step of `K` iterations solves the gap system `K + 1` times, `2K + 2` under
-`ImplicitUpwind` (plus one or two per donor polishing round).
+`ImplicitUpwind`.
 
 `melt` is the melt opening the gap system takes (default `s.melt_open`, the iterate's). The transmissivity's call passes
 the start-of-step melt `s.melt_open0` (see [`store_start_of_step_melt!`](@ref)): with the iterate's melt the loop

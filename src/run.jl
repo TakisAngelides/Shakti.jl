@@ -371,7 +371,7 @@ end
 
 # Every field derived from the head, with the simulation's own options (step 3 of prepare_head_solve!).
 function refresh_from_head!(sim::Simulation)
-    reset_donors!(sim.kfs, sim.state) # ImplicitUpwind: every face starts with the higher-potential cell as donor (water_flux.jl)
+    reset_donors!(sim.kfs, sim.state) # zeroes the previous head steps of the oscillation damping (water_flux.jl)
     refresh_head_dependents!(sim.state, sim.grid, sim.p, sim.mt, sim.kfs, sim.sl; cnc = sim.cnc, ds = sim.ds, gc = gap_coupling_terms(sim))
     return sim
 end

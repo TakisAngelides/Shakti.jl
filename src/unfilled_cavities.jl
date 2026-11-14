@@ -299,7 +299,7 @@ at the head where the cell's water level `h + b` meets it.
 **Oscillation damping** (whenever the guard is active): a step that reverses the previous iteration's step of the same
 cell is at most half of it, as in reservoir simulators. Near a root Newton's steps shrink much faster than that and the
 damping never binds; it binds only where the iteration cycles, at a kink of the row (the bed, the overburden head, an
-outflow face, or a face whose upwind donor flips), and there it brackets the root and halves the bracket each iteration,
+outflow face, or a face whose flow reverses), and there it brackets the root and halves the bracket each iteration,
 as bisection does (seen on Drang Drung at dt = 24 h: a cell just below the bed whose Newton step from W = b empties three
 quarters of the gap, and from there refills it, every iteration; without it Greenland's dry floor does not converge). The
 previous steps (`s.dh_it`) are zeroed at the start of each step.
