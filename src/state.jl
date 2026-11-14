@@ -38,7 +38,7 @@ struct State{A <: AbstractArray}
     mdot_min::A   # floor on mdot this step, -rho_i*C (freeze-on capacity); applied when p.limit_freeze_on
     Q_b::A        # frictional (sliding) heat |u_b . taub| [W/m^2], written by compute_mdot! (0 when that term is off)
     Q_diss::A     # heat dissipated by water flowing down the driving head gradient rho_w*g*|q . grad(h)| [W/m^2] (grad(h + b) under SheetTopPotential; 0 when off)
-    Q_sens::A     # sensible heat ct*cw*rho_w*(q . grad(pw)) [W/m^2] (0 when off)
+    Q_sens::A     # sensible heat ct*cw*rho_w*(q . grad(p_b)), p_b the water pressure at the bed [W/m^2] (0 when off)
     Re::A         # Reynolds number
     K::A          # transmissivity
     G::A          # geothermal heat flux

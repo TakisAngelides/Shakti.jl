@@ -55,7 +55,7 @@ melt_terms(p) = MeltTerms{p.mdot_includes_G, p.mdot_includes_frictional, p.mdot_
 # Each computed law gives a stress along u_b with N floored at 0 (bed_N, sliding_law.jl), so u_b.taub >= 0 and abs() is
 # a no-op for them; it is kept for PrescribedSlidingLaw, whose taub comes from the host with its own sign convention.
 
-# Share of a face's dissipation (q.grad(h) or q.grad(pw) on that face) credited to cell (ix, iy):
+# Share of a face's dissipation (q.grad(h) or q.grad(p_b), p_b the water pressure at the bed, on that face) credited to cell (ix, iy):
 # half, as each interior face is split evenly between its two cells -- except the face between a
 # GROUNDED cell and an OCEAN/LAND (Dirichlet) cell, whose Dirichlet side has no hydrology to
 # receive its half, so the grounded cell takes all of it (otherwise half the heat dissipated by

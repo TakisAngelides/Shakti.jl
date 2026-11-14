@@ -1127,7 +1127,13 @@ advect the start-of-step gap by the flux with centred differences, at the speed 
 cell-to-cell sawtooth of the gap, and on Felden et al. (2023) Fig. 4 at ``\Delta x = 0.125`` m it ran away at the
 outlet. A face to an `OCEAN` or `LAND` cell has
 ``s_f = 1``. The boundary cell has no hydrology to receive its half of the heat of the outflow, so the grounded
-cell takes all of it. For uniform ``\mathbf{q}`` and ``\nabla\hat{h}`` the two ``x`` faces of a cell contribute
+cell takes all of it. Under `UnfilledCavities` an outlet cell whose gap is only partly full drops its water depth ``W``
+to the boundary level across that one face. The drop does not shrink with the grid, so the heat per unit bed area,
+and the melt opening of one step, grow as ``\Delta t/\Delta x``. When one step opens the gap by more than the
+cell holds in water, the head iteration stops converging. On Felden et al. (2023) Fig. 4 with `GlaDS2Sheet()` and
+gap diffusion, 1-h steps run at ``\Delta x = 0.125`` m (0.47 m of opening per step against 0.15 m of closure) but
+fail at ``\Delta x = 0.0625`` m on day 19 (0.65 to 0.9 m per step), and 30-min steps run there. Refining the grid
+near such an outlet needs a proportionally shorter step. For uniform ``\mathbf{q}`` and ``\nabla\hat{h}`` the two ``x`` faces of a cell contribute
 ``q_x \partial_x\hat{h}`` and the two ``y`` faces ``q_y \partial_y\hat{h}``, so the sum gives
 ``\mathbf{q}\cdot\nabla\hat{h}`` exactly. Summed over all cells, the power of every face is counted once, so no
 heat is lost or created. Since ``q_f = -K_f (\nabla\hat{h})_f``, every face product

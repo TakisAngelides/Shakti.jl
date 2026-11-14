@@ -350,7 +350,7 @@ so this file doesn't need `Simulation` to already be defined -- it can be includ
 (`simulation.jl`) use a proper `PS <: PicardSolver` bound instead of leaving `PS` unbounded. The `mt`
 (a [`MeltTerms`](@ref)) chooses which terms of Eq. 7 in https://doi.org/10.1017/jog.2023.39 to include
 in the melt rate -- e.g. its `Sensible` flag is the last term, accounting for changes in the
-pressure-melting-point temperature with changes in water pressure. The `kfs` that stands for K face scheme determines how to calculate the
+pressure-melting-point temperature with changes in the water pressure at the bed. The `kfs` that stands for K face scheme determines how to calculate the
 transmissivity on a grid cell face given the two cell center values, with choices such as arithmetic or harmonic mean.
 The `sl` sliding law determines which sliding law to use to calculate the basal shear stress tau_b. The choices can be
 regularized Coulomb law, linear law, or prescribed by the user. The `ds` keyword (an
