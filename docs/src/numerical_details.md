@@ -4,12 +4,12 @@
 them, namely the safeguards that let the Picard iteration converge at long time steps, the handling of cells
 that exchange no water, the time-step control, changes of the mask, and the linear solvers. Most of it decides
 whether, and how fast, a step converges, rather than the head it converges to. Where it does change the
-result, as for held donors, the section says so.
+result, as for the blended faces near a flow divide, the section says so.
 
 ## [Upwind donors](@id UpwindDonors)
 
 Under `"implicit_upwind"` each face takes the transmissivity of its donor, the cell with the higher
-``\hat{h}``.
+``\hat{h}``, except near no flow, where it blends towards the thinner cell's.
 
 ### [Donors near a flow divide](@id FlowDivide)
 
@@ -17,21 +17,32 @@ Near a flow divide, where the water on the two sides flows away from each other,
 a face is about to reverse, the difference of the hydraulic head across the face is small, and its donor can
 switch at every iterate. The transmissivity of the face then jumps by orders of magnitude, between that of a thick and that
 of a thin cell, although the flux ``-K_f (\nabla\hat{h})_f`` itself passes continuously through zero. The matrix
-changes every time, and the iteration can cycle. The donors are therefore tracked through the step in three
-stages.
+changes every time, and the iteration can cycle. The face therefore blends continuously between the two cells,
 
-1. At the start of a step every face is free. A face takes the cell with the higher ``\hat{h}`` as its donor at
-   its first iterate with flow, and switches each time the flow reverses.
-2. After four reversals within the step the face keeps its donor for the rest of the step.
-3. Once the head has converged, a face whose held donor has become the downstream cell is moved to its upstream
-   side, and the iteration resumes. A face that reverses again, judged at the next
-   converged head, takes the transmissivity of its thinner cell. This polishing runs at most three times per step.
+```math
+K_f = K_\mathrm{thin} + (K_\mathrm{up} - K_\mathrm{thin})\, r\!\left(\frac{|(\nabla\hat{h})_f|}{g_b}\right),
+\qquad r(t) = t^2 (3 - 2t) \text{ for } t < 1,\quad r = 1 \text{ beyond},
+```
 
-The Newton terms of the donors ([Newton terms of the donors](@ref DonorNewtonTerms)) follow the donor in use, so
-the matrix stays consistent with the transmissivity it was built from. A face held on its downstream side gets no
-Newton term, since there the term would have the wrong sign and put a positive entry off the diagonal. The converged head therefore differs from the upwind solution only where a held face takes the
-transmissivity of its downstream cell instead of its upstream one, and only on faces whose flow direction is still
-undecided. Both cells of the face read the same flux, so no water is created or lost.
+with ``K_\mathrm{thin}`` the smaller of the two cells' transmissivities, ``K_\mathrm{up}`` that of the cell with the
+higher ``\hat{h}``, and ``g_b`` = `grad_blend` (default ``10^{-4}``, 5 cm of head across a 500 m face). At no
+flow the face takes its thinner cell's transmissivity, and from a head gradient of ``g_b`` on it takes its upstream
+cell's. In between it never exceeds the upstream cell's, so a nearly empty cell still cannot discharge through its
+neighbour's transmissivity. The transmissivity is a continuous function of the head, and no state is carried between
+iterates. `grad_blend = 0` is the plain upwind face.
+
+The face's weight ``w_f`` in ``\omega_f`` ([Face flux](@ref FaceFlux)) blends the same way. The Newton term of a face
+([Newton terms of the donors](@ref DonorNewtonTerms)) is the derivative of its flux in the upstream cell's head. It is
+the whole term where the upstream cell is the thinner one, since ``K_f`` and ``w_f`` are then its own, and ``r`` times
+it where the upstream cell is the thicker one. The thinner cell's remaining part and the dependence of ``r`` on the
+head are iterated as plain fixed points, because linearizing them would put positive entries off the diagonal. Both
+cells of the face read the same flux, so no water is created or lost.
+
+On Helheim at 500 m (``\Delta t`` = 30 min, the default variant, from day 270 of a year) the plain upwind face,
+``g_b = 0``, takes over 100 iterates per step and does not always converge within 200. With ``g_b = 10^{-4}`` a step
+takes about 13. A larger ``g_b`` saves a few more iterates, about 11 at ``10^{-2}``, but moves the converged state
+further from the upwind one. On the ice sheets, whose head gradients are often below ``10^{-3}``, ``N/p_o`` moves
+from that at ``g_b = 0`` by up to 0.018 at ``g_b = 10^{-3}``, against 0.004 at ``10^{-4}``, after a year.
 
 ### [Melt in the transmissivity](@id MeltInTransmissivity)
 

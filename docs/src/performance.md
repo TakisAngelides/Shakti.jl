@@ -1,6 +1,6 @@
 # [Performance](@id Performance)
 
-Wall times of the example runs on the AWI cluster albedo, from `docs/make_figures.jl`.
+Wall times of the example runs, from `docs/make_figures.jl`.
 
 * GPU: one NVIDIA A100, `CUDSSDirectSolver(grid; structure = :general)`.
 * CPU: 8 threads on a 128-core node, `LUDirectSolver(grid)`.
@@ -20,19 +20,19 @@ Options:
 
 | Example | Options | Grid | Grounded cells | Steps | `dt` | Simulated | GPU total | GPU per step | CPU total | CPU per step |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Greenland 16 km | defaults | 106 x 181 | 6 612 | 365 | 1 day | 1 year | 8.2 s | 22 ms | 50.5 s | 138 ms |
+| Greenland 16 km | defaults | 106 x 181 | 6 612 | 365 | 1 day | 1 year | 8.4 s | 23 ms | 45.6 s | 125 ms |
 | Greenland 16 km | Shakti ¹ | 106 x 181 | 6 612 | 365 | 1 day | 1 year | 6.2 s | 17 ms | 56.8 s | 156 ms |
-| Greenland 8 km | defaults | 211 x 361 | 27 601 | 365 | 1 day | 1 year | 24.8 s | 68 ms | 4.4 min | 720 ms |
+| Greenland 8 km | defaults | 211 x 361 | 27 601 | 365 | 1 day | 1 year | 27.2 s | 75 ms | 5.3 min | 866 ms |
 | Greenland 8 km | Shakti ¹ | 211 x 361 | 27 601 | 365 | 1 day | 1 year | 24.5 s | 67 ms | 9.2 min | 1.5 s |
-| Antarctica 32 km | defaults | 191 x 191 | 11 739 | 365 | 1 day | 1 year | 12.6 s | 35 ms | 1.7 min | 287 ms |
+| Antarctica 32 km | defaults | 191 x 191 | 11 739 | 365 | 1 day | 1 year | 13.9 s | 38 ms | 2.0 min | 322 ms |
 | Antarctica 32 km | Shakti ¹ | 191 x 191 | 11 739 | 365 | 1 day | 1 year | 11.7 s | 32 ms | 3.5 min | 577 ms |
-| Antarctica 16 km | defaults | 381 x 381 | 47 515 | 365 | 1 day | 1 year | 57.5 s | 158 ms | 12.0 min | 2.0 s |
+| Antarctica 16 km | defaults | 381 x 381 | 47 515 | 365 | 1 day | 1 year | 66.4 s | 182 ms | 15.6 min | 2.6 s |
 | Antarctica 16 km | Shakti ¹ | 381 x 381 | 47 515 | 365 | 1 day | 1 year | 27.5 s | 75 ms | 6.7 min | 1.1 s |
-| Thwaites | defaults | 288 x 345 | 51 672 | 365 | 1 day | 1 year | 49.1 s | 135 ms | 10.5 min | 1.7 s |
+| Thwaites | defaults | 288 x 345 | 51 672 | 365 | 1 day | 1 year | 56.4 s | 155 ms | 13.3 min | 2.2 s |
 | Thwaites | Shakti ¹ | 288 x 345 | 51 672 | 365 | 1 day | 1 year | 16.6 s | 45 ms | 3.4 min | 567 ms |
-| Drang Drung | defaults | 102 x 200 | 2 695 | 8 760 | 1 h | 1 year | 1.1 min | 7.8 ms | 8.0 min | 55 ms |
+| Drang Drung | defaults | 102 x 200 | 2 695 | 8 760 | 1 h | 1 year | 1.3 min | 9.1 ms | 8.0 min | 55 ms |
 | Drang Drung | Shakti | 102 x 200 | 2 695 | 8 760 | 1 h | 1 year | 41.4 s | 4.7 ms | 5.2 min | 36 ms |
-| Helheim | defaults | 134 x 104 | 8 199 | 4 320 | 30 min | 90 days | 4.3 min | 60 ms | 42.6 min | 592 ms |
+| Helheim | defaults | 134 x 104 | 8 199 | 4 320 | 30 min | 90 days | 1.4 min | 19 ms | 10.0 min | 138 ms |
 | Helheim | Shakti | 134 x 104 | 8 199 | 4 320 | 30 min | 90 days | 18.0 s | 4.2 ms | 3.2 min | 44 ms |
 
 ¹ Timings only. On the ice sheets the original equations do not give a usable state after a year:
@@ -41,8 +41,8 @@ where the water cannot fill the gap `p_w` falls far below zero (`N/p_o` up to 40
 defaults keep `0 ≤ p_w ≤ p_o` and gaps below 1.1 m.
 
 * The cost is set by the number of Picard iterations a step, times one sparse direct solve of the
-  head system. On the ice sheets the defaults need two to seven iterations a step at the end of
+  head system. On the ice sheets the defaults need two to four iterations a step at the end of
   the year.
-* Helheim with the defaults is the expensive case: more than ten iterations a step against one for
-  the original equations.
-* The GPU is 6 to 23 times faster than the CPU here, more on the larger grids.
+* Helheim with the defaults needs five to seven iterations a step at the end of the run, against one
+  for the original equations.
+* The GPU is 5 to 23 times faster than the CPU here, more on the larger grids.

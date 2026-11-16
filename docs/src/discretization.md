@@ -94,7 +94,7 @@ where ``\overline{W^3}_f`` combines the two cells' water thicknesses as `k_face_
 
 | `k_face_choice` | ``\overline{W^3}_f`` |
 |:----------------|:---------------------|
-| `"implicit_upwind"` (default on the free-surface sheets) | the donor's ``W^3``, with ``W`` the donor's water at the end of the step |
+| `"implicit_upwind"` (default on the free-surface sheets) | the donor's ``W^3``, with ``W`` the donor's water at the end of the step, blended towards the thinner cell's near no flow ([Donors near a flow divide](@ref FlowDivide)) |
 | `"upwind"` | the donor's ``W^3``, with ``W`` the donor's water at the start of the step |
 | `"arithmetic"` (default on the filled sheet) | ``(W_{i-1}^3 + W_i^3)/2`` |
 | `"harmonic"` | ``2 W_{i-1}^3 W_i^3 / (W_{i-1}^3 + W_i^3)`` |
@@ -102,15 +102,16 @@ where ``\overline{W^3}_f`` combines the two cells' water thicknesses as `k_face_
 
 The donor is the cell with the higher ``\hat{h}``, the one the water flows out of. Taking the donor's water thickness
 keeps an empty cell from draining water it does not have, which is why the averaged faces are refused on
-the free-surface sheets. Within a step, a face whose donor has reversed four times keeps its donor, so
-the iteration cannot cycle on it. A face to an `OCEAN` or `LAND` cell takes the grounded cell's ``W``, and
+the free-surface sheets. Under `"implicit_upwind"` a face near no flow blends from the thinner cell's value to the donor's,
+so it does not jump where the flow reverses. A face to an `OCEAN` or `LAND` cell takes the grounded cell's ``W``, and
 a face to `OTHER_BASIN`, `FROZEN_BED` or the edge of the grid has ``K_f = 0``.
 
 With the [free-surface layer](@ref "Free-surface layer") on (the default), each cell's ``W^3`` is first multiplied by
 ``1 + (f_K - 1)\, w``, its weight ``w`` taken at the head iterate, and the face's ``\omega`` becomes
 ``\omega_f = \omega\,(1 + (f_{\omega} - 1)\, w_f)``. ``w_f`` is the weight of the cell whose transmissivity the face takes
 (the donor, or the grounded cell at a boundary face), or the mean of the two cells' weights for a mean of their
-transmissivities. Otherwise ``\omega_f = \omega``.
+transmissivities. Under `"implicit_upwind"` it blends like the transmissivity, from the thinner cell's weight to
+the donor's. Otherwise ``\omega_f = \omega``.
 
 The turbulent correction follows from the flux law. With ``D_f = K_{0,f} |(\nabla\hat{h})_f| / \nu``, the
 Reynolds number ``\mathrm{Re} = |q|/\nu`` solves ``\omega_f \mathrm{Re}^2 + \mathrm{Re} - D_f = 0``, so
@@ -530,9 +531,25 @@ The face then keeps its transmissivity at ``W_d(h^{(k)})`` for the solve, a Pica
 which can slow the iteration but does not change the head it converges to. A ramp at least as wide as the bound of
 [The free-surface switch](@ref FreeSurfaceSwitch), which the default `fs_blend = 0.65` is, keeps ``J_f \ge 0``.
 
-``J_f`` is also 0 where the face carries no flux, where the donor is not grounded, where
-``\mathrm d\mathcal{W}_d/\mathrm dh_d = 0``, and where the donor is held on the downstream side of the face
-([Donors near a flow divide](@ref FlowDivide)). With ``J_f \ge 0`` the matrix keeps the sign pattern of an
+Near no flow the face blends between its two cells with the share ``r`` of
+[Donors near a flow divide](@ref FlowDivide). Where the donor, the cell with the higher ``\hat{h}``, is also the one
+with the smaller transmissivity, as on the flanks of a channel, ``K_{0,f}`` and ``w_f`` are its own and ``J_f`` is as
+above. Where it is the one with the larger transmissivity, ``K_{0,f} = (1 - r) K_{0,\mathrm{thin}} + r K_{0,d}`` and
+``w_f = (1 - r) w_\mathrm{thin} + r w_d``. Only the donor's part changes with ``h_d``, so ``\mathrm dD_f/\mathrm dh_d``
+and ``\mathrm d\omega_f/\mathrm dh_d`` are ``r`` times the expressions above, with the donor's own ``K_{0,d}`` in place
+of ``K_{0,f}`` in ``D_f``. Then
+
+```math
+J_f = \frac{r}{1 + 2\omega_f\mathrm{Re}_f} \left[ K_{0,d} |(\nabla\hat{h})_f|
+  \left( \frac{3}{W_d} \frac{\mathrm d\mathcal{W}_d}{\mathrm dh_d} + \frac{a}{1 + a w_d} \frac{\mathrm dw_d}{\mathrm dh_d} \right)
+  - \nu\, \omega\, o\, \mathrm{Re}_f^2\, \frac{\mathrm dw_d}{\mathrm dh_d} \right] ,
+```
+
+the derivative of the flux in ``h_d`` at a fixed head gradient. The thinner cell's part and the dependence of ``r``
+on the head are not linearized. They are iterated as fixed points.
+
+``J_f`` is also 0 where the face carries no flux, where the donor is not grounded and where
+``\mathrm d\mathcal{W}_d/\mathrm dh_d = 0``. With ``J_f \ge 0`` the matrix keeps the sign pattern of an
 M-matrix, a positive diagonal and no positive entries off it, but it is no longer symmetric
 ([Linear solvers](@ref LinearSolvers)).
 
@@ -576,19 +593,17 @@ between two water thicknesses at the end of the step, the one the head gives thr
 one the budget of [Water and the budget](@ref WaterAndBudget) gives. Where the test passes, the head and the
 budget agree on the water of the cell.
 
-Two exceptions keep the test from failing on round-off and on donor switching. A cell also passes when
+Two exceptions keep the test from failing on round-off and next to uplift blisters. A cell also passes when
 ``|r_P|`` is within 100 machine epsilons of the sum of all its terms, fluxes included. And after ten iterates
 whose head has converged but whose water has not, the test is relaxed to ``10^{-2}`` of all the cell's terms,
-fluxes included. This admits cells next to a face whose donor flips, whose residual levels off near ``10^{-3}``
+fluxes included. This admits cells next to an uplift blister, whose residual can level off near ``10^{-3}``
 of the throughflow.
 
 Both tests can instead be made absolute with `atol > 0` (off by default), which replaces the relative ones. The
 head test then asks for ``\max_P |h^{(k+1)}_P - h^{(k)}_P|`` below `atol` in metres of head, and the water test
 for ``\max_P |r_P|`` below `atol` in metres of water.
 
-Under `"implicit_upwind"`, once the head test passes, a face whose donor was held on its downstream side is moved
-to its upstream side and the iteration resumes, at most three times per step
-([Donors near a flow divide](@ref FlowDivide)). A step that does not converge within the maximum number of
+A step that does not converge within the maximum number of
 iterates is accepted and counted, or retried at ``\Delta t/2`` under the adaptive time step
 ([Time-step control](@ref TimeStepControl)). The first iterate of a step is the head extrapolated in time from
 the last converged steps ([The first iterate](@ref FirstIterate)).
