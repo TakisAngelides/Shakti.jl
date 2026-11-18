@@ -559,7 +559,9 @@
                 @test maximum(abs, Array(klu.state.h) .- Array(umf.state.h)) < 1e-12 * maximum(abs, Array(umf.state.h))
                 @test maximum(abs, Array(klu.state.W) .- Array(umf.state.W)) < 1e-10 * maximum(abs, Array(umf.state.W))
             end
-            @test klu.hs.ps.ls.pivotings[] < klu.hs.ps.ls.refactorizations[] ÷ 4
+            # Only the first factorization chooses pivots here (1 in 77 refactorizations, still 1 in 559 over 100
+            # steps); the bound leaves room for one fresh pivoting on another platform's rounding
+            @test klu.hs.ps.ls.refactorizations[] > 50 && klu.hs.ps.ls.pivotings[] <= 2
 
             # BiCGStabIterativeSolver, the matrix-free (GPU-resident) solver: its stencil carries the same water-depth
             # Newton terms as the assembled matrix, so it takes the direct solver's Picard iterations to its heads, with
