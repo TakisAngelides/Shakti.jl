@@ -533,6 +533,9 @@ only to the symmetric face rules. The solvers are listed below.
 An assembled solver builds the sparse matrix explicitly, which only the CPU can do, so its fields stay on the
 CPU. Its sparsity pattern is built once, so each iterate only rewrites the values and refactorizes. A sparse
 factorization costs about ``n^{3/2}`` operations on a two-dimensional grid, and its memory limits the grid size.
+`LUDirectSolver` factorizes with KLU up to 10 000 cells and with UMFPACK beyond, where UMFPACK is the faster of
+the two. KLU refactorizes into its existing storage on the pivot sequence of its last full factorization, so it
+allocates nothing per solve, and pivots afresh when its reciprocal condition estimate drops a thousandfold.
 `LUDirectSolver(grid; lagged = true)` reuses its last factorization as the preconditioner of a GMRES solve and
 refactorizes only when GMRES stalls. A matrix-free solver never forms the matrix. It applies the five-point
 stencil from the per-cell coefficients, so it runs wherever the fields live, and it is the only kind that runs

@@ -332,3 +332,34 @@
             @test dot(x, Pm(x)) > 0
         end
     end
+    @testset "LUDirectSolver(factorization = :klu) keeps its pivots until rcond drops, then pivots afresh" begin
+        # A diagonally dominant five-point matrix on the solver's own pattern: the first assembled matrix pivots,
+        # a small change refactorizes on the kept pivots, and a refactorization judged stale (rcond_ref raised above
+        # any rcond) pivots afresh. Every solve stays exact to rounding.
+        grid = Grid(6, 6, 600.0, 600.0)
+        ls = LUDirectSolver(grid; factorization = :klu)
+        @test ls.fact isa Shakti.KLU.KLUFactorization
+        @test LUDirectSolver(grid).fact isa Shakti.KLU.KLUFactorization # :auto on 36 cells
+        @test LUDirectSolver(grid; factorization = :umfpack).fact isa SparseArrays.UMFPACK.UmfpackLU
+        @test_throws ErrorException LUDirectSolver(grid; factorization = :pardiso)
+        M = ls.sals.M; n = size(M, 1); rows, vals = rowvals(M), nonzeros(M)
+        setdiag!(d) = for j in 1:n, k in nzrange(M, j); vals[k] = rows[k] == j ? d(j) : -1.0 - 0.1 * (rows[k] > j); end
+        ls.sals.rhs .= 1:n
+        exact() = norm(M * ls.h_vec - ls.sals.rhs) < 1e-12 * norm(ls.sals.rhs)
+        setdiag!(j -> 5.0); Shakti.lu_solve!(ls, ls.h_vec)
+        @test ls.pivotings[] == 1 && exact()
+        setdiag!(j -> 5.0 + j / n); Shakti.lu_solve!(ls, ls.h_vec)
+        @test ls.pivotings[] == 1 && exact()
+        ls.rcond_ref[] = Inf
+        setdiag!(j -> 6.0); Shakti.lu_solve!(ls, ls.h_vec)
+        @test ls.pivotings[] == 2 && exact() && isfinite(ls.rcond_ref[])
+        @test ls.refactorizations[] == 3
+        # neither the refactorization on kept pivots nor the solve allocates, for KLU; UMFPACK's solve does not either
+        solve_bytes(ls) = @allocated Shakti.lu_solve!(ls, ls.h_vec)
+        solve_bytes(ls); @test solve_bytes(ls) == 0
+        um = LUDirectSolver(grid; factorization = :umfpack)
+        copyto!(nonzeros(um.sals.M), vals); um.sals.rhs .= ls.sals.rhs
+        Shakti.lu_solve!(um, um.h_vec)
+        @test um.h_vec ≈ ls.h_vec rtol = 1e-12
+        @test (@allocated ldiv!(um.h_vec, um.fact, um.sals.rhs)) == 0
+    end

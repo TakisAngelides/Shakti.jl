@@ -311,12 +311,19 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Direct solve via sparse LU factorization (`SparseArrays`/UMFPACK) of the assembled
-[`SparseAssembledLinearSystem`](@ref): the [`CholeskyDirectSolver`](@ref) counterpart for a matrix that is
-not symmetric, which the head rows assemble under [`ImplicitUpwind`](@ref) (the Newton terms of the face
-fluxes' dependence on their donor's water thickness couple each face to one side only). Refactorizes in place
-each solve, reusing the symbolic analysis since the sparsity pattern never changes. CPU-only, like
-[`CholeskyDirectSolver`](@ref); about twice its cost per solve on the same matrix.
+Direct solve via sparse LU factorization of the assembled [`SparseAssembledLinearSystem`](@ref): the
+[`CholeskyDirectSolver`](@ref) counterpart for a matrix that is not symmetric, which the head rows assemble under
+[`ImplicitUpwind`](@ref) (the Newton terms of the face fluxes' dependence on their donor's water thickness couple
+each face to one side only). Refactorizes in place each solve, reusing the symbolic analysis since the sparsity
+pattern never changes. CPU-only, like [`CholeskyDirectSolver`](@ref).
+
+Two LU libraries do the factorization. KLU (KLU.jl) refactorizes into the storage of its last factorization and so
+allocates nothing per solve. It keeps the pivot sequence of its last full factorization, and pivots afresh when
+the reciprocal condition estimate (`KLU.rcond`, the ratio of the smallest to the largest pivot) falls below
+`KLU_RCOND_DROP` times its value at that factorization, or when a kept pivot is zero. UMFPACK (`SparseArrays`)
+pivots afresh each time and allocates its factors anew, about 0.5 MiB per factorization at 600 cells. On a
+five-point matrix KLU refactorizes faster up to about ten thousand cells (six times faster at 600, 1.25 times at
+10 000) and UMFPACK faster beyond, where its dense blocks pay off (1.6 times at 40 000).
 
 With `lagged = true` it does not refactorize every solve: it solves with GMRES (Krylov.jl), preconditioned by
 the last factorization it made, and refactorizes only when GMRES has not reached `rtol` within `itmax`
@@ -328,32 +335,43 @@ The result agrees with the direct solve to about `rtol` relative to the right-ha
 """
 struct LUDirectSolver{FACT, SALS <: SparseAssembledLinearSystem, V <: AbstractVector, WS, F} <: AbstractDirectSolver
     sals::SALS # sparse matrix (both triangles stored), rhs and index maps, as for CholeskyDirectSolver
-    fact::FACT # UMFPACK factorization, refactorized in place each solve (lagged: only when GMRES stalls)
+    fact::FACT # KLU or UMFPACK factorization, refactorized in place each solve (lagged: only when GMRES stalls)
     h_vec::V   # solve-result buffer, reshaped into s.h
     ws::WS     # GMRES workspace under lagged = true; nothing otherwise
     rtol::F    # GMRES relative tolerance (lagged only)
     itmax::Int # GMRES iterations before refactorizing (lagged only)
-    factored::Base.RefValue{Bool} # whether fact holds a factorization of an assembled matrix yet (lagged only)
-    refactorizations::Base.RefValue{Int} # numeric factorizations made (lagged only: how often GMRES stalled, plus the first)
+    factored::Base.RefValue{Bool} # whether fact holds a factorization of an assembled matrix yet (the placeholder's does not count)
+    refactorizations::Base.RefValue{Int} # numeric factorizations made (lagged: how often GMRES stalled, plus the first)
+    pivotings::Base.RefValue{Int} # KLU only: full factorizations that chose new pivots (the first, then each on a stale pivot sequence)
+    rcond_ref::Base.RefValue{F}   # KLU only: rcond at the last full factorization, against which a refactorization's is judged
 end
+
+# Cells up to which LUDirectSolver(grid) (factorization = :auto) factorizes with KLU rather than UMFPACK.
+const KLU_MAX_CELLS = 10_000
+# A KLU refactorization whose rcond falls below this fraction of the last full factorization's pivots afresh.
+const KLU_RCOND_DROP = 1e-3
 
 """
 $(TYPEDSIGNATURES)
 
-Builds an [`LUDirectSolver`](@ref) on grid `g`. CPU (`"Threads"` backend) only. `lagged = true` solves by GMRES
-preconditioned by the last factorization, refactorizing only when GMRES has not reached the relative
+Builds an [`LUDirectSolver`](@ref) on grid `g`. CPU (`"Threads"` backend) only. `factorization` picks the LU
+library, `:klu`, `:umfpack` or `:auto` (KLU up to `KLU_MAX_CELLS` cells, UMFPACK beyond). `lagged = true` solves by
+GMRES preconditioned by the last factorization, refactorizing only when GMRES has not reached the relative
 tolerance `rtol` within `itmax` iterations.
 """
-function LUDirectSolver(g::Grid{F}; lagged::Bool = false, rtol = 1e-10, itmax::Int = 20) where F
-    backend != "Threads" && error("LUDirectSolver is CPU-only (SparseArrays/UMFPACK has no GPU path); use CUDSSDirectSolver(grid) for a GPU LU.")
+function LUDirectSolver(g::Grid{F}; lagged::Bool = false, rtol = 1e-10, itmax::Int = 20, factorization::Symbol = :auto) where F
+    backend != "Threads" && error("LUDirectSolver is CPU-only (KLU and UMFPACK have no GPU path); use CUDSSDirectSolver(grid) for a GPU LU.")
     itmax >= 1 || error("LUDirectSolver: itmax must be at least 1")
+    factorization in (:auto, :klu, :umfpack) || error("LUDirectSolver: factorization must be :auto, :klu or :umfpack, not :$factorization")
     sals = SparseAssembledLinearSystem(g)
-    fact = lu(sals.M) # symbolic analysis on the fixed 5-point pattern (the placeholder identity diagonal keeps it nonsingular)
+    useklu = factorization === :klu || (factorization === :auto && g.nx * g.ny <= KLU_MAX_CELLS)
+    # symbolic analysis on the fixed 5-point pattern (the placeholder identity diagonal keeps it nonsingular)
+    fact = useklu ? KLU.klu(sals.M) : lu(sals.M)
     # as a preconditioner the old factors solve for an old matrix: UMFPACK's iterative refinement (against that
-    # old matrix) would only cost time, the GMRES iterations do the refining
-    lagged && (fact.control[SparseArrays.UMFPACK.JL_UMFPACK_IRSTEP] = 0)
+    # old matrix) would only cost time, the GMRES iterations do the refining (KLU does not refine)
+    lagged && !useklu && (fact.control[SparseArrays.UMFPACK.JL_UMFPACK_IRSTEP] = 0)
     ws = lagged ? GmresWorkspace(sals.M, sals.rhs; memory = itmax) : nothing
-    return LUDirectSolver(sals, fact, zeros(F, g.nx * g.ny), ws, F(rtol), itmax, Ref(false), Ref(0))
+    return LUDirectSolver(sals, fact, zeros(F, g.nx * g.ny), ws, F(rtol), itmax, Ref(false), Ref(0), Ref(0), Ref(zero(F)))
 end
 
 # Factorizes the assembled matrix and solves into ls.h_vec, or, lagged, solves by GMRES from x0 preconditioned
@@ -370,13 +388,39 @@ function lu_solve!(ls::LUDirectSolver, x0)
         end
     end
     refactorize!(ls)
-    ls.h_vec .= ls.fact \ ls.sals.rhs
+    # ldiv! into the preallocated buffer, unlike CholeskyDirectSolver's `\`: the native-memory leak that made
+    # CHOLMOD's ldiv! unusable (SparseArrays.jl#726) never affected UMFPACK or KLU, whose ldiv! keeps resident
+    # memory flat over 20 000 solves
+    ldiv!(ls.h_vec, ls.fact, ls.sals.rhs)
 end
 
 function refactorize!(ls::LUDirectSolver)
-    lu!(ls.fact, ls.sals.M)
+    factorize_numeric!(ls.fact, ls)
     ls.factored[] = true
     ls.refactorizations[] += 1
+end
+
+factorize_numeric!(fact::SparseArrays.UMFPACK.UmfpackLU, ls::LUDirectSolver) = lu!(fact, ls.sals.M)
+
+# Refactorizes on the kept pivot sequence (no allocation); pivots afresh on the first assembled matrix, on a
+# zero kept pivot, or when rcond has dropped KLU_RCOND_DROP below that of the last full factorization.
+function factorize_numeric!(K::KLU.KLUFactorization, ls::LUDirectSolver)
+    M = ls.sals.M
+    if ls.factored[]
+        kept = try
+            KLU.klu!(K, M)
+            true
+        catch e
+            e isa LinearAlgebra.SingularException || rethrow()
+            false
+        end
+        kept && KLU.rcond(K) >= KLU_RCOND_DROP * ls.rcond_ref[] && return K
+    end
+    K.nzval = M.nzval
+    KLU.klu_factor!(K)
+    ls.rcond_ref[] = KLU.rcond(K)
+    ls.pivotings[] += 1
+    return K
 end
 
 """

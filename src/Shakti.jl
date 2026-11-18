@@ -17,6 +17,7 @@ module Shakti
 using Preferences
 using ParallelStencil
 using SparseArrays
+import KLU
 using LinearAlgebra
 using Krylov
 using AlgebraicMultigrid

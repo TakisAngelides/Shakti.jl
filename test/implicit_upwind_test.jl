@@ -549,6 +549,18 @@
             @test lagged.hs.ps.ls.refactorizations[] < solves ÷ 10
             @test stalled.hs.ps.ls.refactorizations[] == solves
 
+            # KLU, the :auto choice on these 1600 cells, against UMFPACK: the same Picard iterations and the same heads and
+            # water to rounding, with KLU pivoting afresh only now and then
+            @test direct.hs.ps.ls.fact isa Shakti.KLU.KLUFactorization
+            umf, klu = lu_sim(LUDirectSolver(grid; factorization = :umfpack)), lu_sim(LUDirectSolver(grid; factorization = :klu))
+            for _ in 1:10
+                foreach(step!, (umf, klu))
+                @test klu.hs.ps.last_iter == umf.hs.ps.last_iter && first(Shakti.picard_status(klu.hs))
+                @test maximum(abs, Array(klu.state.h) .- Array(umf.state.h)) < 1e-12 * maximum(abs, Array(umf.state.h))
+                @test maximum(abs, Array(klu.state.W) .- Array(umf.state.W)) < 1e-10 * maximum(abs, Array(umf.state.W))
+            end
+            @test klu.hs.ps.ls.pivotings[] < klu.hs.ps.ls.refactorizations[] ÷ 4
+
             # BiCGStabIterativeSolver, the matrix-free (GPU-resident) solver: its stencil carries the same water-depth
             # Newton terms as the assembled matrix, so it takes the direct solver's Picard iterations to its heads, with
             # the multigrid preconditioner (the default) or Jacobi.
