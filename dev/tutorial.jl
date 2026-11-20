@@ -349,7 +349,7 @@ and CG with `"implicit_upwind"` and names the opt-outs.
 
 | Constructor | Method | Runs on | Matrix | Notes |
 |:------------|:-------|:--------|:-------|:------|
-| `LUDirectSolver(grid)` | sparse LU (UMFPACK), a direct method | CPU | any | the default choice for the default sheet |
+| `LUDirectSolver(grid)` | sparse LU, a direct method (KLU up to 10 000 cells, UMFPACK beyond; `factorization = :klu` or `:umfpack` picks one) | CPU | any | the default choice for the default sheet |
 | `CUDSSDirectSolver(grid)` (`structure = :general`) | sparse LU with NVIDIA cuDSS | the matrix is factorised on a GPU, the fields and the rest of the model stay on the CPU | any | the same method as `LUDirectSolver`, with the factorisation on the GPU, for a node that has one. The fastest on large grids |
 | `CholeskyDirectSolver(grid)` | sparse Cholesky, a direct method | CPU | symmetric positive definite | Shakti's sheet or `"upwind"` |
 | `CUDSSDirectSolver(grid; structure = :spd)` | Cholesky with cuDSS | factorised on a GPU, as above | symmetric positive definite | |
