@@ -171,8 +171,8 @@ using `p.T_freeze` and `p.T_hysteresis`:
 Thawed cells restart at `p.b_min` (see [`thaw_cells!`](@ref)). With `b_min = 0` that is `b = 0`, and a
 cell whose own `b` and all neighbours' `b` are zero has an all-zero matrix row -- the same singular
 system a `GROUNDED` cell can reach on its own once `b` creeps to zero in a zero-`b` patch
-([`CholeskyDirectSolver`](@ref) throws `PosDefException`; [`CUDSSDirectSolver`](@ref) does not check
-and silently returns garbage). A thawing block makes that certain for its interior, so use `b_min > 0`
+([`CholeskyDirectSolver`](@ref) and [`CUDSSDirectSolver`](@ref) with `structure = :spd` throw `PosDefException`,
+[`LUDirectSolver`](@ref) and `CUDSSDirectSolver` with `structure = :general` throw `SingularException`). A thawing block makes that certain for its interior, so use `b_min > 0`
 (e.g. `1e-3`) in runs that thaw regions.
 
 Cells that are not `GROUNDED`/`FROZEN_BED` (`OCEAN`/`LAND`/`OTHER_BASIN`) are never touched. The

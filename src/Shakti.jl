@@ -104,6 +104,7 @@ include("linear_solver.jl")
 include("multigrid.jl") # AggregationMultigrid, the GPU-capable preconditioner for MatrixFreeLinearSystem
 @static if use_cudss
     include("gpu_direct_solver.jl") # CUDSSDirectSolver -- requires CUDA/CUDSS to be loaded (CUDA backend, or Threads backend with the `cudss` preference); NOT available under Metal
+    include("gpu_reductions.jl") # CUBLAS dot and nrm2 for Krylov and safe_dot with the device result held across the read
 else
     CUDSSDirectSolver(args...; kwargs...) = error("CUDSSDirectSolver needs CUDA.jl/CUDSS.jl, which Shakti only loads when the `cudss` preference is true (or backend = \"CUDA\"): run `using Preferences, Shakti; set_preferences!(Shakti, \"cudss\" => true)` and restart Julia.")
 end

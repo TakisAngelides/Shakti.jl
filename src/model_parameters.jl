@@ -61,8 +61,8 @@ solves `Re` exactly at every iteration ([`compute_face_flux!`](@ref)), and on a 
 
 `b_min` defaults to `1e-6` (m), not `0`: with `b = 0` both the transmissivity `K` and the creep-closure term
 (`l_c = b`) are exactly zero, so a cell whose neighbours are all dry has an all-zero matrix row
-([`CholeskyDirectSolver`](@ref) throws `PosDefException`; [`CUDSSDirectSolver`](@ref) does not check and silently
-returns garbage), and thawed `FROZEN_BED` cells (reseeded at `b_min`, see [`thaw_cells!`](@ref)) need a positive
+([`CholeskyDirectSolver`](@ref) and `CUDSSDirectSolver(grid; structure = :spd)` throw `PosDefException`,
+[`LUDirectSolver`](@ref) and [`CUDSSDirectSolver`](@ref) with `structure = :general` throw `SingularException`), and thawed `FROZEN_BED` cells (reseeded at `b_min`, see [`thaw_cells!`](@ref)) need a positive
 value. Pass `b_min = 0.0` explicitly to recover the old behaviour. Every existing driver/example that sets `b_min`
 itself is unaffected.
 

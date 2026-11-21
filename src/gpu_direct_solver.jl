@@ -46,7 +46,9 @@ $(TYPEDSIGNATURES)
 
 GPU direct sparse solver via CUDSS.jl (Cholesky with `structure = :spd`, LU with `:general` for the non-symmetric
 `"implicit_upwind"` matrix). Requires the `"Threads"` backend: the fields stay on the CPU and only the matrix and the
-solve go to the GPU; errors at construction time under any other backend. See this file's module-level notes for the correctness discipline this
+solve go to the GPU; errors at construction time under any other backend. Every solve checks the factorization and
+throws as the CPU solvers do: `PosDefException` (Cholesky) on a matrix that is not positive definite, `SingularException`
+(LU) on a singular one, and an error if the solution is not finite. See this file's module-level notes for the correctness discipline this
 implementation follows (never reconstruct the GPU matrix fresh; update its `nzVal` in place via a
 precomputed permutation).
 """
@@ -142,7 +144,7 @@ function solve_b_diffusion!(ls::CUDSSDirectSolver, s::State, g::Grid, p::ModelPa
 end
 
 # Scatters the freshly assembled sals.M values into the existing GPU matrix in place (never a fresh conversion, see the
-# module notes), refactorizes reusing the symbolic analysis, and solves sals.rhs into ls.h_vec.
+# module notes), refactorizes reusing the symbolic analysis, checks the factorization, and solves sals.rhs into ls.h_vec.
 function cudss_solve!(ls::CUDSSDirectSolver)
     nzval, host_vals, perm = ls.sals.M.nzval, ls.host_vals, ls.vals_perm
     @inbounds for k in eachindex(host_vals) # CPU-side gather into the GPU matrix's own nonzero order, into a preallocated buffer
@@ -150,8 +152,26 @@ function cudss_solve!(ls::CUDSSDirectSolver)
     end
     copyto!(ls.A_gpu.nzVal, host_vals) # host -> device, straight into the existing matrix's values
     ls.general ? lu!(ls.solver, ls.A_gpu) : cholesky!(ls.solver, ls.A_gpu) # refactorize in place, reusing the symbolic analysis
+    check_cudss_factorization(ls)
     copyto!(ls.b_gpu, ls.sals.rhs)
     ls.x_gpu .= ls.solver \ ls.b_gpu
     copyto!(ls.h_vec, ls.x_gpu)
+    all(isfinite, ls.h_vec) || error("CUDSSDirectSolver: the solve returned non-finite values (", count(!isfinite, ls.h_vec),
+                                     " of ", length(ls.h_vec), ") although the factorization reported no failure")
     return ls.h_vec
+end
+
+# Throws where the CPU solvers would: cuDSS reports a failed factorization without raising an error. Cholesky sets the
+# device-side "info" to the column where the matrix stops being positive definite (an all-zero row included), thrown
+# as the PosDefException of CholeskyDirectSolver. LU leaves "info" at 0 on a singular matrix: it replaces each pivot
+# below its threshold by a perturbed one, counted in "npivots", and returns finite values of order 1/threshold. A
+# perturbed pivot is thrown as the SingularException of LUDirectSolver, whose field then holds the number of perturbed
+# pivots (cuDSS does not report which columns). "info" is reset so the next refactorization starts clean. Two scalar
+# reads from the device per solve, against a factorization of milliseconds.
+function check_cudss_factorization(ls::CUDSSDirectSolver)
+    info = cudss_get(ls.solver, "info")
+    npiv = ls.general ? cudss_get(ls.solver, "npivots") : 0
+    info == 0 && npiv == 0 && return nothing
+    info == 0 || cudss_set(ls.solver, "info", 0)
+    ls.general ? throw(SingularException(Int(info == 0 ? npiv : info))) : throw(PosDefException(Int(info)))
 end

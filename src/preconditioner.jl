@@ -88,6 +88,10 @@ end
 # separate power-iteration machinery. A tiny (nsteps x nsteps) dense
 # eigenproblem at the end is solved on the host regardless of backend --
 # nsteps is a handful, so this is negligible next to the matvecs.
+
+# dot(x, y). gpu_reductions.jl adds a CuVector method that keeps CUBLAS's device result alive while it is read (see there).
+safe_dot(x::AbstractVector, y::AbstractVector) = dot(x, y)
+
 """
 $(TYPEDSIGNATURES)
 
@@ -113,18 +117,18 @@ function estimate_eigenvalue_bounds!(r::AbstractVector, p::AbstractVector, Ap::A
     p .= r   # p_0 = r_0, the initial CG search direction
     # Ap is pure scratch (written by mul! before ever being read) -- no initial value needed
 
-    gamma = dot(r, r) # gamma_0 = r_0'r_0, CG's running residual-norm-squared
+    gamma = safe_dot(r, r) # gamma_0 = r_0'r_0, CG's running residual-norm-squared
 
     alphas = zeros(T, nsteps)     # CG step sizes alpha_k, one per iteration
     betas  = zeros(T, nsteps - 1) # CG direction-update coefficients beta_k, one fewer than alpha since the last iteration never updates p
 
     for k in 1:nsteps
         mul!(Ap, op, p)       # Ap = op*p = D^-1*A*p, the one matvec this iteration needs
-        pAp = dot(p, Ap)      # p'*op*p, the denominator of the CG step size
+        pAp = safe_dot(p, Ap) # p'*op*p, the denominator of the CG step size
         alphas[k] = gamma / pAp # standard CG step size alpha_k = (r_k'r_k) / (p_k'*op*p_k)
         if k < nsteps # skip the trailing residual/direction update on the last step -- alphas[nsteps] is all that's needed from it
             r .-= alphas[k] .* Ap        # update residual: r_{k+1} = r_k - alpha_k*op*p_k
-            gamma_next = dot(r, r)       # gamma_{k+1} = r_{k+1}'r_{k+1}
+            gamma_next = safe_dot(r, r)  # gamma_{k+1} = r_{k+1}'r_{k+1}
             betas[k] = gamma_next / gamma # CG direction coefficient beta_k = gamma_{k+1}/gamma_k
             p .= r .+ betas[k] .* p      # new search direction: p_{k+1} = r_{k+1} + beta_k*p_k
             gamma = gamma_next           # carry residual norm forward to next iteration

@@ -26,6 +26,11 @@
 !/test/gap_opening_melt_test.jl
 !/test/cairomakie_ext_test.jl
 !/test/helheim_setup.jl
+# The GPU suite (test/gpu/runtests.jl), without its resolved environments and outputs
+!/test/gpu/
+/test/gpu/**/Manifest.toml
+/test/gpu/results/
+/test/gpu/logs/
 
 # OS junk
 .DS_Store

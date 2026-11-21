@@ -1,0 +1,8 @@
+[CUDA_Runtime_jll]
+local = "false"
+version = "12.2"
+
+[Shakti]
+backend = "CUDA"
+floattype = "Float64"
+cudss = true

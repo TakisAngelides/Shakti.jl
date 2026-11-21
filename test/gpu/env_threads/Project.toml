@@ -1,0 +1,12 @@
+[deps]
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Serialization = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
+Shakti = "d638fb90-b6c0-422d-b96d-ad6c4615b4d0"
+SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[extras]
+CUDA_Runtime_jll = "76a88914-d11a-5bdc-97e0-2f5a05c973a2"
+
+[sources.Shakti]
+path = "../../.."
